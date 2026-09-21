@@ -58,6 +58,10 @@ func Open(path string) (*Store, error) {
 // Close closes the database.
 func (s *Store) Close() error { return s.db.Close() }
 
+// DB exposes the raw database handle to packages that build on the
+// store (engine, api). Treated as internal by convention.
+func (s *Store) DB() *sql.DB { return s.db }
+
 // migrate applies every unapplied migration in ascending order.
 func migrate(db *sql.DB) error {
 	if _, err := db.Exec(`CREATE TABLE IF NOT EXISTS schema_migrations (
