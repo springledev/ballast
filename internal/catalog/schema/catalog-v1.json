@@ -1,0 +1,129 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://ballast.dev/schema/catalog-v1.json",
+  "title": "Ballast service catalog entry (v1)",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["apiVersion", "service", "version", "backup", "verify"],
+  "properties": {
+    "apiVersion": { "const": "ballast.dev/v1" },
+    "service": { "type": "string", "pattern": "^[a-z0-9][a-z0-9-]*$" },
+    "version": { "type": "integer", "minimum": 1 },
+    "display": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "name": { "type": "string" },
+        "description": { "type": "string" }
+      }
+    },
+    "detect": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "docker": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "imagePattern": { "type": "string" },
+            "orEnv": {
+              "type": "object",
+              "additionalProperties": { "type": "string" }
+            }
+          }
+        }
+      }
+    },
+    "parameters": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["name"],
+        "properties": {
+          "name": { "type": "string" },
+          "required": { "type": "boolean" },
+          "prompt": { "type": "string" },
+          "default": { "type": "string" }
+        }
+      }
+    },
+    "backup": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["strategy"],
+      "properties": {
+        "strategy": {
+          "enum": ["dump", "stop-start", "files", "exec"]
+        },
+        "dumps": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["name", "command"],
+            "properties": {
+              "name": { "type": "string" },
+              "container": { "type": "string" },
+              "command": { "type": "array", "minItems": 1, "items": { "type": "string" } },
+              "format": { "type": "string" }
+            }
+          }
+        },
+        "files": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["path"],
+            "properties": {
+              "path": { "type": "string" }
+            }
+          }
+        },
+        "stopStart": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "containers": { "type": "array", "items": { "type": "string" } }
+          }
+        },
+        "exec": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["script"],
+          "properties": {
+            "script": { "type": "string" },
+            "args": { "type": "array", "items": { "type": "string" } },
+            "verifyScript": { "type": "string" }
+          }
+        }
+      },
+      "if": { "properties": { "strategy": { "const": "dump" } } },
+      "then": { "required": ["dumps"] }
+    },
+    "verify": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["method"],
+      "properties": {
+        "method": {
+          "enum": ["archive-integrity", "container-restore", "read-back", "restart-smoke", "exec-script"]
+        },
+        "image": { "type": "string" },
+        "filterStderr": { "type": "array", "items": { "type": "string" } },
+        "restartPolicy": { "enum": ["never", "always"] }
+      },
+      "if": { "properties": { "method": { "const": "container-restore" } } },
+      "then": { "required": ["image"] }
+    },
+    "notifications": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "failureVerbosity": { "enum": ["full", "brief"] },
+        "successHeartbeat": { "type": "boolean" }
+      }
+    }
+  }
+}
