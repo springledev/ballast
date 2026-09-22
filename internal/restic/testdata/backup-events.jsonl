@@ -1,0 +1,2 @@
+{"message_type":"status","percent_done":1,"total_files":2,"files_done":2,"total_bytes":32,"bytes_done":32}
+{"message_type":"summary","files_new":2,"files_changed":0,"files_unmodified":0,"dirs_new":4,"dirs_changed":0,"dirs_unmodified":0,"data_blobs":2,"tree_blobs":5,"data_added":3336,"data_added_packed":2213,"total_files_processed":2,"total_bytes_processed":32,"total_duration":0.022232852,"snapshot_id":"ee193dc9703400d006e9e699906c3b85e11bb68a356a4d6bc955158a7dab48d0"}

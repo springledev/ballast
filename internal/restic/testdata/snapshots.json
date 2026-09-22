@@ -1,0 +1,69 @@
+[
+  {
+    "time": "2026-09-22T23:42:53.217641917+01:00",
+    "tree": "4c2ee1bb23b02e2b76c2d1773d2c6b2f13374dc5e04859ea0e63f67acd4feddc",
+    "paths": [
+      "/tmp/ballast-test/src2"
+    ],
+    "hostname": "testhost",
+    "username": "testuser",
+    "uid": 1000,
+    "gid": 1000,
+    "tags": [
+      "nightly"
+    ],
+    "program_version": "restic 0.17.3",
+    "summary": {
+      "backup_start": "2026-09-22T23:42:53.217641917+01:00",
+      "backup_end": "2026-09-22T23:42:53.887219551+01:00",
+      "files_new": 1,
+      "files_changed": 0,
+      "files_unmodified": 0,
+      "dirs_new": 3,
+      "dirs_changed": 0,
+      "dirs_unmodified": 0,
+      "data_blobs": 1,
+      "tree_blobs": 4,
+      "data_added": 1917,
+      "data_added_packed": 1579,
+      "total_files_processed": 1,
+      "total_bytes_processed": 4
+    },
+    "id": "009f5ef27a74190a8b16d0eac076b20ca7b37c4bbd31553c701c807a88e9f8f5",
+    "short_id": "009f5ef2"
+  },
+  {
+    "time": "2026-09-22T23:42:53.914700286+01:00",
+    "parent": "009f5ef27a74190a8b16d0eac076b20ca7b37c4bbd31553c701c807a88e9f8f5",
+    "tree": "816174567566745c71709e775eb5369dfe627cd1fd2d516c6877513c98197cbe",
+    "paths": [
+      "/tmp/ballast-test/src2"
+    ],
+    "hostname": "testhost",
+    "username": "testuser",
+    "uid": 1000,
+    "gid": 1000,
+    "tags": [
+      "nightly"
+    ],
+    "program_version": "restic 0.17.3",
+    "summary": {
+      "backup_start": "2026-09-22T23:42:53.914700286+01:00",
+      "backup_end": "2026-09-22T23:42:54.645449866+01:00",
+      "files_new": 1,
+      "files_changed": 0,
+      "files_unmodified": 1,
+      "dirs_new": 0,
+      "dirs_changed": 3,
+      "dirs_unmodified": 0,
+      "data_blobs": 1,
+      "tree_blobs": 4,
+      "data_added": 2391,
+      "data_added_packed": 1651,
+      "total_files_processed": 2,
+      "total_bytes_processed": 8
+    },
+    "id": "a8a1f356cb032ba7ec0159dd11c478c8c7848ee686ed997115f944ae281541f7",
+    "short_id": "a8a1f356"
+  }
+]
