@@ -114,6 +114,8 @@
 
  internal/engine/ job state machine, scheduler
 
+ internal/runner/ subprocess exec (pipefail, SIGPIPE, credential env)
+
  internal/catalog/ YAML loading  JSON schema validation
 
  internal/strategy/ dump, stopstart, exec, folder plugins
