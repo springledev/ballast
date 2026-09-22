@@ -1,0 +1,37 @@
+# catalog/postgres.yaml — generic PostgreSQL server in Docker.
+#
+# Backs up every database with pg_dumpall (transactionally consistent)
+# and verifies by restoring into a throwaway Postgres container.
+apiVersion: ballast.dev/v1
+service: postgres
+version: 1
+display:
+  name: PostgreSQL (generic)
+  description: Any PostgreSQL database server running in a Docker container
+detect:
+  docker:
+    imagePattern: "postgres"
+parameters:
+  - name: container
+    required: true
+    prompt: "Name of your Postgres container"
+  - name: image
+    required: true
+    prompt: "Image for the test-restore container — must match your server's major version (e.g. postgres:16)"
+backup:
+  strategy: dump
+  dumps:
+    - name: database
+      container: "{{ .Params.container }}"
+      # pg_dumpall over the container's local socket; the official
+      # image trusts local connections, so no password is needed.
+      command: ["pg_dumpall", "-U", "postgres"]
+      format: sql
+verify:
+  method: container-restore
+  image: "{{ .Params.image }}"
+  filterStderr:
+    - "already exists" # benign during restore into a fresh cluster
+  restartPolicy: never # dump strategy never stops containers
+notifications:
+  failureVerbosity: full

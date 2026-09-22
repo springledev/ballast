@@ -1,0 +1,40 @@
+# catalog/mysql.yaml — generic MySQL / MariaDB server in Docker.
+#
+# Backs up every database with mysqldump --single-transaction
+# (transactionally consistent for InnoDB) and verifies by restoring
+# into a throwaway container of the matching image.
+apiVersion: ballast.dev/v1
+service: mysql
+version: 1
+display:
+  name: MySQL / MariaDB (generic)
+  description: Any MySQL or MariaDB database server running in a Docker container
+detect:
+  docker:
+    imagePattern: "mysql"
+parameters:
+  - name: container
+    required: true
+    prompt: "Name of your MySQL/MariaDB container"
+  - name: image
+    required: true
+    prompt: "Image for the test-restore container — match your server (e.g. mysql:8 or mariadb:11)"
+backup:
+  strategy: dump
+  dumps:
+    - name: database
+      container: "{{ .Params.container }}"
+      # Authentication travels in the MYSQL_PWD environment variable,
+      # never in argv. Supply it as a secret environment variable:
+      # Ballast forwards secret environment keys into the container
+      # via `docker exec -e MYSQL_PWD` (docker resolves the value
+      # from its own environment) and redacts the value from all
+      # error output and logs.
+      command: ["mysqldump", "--all-databases", "--single-transaction", "-u", "root"]
+      format: sql
+verify:
+  method: container-restore
+  image: "{{ .Params.image }}"
+  restartPolicy: never # dump strategy never stops containers
+notifications:
+  failureVerbosity: full
