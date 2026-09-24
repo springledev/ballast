@@ -16,6 +16,9 @@
 //     in every error.
 //   - Context cancellation kills the whole pipeline and is reported as
 //     cancellation, not as a spurious "signal: killed".
+//   - On Linux, every started command is SIGKILLed if Ballast itself
+//     dies, so no orphaned restic or docker process keeps working
+//     after Ballast's run lock is released.
 package runner
 
 import (
@@ -26,6 +29,7 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"runtime"
 	"strings"
 	"syscall"
 	"time"
@@ -134,6 +138,7 @@ func (r *Runner) Pipeline(ctx context.Context, stdin io.Reader, stdout io.Writer
 		cmd := exec.Command(c.Name, c.Args...)
 		cmd.Dir = c.Dir
 		cmd.Env = mergeEnv(r.baseEnv(), c.Env)
+		setParentDeathSignal(cmd)
 		tails[i] = &tailBuffer{cap: stderrCap}
 		cmd.Stderr = tails[i]
 		cmds[i] = cmd
@@ -189,6 +194,14 @@ func (r *Runner) Pipeline(ctx context.Context, stdin io.Reader, stdout io.Writer
 	cmds[last].Stdout = stdoutW
 	parentEnds = append(parentEnds, stdoutW) // stdoutR is closed by the copy goroutine
 
+	// Children get a parent-death signal (see setParentDeathSignal),
+	// which the kernel ties to the OS thread that started them. Pin
+	// this goroutine to its thread from the first Start until every
+	// stage is reaped, so the Go runtime can never retire that thread
+	// and kill a still-running stage along with it.
+	runtime.LockOSThread()
+	defer runtime.UnlockOSThread()
+
 	// Start every stage. On failure, kill and reap what started and
 	// close every pipe end the parent still holds.
 	startedAt := make([]time.Time, len(cmds))
@@ -196,11 +209,13 @@ func (r *Runner) Pipeline(ctx context.Context, stdin io.Reader, stdout io.Writer
 	for i, cmd := range cmds {
 		startedAt[i] = time.Now()
 		if err := cmd.Start(); err != nil {
+			// Best effort: a stage may already have exited, and Wait
+			// only reaps here — the start failure is what gets reported.
 			for j := 0; j < started; j++ {
-				cmds[j].Process.Kill()
+				_ = cmds[j].Process.Kill()
 			}
 			for j := 0; j < started; j++ {
-				cmds[j].Wait()
+				_ = cmds[j].Wait()
 			}
 			closeParentEnds()
 			if stdinW != nil {
@@ -248,7 +263,9 @@ func (r *Runner) Pipeline(ctx context.Context, stdin io.Reader, stdout io.Writer
 	stop := context.AfterFunc(ctx, func() {
 		for _, cmd := range cmds {
 			if cmd.Process != nil {
-				cmd.Process.Kill()
+				// A stage that already exited returns
+				// os.ErrProcessDone; Wait reports every outcome.
+				_ = cmd.Process.Kill()
 			}
 		}
 	})

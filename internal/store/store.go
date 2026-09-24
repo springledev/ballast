@@ -11,6 +11,7 @@ package store
 import (
 	"database/sql"
 	"embed"
+	"errors"
 	"fmt"
 	"io/fs"
 	"sort"
@@ -29,23 +30,31 @@ type Store struct {
 	db *sql.DB
 }
 
+// connOptions are applied by the driver to every connection in the
+// database/sql pool. Setting them with a one-off `PRAGMA` statement
+// would only reach whichever pooled connection ran it, leaving the
+// others with no busy timeout (instant "database is locked" under
+// concurrent writers — parallel sweeps, run-due racing trigger) and
+// without foreign-key enforcement. _txlock=immediate makes every
+// transaction take the write lock up front, so a writer waits in the
+// busy handler instead of failing on a mid-transaction lock upgrade.
+const connOptions = "_pragma=journal_mode(WAL)&_pragma=foreign_keys(1)&_pragma=busy_timeout(5000)&_txlock=immediate"
+
 // Open opens (creating it if necessary) the database at path, applies
 // all pending migrations, and returns a ready Store.
 func Open(path string) (*Store, error) {
-	db, err := sql.Open("sqlite", path)
+	if strings.Contains(path, "?") {
+		// The driver splits its DSN at the first "?", so such a path
+		// would silently open the wrong file.
+		return nil, fmt.Errorf("opening sqlite db %s: the database path must not contain \"?\"", path)
+	}
+	db, err := sql.Open("sqlite", path+"?"+connOptions)
 	if err != nil {
 		return nil, fmt.Errorf("opening sqlite db %s: %w", path, err)
 	}
-
-	for _, pragma := range []string{
-		"PRAGMA journal_mode=WAL",
-		"PRAGMA foreign_keys=ON",
-		"PRAGMA busy_timeout=5000",
-	} {
-		if _, err := db.Exec(pragma); err != nil {
-			db.Close()
-			return nil, fmt.Errorf("setting sqlite pragma: %w", err)
-		}
+	if err := db.Ping(); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("opening sqlite db %s: %w", path, err)
 	}
 
 	if err := migrate(db); err != nil {
@@ -108,21 +117,36 @@ func migrate(db *sql.DB) error {
 			return fmt.Errorf("beginning transaction for migration %d: %w", version, err)
 		}
 		if _, err := tx.Exec(string(sqlBytes)); err != nil {
-			tx.Rollback()
-			return fmt.Errorf("applying migration %d (%s): %w", version, name, err)
+			return RollbackOnError(tx, fmt.Errorf("applying migration %d (%s): %w", version, name, err))
 		}
 		if _, err := tx.Exec(
 			`INSERT INTO schema_migrations (version, name, applied_at) VALUES (?, ?, ?)`,
 			version, name, time.Now().UTC().Format(time.RFC3339),
 		); err != nil {
-			tx.Rollback()
-			return fmt.Errorf("recording migration %d state: %w", version, err)
+			return RollbackOnError(tx, fmt.Errorf("recording migration %d state: %w", version, err))
 		}
 		if err := tx.Commit(); err != nil {
 			return fmt.Errorf("committing migration %d: %w", version, err)
 		}
 	}
 	return nil
+}
+
+// RollbackOnError rolls tx back when err is set, reporting a failed
+// rollback alongside err instead of dropping it, and returns err
+// unchanged otherwise. sql.ErrTxDone is not a failure: it means the
+// transaction already ended (e.g. a failed Commit), so there was
+// nothing left to roll back. Intended for a deferred call:
+//
+//	defer func() { err = store.RollbackOnError(tx, err) }()
+func RollbackOnError(tx *sql.Tx, err error) error {
+	if err == nil {
+		return nil
+	}
+	if rbErr := tx.Rollback(); rbErr != nil && !errors.Is(rbErr, sql.ErrTxDone) {
+		return errors.Join(err, fmt.Errorf("rolling back: %w", rbErr))
+	}
+	return err
 }
 
 // SchemaVersion returns the highest applied migration version (-1 when

@@ -58,8 +58,8 @@ func snippet(b []byte) string {
 // wireSnapshot is the restic --json snapshot object (snapshots --json
 // array elements, ls's first line, forget's keep/remove lists).
 type wireSnapshot struct {
-	Time string   `json:"time"`
-	ID   string   `json:"id"`
+	Time     string   `json:"time"`
+	ID       string   `json:"id"`
 	ShortID  string   `json:"short_id"`
 	Hostname string   `json:"hostname"`
 	Tags     []string `json:"tags"`
@@ -228,7 +228,7 @@ func parseLS(data []byte) ([]FileEntry, error) {
 			if sawSnapshot {
 				return nil, &ParseError{Op: "ls", Line: lineNo, Text: snippet(trimmed), Err: fmt.Errorf("second snapshot header in one ls run")}
 			}
-			if _, err := ev.wireSnapshot.toSnapshot(); err != nil {
+			if _, err := ev.toSnapshot(); err != nil {
 				return nil, &ParseError{Op: "ls", Line: lineNo, Text: snippet(trimmed), Err: err}
 			}
 			sawSnapshot = true

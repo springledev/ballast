@@ -33,7 +33,25 @@ type Config struct {
 	// ConfigDir is the directory holding ballast.yaml and
 	// user-supplied catalog/credential subdirectories.
 	ConfigDir string
+
+	// MaxParallelJobs is how many different services a scheduler
+	// sweep may back up at the same time, so one long backup cannot
+	// hold every other service's schedule hostage. A single service
+	// never runs twice at once regardless. Always between 1 and
+	// ParallelJobsLimit.
+	MaxParallelJobs int
 }
+
+// DefaultMaxParallelJobs is MaxParallelJobs when ballast.yaml does not
+// set max_parallel_jobs: enough that a long backup does not delay
+// everything else, without overloading a small homelab machine.
+const DefaultMaxParallelJobs = 2
+
+// ParallelJobsLimit is the largest max_parallel_jobs Ballast accepts.
+// Every parallel job runs its own dump, restic upload and throwaway
+// verification container, so a typo like 200 would swamp a homelab
+// machine; a clear error is kinder than a machine brought to its knees.
+const ParallelJobsLimit = 16
 
 // configFile is the name of the optional YAML config file inside
 // ConfigDir.
@@ -41,8 +59,9 @@ const configFile = "ballast.yaml"
 
 // fileConfig mirrors the YAML config file keys. All fields optional.
 type fileConfig struct {
-	DataDir     string   `yaml:"data_dir"`
-	CatalogDirs []string `yaml:"catalog_dirs"`
+	DataDir         string   `yaml:"data_dir"`
+	CatalogDirs     []string `yaml:"catalog_dirs"`
+	MaxParallelJobs *int     `yaml:"max_parallel_jobs"`
 }
 
 // Load resolves the effective configuration.
@@ -60,6 +79,7 @@ func Load(getenv func(string) string, homeDir func() (string, error)) (Config, e
 	if err != nil {
 		return Config{}, err
 	}
+	cfg.MaxParallelJobs = DefaultMaxParallelJobs
 
 	if path := getenv("BALLAST_CONFIG_DIR"); path != "" {
 		cfg.ConfigDir = filepath.Clean(path)
@@ -79,6 +99,12 @@ func Load(getenv func(string) string, homeDir func() (string, error)) (Config, e
 		}
 		if len(fc.CatalogDirs) > 0 {
 			cfg.CatalogDirs = cleanAll(fc.CatalogDirs)
+		}
+		if fc.MaxParallelJobs != nil {
+			if n := *fc.MaxParallelJobs; n < 1 || n > ParallelJobsLimit {
+				return Config{}, fmt.Errorf("%s: max_parallel_jobs must be between 1 and %d, got %d", configFilePath(cfg.ConfigDir), ParallelJobsLimit, n)
+			}
+			cfg.MaxParallelJobs = *fc.MaxParallelJobs
 		}
 	} else if !os.IsNotExist(err) {
 		return Config{}, fmt.Errorf("reading %s: %w", configFilePath(cfg.ConfigDir), err)

@@ -293,8 +293,11 @@ func TestHistoryRecorded(t *testing.T) {
 	if err != nil {
 		t.Fatalf("StartRun: %v", err)
 	}
-	m.Transition(PREPARING, "")
-	m.Transition(DUMPING, "")
+	for _, to := range []State{PREPARING, DUMPING} {
+		if err := m.Transition(to, ""); err != nil {
+			t.Fatalf("%s: %v", to, err)
+		}
+	}
 	if err := m.Transition(FAILED, "pg_dumpall exited 2"); err != nil {
 		t.Fatalf("FAILED: %v", err)
 	}

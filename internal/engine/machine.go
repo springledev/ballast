@@ -4,6 +4,8 @@ import (
 	"database/sql"
 	"fmt"
 	"time"
+
+	"github.com/springledev/ballast/internal/store"
 )
 
 // Run is one persisted execution of a job, held at its current
@@ -37,7 +39,7 @@ type Machine struct {
 // in PENDING state, and records the initial PENDING→PENDING transition,
 // all inside one transaction so the runs row and its first transition
 // row are never observed separately.
-func StartRun(db *sql.DB, service string) (*Machine, error) {
+func StartRun(db *sql.DB, service string) (_ *Machine, err error) {
 	if service == "" {
 		return nil, fmt.Errorf("starting run: service must not be empty")
 	}
@@ -51,11 +53,7 @@ func StartRun(db *sql.DB, service string) (*Machine, error) {
 	if err != nil {
 		return nil, fmt.Errorf("starting run for %s: %w", service, err)
 	}
-	defer func() {
-		if err != nil {
-			tx.Rollback()
-		}
-	}()
+	defer func() { err = store.RollbackOnError(tx, err) }()
 
 	res, err := tx.Exec(
 		`INSERT INTO runs (job_id, state, started_at) VALUES (?, ?, ?)`,
@@ -153,16 +151,12 @@ func (m *Machine) Transition(to State, detail string) error {
 }
 
 // record persists a transition atomically using a fresh transaction.
-func (m *Machine) record(from, to State, detail string) error {
+func (m *Machine) record(from, to State, detail string) (err error) {
 	tx, err := m.store.Begin()
 	if err != nil {
 		return fmt.Errorf("recording transition %s->%s for service %s (run %d): %w", from, to, m.run.Service, m.run.ID, err)
 	}
-	defer func() {
-		if err != nil {
-			tx.Rollback()
-		}
-	}()
+	defer func() { err = store.RollbackOnError(tx, err) }()
 	now := time.Now().UTC()
 	if err = m.recordTx(tx, from, to, detail, now); err != nil {
 		return err

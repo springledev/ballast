@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"strconv"
 	"strings"
 	"syscall"
 	"testing"
@@ -38,29 +39,33 @@ func TestHelperProcess(t *testing.T) {
 		fmt.Fprint(os.Stderr, strings.Join(args, " "))
 		os.Exit(0)
 	case "fail": // fail <code> [msg...]: print msg to stderr, exit code
-		code := 1
-		fmt.Sscan(args[0], &code)
+		code := helperInt(args[0])
 		if len(args) > 1 {
 			fmt.Fprintln(os.Stderr, strings.Join(args[1:], " "))
 		}
 		os.Exit(code)
 	case "cat": // copy stdin to stdout, exit 0
-		io.Copy(os.Stdout, os.Stdin)
+		if _, err := io.Copy(os.Stdout, os.Stdin); err != nil {
+			fmt.Fprintln(os.Stderr, "cat:", err)
+			os.Exit(1)
+		}
 		os.Exit(0)
 	case "noread": // noread [code]: exit without reading stdin
 		code := 0
 		if len(args) > 0 {
-			fmt.Sscan(args[0], &code)
+			code = helperInt(args[0])
 		}
 		os.Exit(code)
 	case "head": // head <n>: read n bytes of stdin, then exit 0
-		n := 0
-		fmt.Sscan(args[0], &n)
-		io.CopyN(io.Discard, os.Stdin, int64(n))
+		n := helperInt(args[0])
+		// Shorter input than n is fine: like head(1), stop at EOF.
+		if _, err := io.CopyN(io.Discard, os.Stdin, int64(n)); err != nil && err != io.EOF {
+			fmt.Fprintln(os.Stderr, "head:", err)
+			os.Exit(1)
+		}
 		os.Exit(0)
 	case "producer": // producer <n>: write n bytes to stdout, exit 0
-		n := 0
-		fmt.Sscan(args[0], &n)
+		n := helperInt(args[0])
 		chunk := bytes.Repeat([]byte("x"), 4096)
 		for n > 0 {
 			m := min(n, len(chunk))
@@ -75,25 +80,44 @@ func TestHelperProcess(t *testing.T) {
 		}
 		os.Exit(0)
 	case "sleeper": // sleeper <seconds>: sleep, then exit 0
-		sec := 0
-		fmt.Sscan(args[0], &sec)
+		sec := helperInt(args[0])
 		time.Sleep(time.Duration(sec) * time.Second)
+		os.Exit(0)
+	case "pidfile": // pidfile <path> <seconds>: write own pid to path, sleep, exit 0
+		if err := os.WriteFile(args[0]+".tmp", []byte(strconv.Itoa(os.Getpid())), 0o600); err != nil {
+			fmt.Fprintln(os.Stderr, "pidfile:", err)
+			os.Exit(1)
+		}
+		// Rename so a reader never sees a half-written pid.
+		if err := os.Rename(args[0]+".tmp", args[0]); err != nil {
+			fmt.Fprintln(os.Stderr, "pidfile:", err)
+			os.Exit(1)
+		}
+		time.Sleep(time.Duration(helperInt(args[1])) * time.Second)
+		os.Exit(0)
+	case "spawner": // spawner <path> <seconds>: run "pidfile" through a Runner, like Ballast running restic
+		r := &Runner{}
+		if _, err := r.Run(context.Background(), nil, nil, helperCommand("pidfile", args...)); err != nil {
+			fmt.Fprintln(os.Stderr, "spawner:", err)
+			os.Exit(1)
+		}
 		os.Exit(0)
 	case "suicide": // suicide <sigterm|sigkill>: die by signal
 		sig := syscall.SIGTERM
 		if len(args) > 0 && args[0] == "sigkill" {
 			sig = syscall.SIGKILL
 		}
-		syscall.Kill(syscall.Getpid(), sig)
-		os.Exit(1)
+		if err := syscall.Kill(syscall.Getpid(), sig); err != nil {
+			fmt.Fprintln(os.Stderr, "suicide:", err)
+		}
+		os.Exit(1) // only reached if the signal was not delivered
 	case "env": // env <key>...: print each value on its own line
 		for _, k := range args {
 			fmt.Fprintln(os.Stdout, os.Getenv(k))
 		}
 		os.Exit(0)
 	case "bigerr": // bigerr <n>: write numbered lines to stderr, exit 1
-		n := 0
-		fmt.Sscan(args[0], &n)
+		n := helperInt(args[0])
 		for i := 0; i < n; i++ {
 			fmt.Fprintf(os.Stderr, "line-%06d\n", i)
 		}
@@ -102,6 +126,18 @@ func TestHelperProcess(t *testing.T) {
 		fmt.Fprintln(os.Stderr, "unknown helper behavior:", behavior)
 		os.Exit(2)
 	}
+}
+
+// helperInt parses a helper-process numeric argument, exiting with
+// status 2 on a malformed one so a typo in a test fails loudly instead
+// of silently running with zero.
+func helperInt(arg string) int {
+	n, err := strconv.Atoi(arg)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "helper: bad numeric argument:", err)
+		os.Exit(2)
+	}
+	return n
 }
 
 // helperCommand builds a Command that re-invokes the test binary as a

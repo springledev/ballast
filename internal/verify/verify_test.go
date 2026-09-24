@@ -173,25 +173,25 @@ func TestForValidation(t *testing.T) {
 			wantErr: "container-restore verification needs a command runner",
 		},
 		{
-			name: "container-restore without image",
+			name:  "container-restore without image",
 			entry: &catalog.Entry{Service: "immich", Verify: catalog.Verify{Method: "container-restore"}},
-			opts: Options{Runner: r}, wantErr: "needs verify.image",
+			opts:  Options{Runner: r}, wantErr: "needs verify.image",
 		},
 		{name: "container-restore ok", entry: containerEntry, opts: Options{Runner: r}},
 		{
-			name: "read-back not implemented yet",
+			name:  "read-back not implemented yet",
 			entry: &catalog.Entry{Service: "svc", Verify: catalog.Verify{Method: "read-back"}},
-			opts: Options{Runner: r}, wantErr: "not implemented yet",
+			opts:  Options{Runner: r}, wantErr: "not implemented yet",
 		},
 		{
-			name: "restart-smoke not implemented yet",
+			name:  "restart-smoke not implemented yet",
 			entry: &catalog.Entry{Service: "svc", Verify: catalog.Verify{Method: "restart-smoke"}},
-			opts: Options{Runner: r}, wantErr: "not implemented yet",
+			opts:  Options{Runner: r}, wantErr: "not implemented yet",
 		},
 		{
-			name: "exec-script not implemented yet",
+			name:  "exec-script not implemented yet",
 			entry: &catalog.Entry{Service: "svc", Verify: catalog.Verify{Method: "exec-script"}},
-			opts: Options{Runner: r}, wantErr: "not implemented yet",
+			opts:  Options{Runner: r}, wantErr: "not implemented yet",
 		},
 	}
 

@@ -251,7 +251,7 @@ type BackupResult struct {
 	SnapshotID string
 
 	FilesNew, FilesChanged, FilesUnmodified int
-	DirsNew, DirsChanged, DirsUnmodified   int
+	DirsNew, DirsChanged, DirsUnmodified    int
 
 	// DataAdded is the uncompressed size of newly added data;
 	// DataAddedPacked is what it compressed to in the repository.
