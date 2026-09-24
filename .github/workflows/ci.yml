@@ -13,7 +13,8 @@ jobs:
 
       - uses: actions/setup-go@v5
         with:
-          go-version: "1.23"
+          # Single source of truth for the Go version (spec: Go 1.25).
+          go-version-file: go.mod
 
       - name: Vet
         run: go vet ./...
@@ -22,9 +23,11 @@ jobs:
         run: go test ./... -race
 
       - name: Lint
-        uses: golangci/golangci-lint-action@v6
+        # golangci-lint v2 needs action v7+; settings live in .golangci.yml.
+        # Pinned so a new linter release cannot turn CI red on its own.
+        uses: golangci/golangci-lint-action@v8
         with:
-          version: latest
+          version: v2.14
 
       - name: Cross-build static binaries
         run: make build-all

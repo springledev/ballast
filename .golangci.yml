@@ -1,0 +1,10 @@
+version: "2"
+
+linters:
+  exclusions:
+    # golangci-lint v1's default exclusions: unchecked Close/Rollback/
+    # Remove/Setenv-style errors on cleanup paths. Close errors that
+    # matter (files being written) are checked explicitly in code.
+    presets:
+      - std-error-handling
+      - common-false-positives

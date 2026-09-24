@@ -2,13 +2,13 @@
 
 
 
- > **One-line pitch:** A self-hosted, service-aware backup tool for Docker-based homelabs: it knows how to correctly back up the apps homelabers actually run (Immich, Vaultwarden, Postgres, …), *proves every backup restores*, and ships them to any restic-compatible destination (B2, S3, SFTP, local disk) with rclone as a secondary tier.
+ > **One-line pitch:** A self-hosted, service-aware backup tool for Docker-based homelabs: it knows how to correctly back up the apps homelabers actually run (Immich, Vaultwarden, Postgres, …), *proves every backup restores*, and ships them to any restic-compatible destination (B2, S3, SFTP, local disk), with rclone as a secondary tier planned for Phase 2 (§12).
 
 
 
  - **Status:** Ready for implementation
 
- - **Engine:** Go 1.23 (single static binary, Vue UI embedded via `go:embed`)
+ - **Engine:** Go 1.25 (single static binary, Vue UI embedded via `go:embed`)
 
  - **Name:** **Ballast** — binary `ballast`, Go module `github.com/<org>/ballast`
 
@@ -52,7 +52,7 @@
 
  2. **A backup isn't "done" until it's verified restorable.** Verification is built-in, not optional.
 
- 3. **Fail loudly but non-fatally.** Per-service, per-tier reporting; a flaky secondary tier must never mask a primary-tier failure — and vice versa.
+ 3. **Fail loudly but non-fatally.** Per-service, per-tier reporting; a flaky secondary tier must never mask a primary-tier failure — and vice versa. (v0.1 ships the restic primary tier only; the secondary tier arrives in Phase 2, §12.)
 
  4. **CLI-first, GUI on top.** Every operation scriptable. Headless systemd/cron is a first-class citizen.
 
@@ -88,7 +88,7 @@
 
  │ restic (primary tier) │──▶ B2 / S3 / SFTP / local
 
- │ rclone (secondary tier) │──▶ Proton etc. (report-only)
+ │ rclone (secondary tier) │──▶ Proton etc. (report-only; Phase 2)
 
  └────────────┬────────────┘
 
@@ -104,9 +104,9 @@
 
  - Single Go binary: `ballast serve` (API  embedded GUI), `ballast run-due`, `ballast backup|verify|restore|status|trigger`, `ballast wizard`.
 
- - SQLite via `modernc.org/sqlite` (pure Go, no cgo — preserves the static-binary property). Migrations via `golang-migrate` embedded SQL files.
+ - SQLite via `modernc.org/sqlite` (pure Go, no cgo — preserves the static-binary property). Migrations are embedded, numbered SQL files (`internal/store/migrations/NNN_name.sql`) applied in order by a small built-in runner, each in its own transaction, tracked in a `schema_migrations` table; forward-only (fix a bad migration with a new one, never by editing an applied one).
 
- - restic and rclone invoked via `os/exec` — **never reimplemented**. Version-pin check at startup; warn loudly on mismatch.
+ - restic (and, from Phase 2, rclone) invoked via `os/exec` — **never reimplemented**. Version-pin check at startup; warn loudly on mismatch.
 
  - Scheduler: built-in scheduler (cron expressions, per-job) **and** `ballast run-due` designed for systemd timers/cron for headless-first users.
 
@@ -208,7 +208,7 @@
 
  - **Primary tier (restic backends):** B2, any S3-compatible (incl. Cloudflare R2), SFTP, local disk. One repo or per-service repos.
 
- - **Secondary tier (rclone remotes):** Proton Drive etc. — **report-only status, never blocks, never marks a job failed on its own.**
+ - **Secondary tier (rclone remotes) — Phase 2, not in v0.1 (§12):** Proton Drive etc. — **report-only status, never blocks, never marks a job failed on its own.**
 
  - Retention policy per destination (default mirroring reference: 7d/4w/6m).
 
@@ -384,7 +384,7 @@
 
  - **restic output parsing:** `--compact` has no Paths column; `--path --latest` groups by path-set. The restic wrapper MUST pin to a tested output format version and fail safe (not silently) on parse surprises.
 
- - **Proton (rclone secondary) requires a user keyring session** — secondary tier runs as a user unit context or documents the limitation; it is report-only regardless.
+ - **(Phase 2) Proton (rclone secondary) requires a user keyring session** — secondary tier runs as a user unit context or documents the limitation; it is report-only regardless.
 
  - **Never trust a green light without verification** — §4.1.
 
@@ -460,7 +460,7 @@
 
  - Freshness defaults: nightly → max age 48h; weekly → 9 days.
 
- - **Per-tier isolation:** a secondary-tier failure notification MUST NOT be worded or ordered such that it masks a primary-tier failure, and vice versa (test asserts notification content separation).
+ - **Per-tier isolation (from Phase 2, when the secondary tier lands):** a secondary-tier failure notification MUST NOT be worded or ordered such that it masks a primary-tier failure, and vice versa (test asserts notification content separation).
 
 
 
@@ -472,7 +472,11 @@
 
  - **v0.1 MUST ship, and test with a stub script:** (a) the `exec` strategy end-to-end, (b) the `trigger` command with token auth. No mobile code ships in v0.1.
 
- - Proton Drive as a *verified* tier (once a reliable headless path exists).
+ - **Secondary rclone tier** (moved out of v0.1): rclone remotes as a report-only tier that never blocks and never marks a job failed on its own (§5.2), with per-tier notification isolation tests (§11) and an acceptance check that a secondary-tier outage produces a report but never a primary job failure or masked notification.
+
+
+
+ - Proton Drive as a *verified* tier, on top of the secondary tier (once a reliable headless path exists).
 
 
 
@@ -512,33 +516,51 @@
 
 
 
- Each step lands with tests green and `ballast --help` working. Do not start step N1 until step N is complete.
+ Each step lands with tests green and `ballast --help` working. Do not start a step until the previous one is complete. `PLAN.md` tracks progress against this list.
 
 
 
- 1. Repo scaffolding: Go module, CI, lint, `make build` → static binary, embedding a stub page.
+ 1. Repo scaffolding: Go module, `cmd/ballast`, Makefile, CI (build, vet, lint, test), `make build` → static binary embedding a stub page.
 
- 2. SQLite  migrations  job state machine (persisted transitions; unit tests for every legal/illegal transition).
 
- 3. Config & credential loading (incl. `$CREDENTIALS_DIRECTORY`), logging (structured, secret-redaction tested).
+ 2. Config loading (incl. `$CREDENTIALS_DIRECTORY`) and SQLite store with embedded migrations.
 
- 4. restic wrapper: init/snapshots/ls/dump/restore against local test repo; output parsing with golden fixtures.
 
- 5. `files` strategy end-to-end: backup a folder → local restic repo → verify (archive integrity  read-back) → `SUCCESS` recorded.
+ 3. Catalog schema and loader (JSON Schema validation; unknown keys rejected).
 
- 6. `dump` strategy with generic-Postgres catalog entry: integration test with real Postgres container.
 
- 7. Verification framework: throwaway-container restore harness (normative MUSTs from §7.2 enforced by tests).
+ 4. Job state machine (PENDING → … → VERIFYING → SUCCESS / SUCCESS_UNVERIFIED / FAILED), persisted transitions, unit tests for every legal/illegal transition.
 
- 8. `stop-start` strategy (Vaultwarden/CouchDB entries)  cleanup-on-failure tests.
 
- 9. Scheduler  `run-due`  freshness alerting  ntfy/webhook notifications (per-tier isolation tests).
+ 5. Subprocess runner: pipefail semantics, SIGPIPE handling, credential-dir env (§8).
 
- 10. Secondary rclone tier (report-only; must never block — tested).
 
- 11. **REST API  Vue GUI** (last, on the now-stable API): dashboard, services, destinations, schedule, restore browser, wizard.
+ 6. Strategy plugins: `files`, `dump` (Postgres/MySQL catalog entries), `stop-start` (guaranteed restart, cleanup-on-failure tests), `exec` (stub-script tests only — Phase-2 interface reservation, §12).
 
- 12. `exec` strategy  `ballast trigger` (stub-script tests only) — Phase-2 interface reservation.
+
+ 7. restic wrapper: init/backup/snapshots/ls/dump/restore, retention, read-back, against a local test repo; output parsing with golden fixtures.
+
+
+ 8. Verification runners: archive integrity and the throwaway-container restore harness (normative MUSTs from §7.2 enforced by tests).
+
+
+ 9. Scheduler, `ballast run-due`, and `ballast trigger` with token auth (stub-runner tests only — Phase-2 interface reservation, §12).
+
+
+ 10. Notifications (ntfy/webhook) and freshness alerting (fake-clock tests).
+
+
+ 11. REST API and CLI commands (status, snapshots, restore), wiring the real backup pipeline (catalog → strategy → restic → verify) behind the scheduler. Must include: a `files` backup end-to-end to a local restic repo recorded `SUCCESS` only after VERIFYING; a `dump` integration test against a real Postgres container; structured logging with secret-redaction tests.
+
+
+ 12. Vue web UI, built on the now-stable API: traffic-light dashboard, services, destinations, schedule, restore browser, wizard.
+
+
+ 13. Docs: quickstart (15-min wizard → verified backup) and catalog contribution guide, shipped together with the bundled Immich, Vaultwarden, and CouchDB catalog entries (§15) as its worked examples.
+
+
+
+ The secondary rclone tier is not part of v0.1; see §12.
 
 
 
@@ -554,15 +576,13 @@
 
  - [ ] Unverifiable backup shows **amber, never green**
 
- - [ ] Secondary-tier outage produces a report but never a primary job failure or masked notification
-
  - [ ] Secrets never in DB, logs, or API responses (test asserts this)
 
  - [ ] Freshness alerts fire at configured max-age (tested with fake clock)
 
  - [ ] Every CLI operation has an API equivalent and a test
 
- - [ ] Single static binary for linux/amd64  linux/arm64; no runtime dependencies beyond docker/restic/rclone
+ - [ ] Single static binary for linux/amd64  linux/arm64; no runtime dependencies beyond docker/restic
 
  - [ ] No telemetry; repo ships with README quickstart aimed at a homelab newcomer
 

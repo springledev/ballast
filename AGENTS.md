@@ -40,7 +40,7 @@
 
 
 
- - Go 1.23, single static binary, no cgo (`CGO_ENABLED=0`)
+ - Go 1.25, single static binary, no cgo (`CGO_ENABLED=0`)
 
  - SQLite via `modernc.org/sqlite` (pure Go)
 
@@ -69,6 +69,10 @@
  3. **Isolation of failure.** A secondary-tier (rclone) failure must never
 
  mask a primary-tier (restic) failure, and vice versa. Report all tiers.
+
+ v0.1 ships the restic tier only; rclone is Phase 2 (spec §12), but keep
+
+ per-tier reporting shapes so it can slot in without masking anything.
 
  4. **Wrap, don't rebuild.** Shell out to `restic`, `rclone`, `docker`,
 

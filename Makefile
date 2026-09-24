@@ -1,7 +1,7 @@
 # Ballast — build, lint and test.
 #
 # The binary MUST be fully static (CGO_ENABLED=0; SQLite comes from the
-# pure-Go modernc.org/sqlite driver), per spec §"Stack (fixed)".
+# pure-Go modernc.org/sqlite driver), per AGENTS.md "Stack (fixed)".
 
 BINARY  := ballast
 GO      ?= go
@@ -25,6 +25,10 @@ test:
 cover:
 	$(GO) test ./... -race -coverprofile=coverage.out
 	$(GO) tool cover -func=coverage.out
+
+.PHONY: lint
+lint: ## Run golangci-lint with .golangci.yml (same version as CI: v2.14)
+	golangci-lint run ./...
 
 .PHONY: fmt
 fmt:
