@@ -38,17 +38,35 @@ func FileEnv(dir string, files map[string]string) ([]string, error) {
 			return nil, fmt.Errorf("credential file name %q for %s must be a plain file name inside the credential directory", name, k)
 		}
 		path := filepath.Join(dir, name)
-		info, err := os.Stat(path)
-		if err != nil {
+		if err := CheckCredentialFile(path); err != nil {
 			return nil, fmt.Errorf("credential file for %s: %w", k, err)
-		}
-		if !info.Mode().IsRegular() {
-			return nil, fmt.Errorf("credential file %s is not a regular file", path)
-		}
-		if perm := info.Mode().Perm(); perm&0o077 != 0 {
-			return nil, fmt.Errorf("credential file %s has permissions %04o: group and other access is not allowed; run: chmod 600 %s", path, perm, path)
 		}
 		env = append(env, k+"="+path)
 	}
 	return env, nil
+}
+
+// CheckCredentialFile validates that path is a regular file readable
+// only by its owner (0600 or stricter) — the same rule FileEnv
+// applies to every credential path it resolves. Exported so other
+// packages that read a credential file's *contents* directly (e.g.
+// internal/notify, for secrets an in-process HTTP client needs in
+// memory rather than as a subprocess env var pointing at a file) can
+// apply the identical check without duplicating it.
+//
+// The file's contents are never touched here: only its mode is
+// inspected, so this can be called before deciding whether it is
+// even safe to read.
+func CheckCredentialFile(path string) error {
+	info, err := os.Stat(path)
+	if err != nil {
+		return err
+	}
+	if !info.Mode().IsRegular() {
+		return fmt.Errorf("credential file %s is not a regular file", path)
+	}
+	if perm := info.Mode().Perm(); perm&0o077 != 0 {
+		return fmt.Errorf("credential file %s has permissions %04o: group and other access is not allowed; run: chmod 600 %s", path, perm, path)
+	}
+	return nil
 }

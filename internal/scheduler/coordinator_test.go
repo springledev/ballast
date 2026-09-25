@@ -291,6 +291,51 @@ func TestRunDueFailsInterruptedRunAndCarriesOn(t *testing.T) {
 	}
 }
 
+// fakeNotifier is a minimal engine.Notifier that records job-failure
+// calls, used to confirm Coordinator.Notifier is actually threaded
+// through to engine.FailInterruptedRun (see withClaim).
+type fakeNotifier struct {
+	mu       sync.Mutex
+	failures []string // "service:runID:detail"
+}
+
+func (n *fakeNotifier) NotifyJobFailure(_ context.Context, service string, runID int64, detail string) error {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	n.failures = append(n.failures, fmt.Sprintf("%s:%d:%s", service, runID, detail))
+	return nil
+}
+
+func (n *fakeNotifier) NotifyVerificationFailure(_ context.Context, service string, runID int64, detail string) error {
+	return nil
+}
+
+func (n *fakeNotifier) NotifySuccessHeartbeat(_ context.Context, service string, runID int64) error {
+	return nil
+}
+
+// TestRunDuePassesNotifierToInterruptedRun pins review finding 4:
+// Coordinator.Notifier must be passed through to
+// engine.FailInterruptedRun (withClaim), so a run found interrupted
+// during a sweep is reported through the same Notifier as any other
+// job failure (spec §11), instead of only being logged.
+func TestRunDuePassesNotifierToInterruptedRun(t *testing.T) {
+	f := newFixture(t)
+	f.schedule(t, "immich", "0 3 * * *")
+	dead := f.leaveUnfinishedRun(t, "immich")
+	notifier := &fakeNotifier{}
+	f.c.Notifier = notifier
+
+	if err := f.c.RunDue(context.Background(), nightly); err == nil || !strings.Contains(err.Error(), "immich") {
+		t.Fatalf("RunDue error = %v, want the interrupted run reported as a failure", err)
+	}
+
+	want := fmt.Sprintf("immich:%d:%s", dead.Run().ID, engine.InterruptedDetail)
+	if len(notifier.failures) != 1 || notifier.failures[0] != want {
+		t.Errorf("notifier failures = %v, want exactly [%q]", notifier.failures, want)
+	}
+}
+
 func TestRunDueNeverFailsLiveRun(t *testing.T) {
 	f := newFixture(t)
 	f.schedule(t, "immich", "0 3 * * *")

@@ -138,3 +138,82 @@ func TestFileEnvEmptyMapping(t *testing.T) {
 		t.Errorf("env = %v, want empty", env)
 	}
 }
+
+// TestCheckCredentialFile is a direct table-driven test of
+// CheckCredentialFile (finding 10): it is exported specifically so
+// other packages (e.g. internal/notify, for secrets read directly
+// into memory rather than pointed at by an env var) can apply the
+// exact same rule FileEnv uses, so this pins that rule independent of
+// FileEnv's own tests.
+func TestCheckCredentialFile(t *testing.T) {
+	tests := []struct {
+		name    string
+		setup   func(t *testing.T, dir string) string // returns the path to check
+		wantErr bool
+	}{
+		{
+			name: "regular file, 0600",
+			setup: func(t *testing.T, dir string) string {
+				return writeCred(t, dir, "pw", 0o600)
+			},
+			wantErr: false,
+		},
+		{
+			name: "regular file, stricter than 0600",
+			setup: func(t *testing.T, dir string) string {
+				return writeCred(t, dir, "pw", 0o400)
+			},
+			wantErr: false,
+		},
+		{
+			name: "group readable is rejected",
+			setup: func(t *testing.T, dir string) string {
+				return writeCred(t, dir, "pw", 0o640)
+			},
+			wantErr: true,
+		},
+		{
+			name: "world readable is rejected",
+			setup: func(t *testing.T, dir string) string {
+				return writeCred(t, dir, "pw", 0o604)
+			},
+			wantErr: true,
+		},
+		{
+			name: "world writable is rejected",
+			setup: func(t *testing.T, dir string) string {
+				return writeCred(t, dir, "pw", 0o602)
+			},
+			wantErr: true,
+		},
+		{
+			name: "missing file",
+			setup: func(t *testing.T, dir string) string {
+				return filepath.Join(dir, "does-not-exist")
+			},
+			wantErr: true,
+		},
+		{
+			name: "directory instead of a regular file",
+			setup: func(t *testing.T, dir string) string {
+				sub := filepath.Join(dir, "subdir")
+				if err := os.Mkdir(sub, 0o700); err != nil {
+					t.Fatal(err)
+				}
+				return sub
+			},
+			wantErr: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			dir := t.TempDir()
+			path := tt.setup(t, dir)
+			err := CheckCredentialFile(path)
+			if (err != nil) != tt.wantErr {
+				t.Errorf("CheckCredentialFile(%q) error = %v, wantErr %v", path, err, tt.wantErr)
+			}
+		})
+	}
+}

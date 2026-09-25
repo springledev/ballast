@@ -1,6 +1,7 @@
 package engine
 
 import (
+	"context"
 	"database/sql"
 	"fmt"
 	"time"
@@ -33,6 +34,10 @@ type Run struct {
 type Machine struct {
 	store *sql.DB
 	run   Run
+
+	notifier  Notifier        // optional; nil = no notifications (see SetNotifier)
+	notifyCtx context.Context // bounds each notifier call; set with notifier via SetNotifier
+	notifyErr error           // result of the most recent notification attempt (see NotifyErr)
 }
 
 // StartRun creates (if needed) the job for service, creates a new run
@@ -147,6 +152,7 @@ func (m *Machine) Transition(to State, detail string) error {
 		return err
 	}
 	m.run.State = to
+	m.notifyOutcome(from, to, detail)
 	return nil
 }
 

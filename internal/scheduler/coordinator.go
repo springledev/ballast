@@ -91,6 +91,12 @@ type Coordinator struct {
 	// DefaultLockWait; negative means do not wait. RunDue never waits:
 	// a locked service is simply skipped until the next sweep.
 	LockWait time.Duration
+	// Notifier, when set, is attached to a run that withClaim finds
+	// interrupted before it is failed out, so the interruption is
+	// reported the same way any other job failure is (spec §11). Nil
+	// (the default) means interrupted runs are still failed, just not
+	// notified — step 11 wires a real Notifier in.
+	Notifier engine.Notifier
 	// Redact lists secret strings (passwords, keys, tokens) that must
 	// never reach Log or the text of an error the Coordinator returns
 	// (spec rule 2). Run errors are logged and returned verbatim, so
@@ -342,7 +348,7 @@ func (c *Coordinator) withClaim(ctx context.Context, service string, wait time.D
 	}
 	defer release()
 
-	last, interrupted, err := engine.FailInterruptedRun(c.DB, service)
+	last, interrupted, err := engine.FailInterruptedRun(ctx, c.DB, service, c.Notifier)
 	if err != nil {
 		return false, fmt.Errorf("checking for an interrupted run: %w", err)
 	}
