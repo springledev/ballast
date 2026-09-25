@@ -1,0 +1,350 @@
+package api
+
+import (
+	"encoding/json"
+	"errors"
+	"fmt"
+	"net/http"
+
+	"github.com/springledev/ballast/internal/inventory"
+	"github.com/springledev/ballast/internal/scheduler"
+)
+
+// NewHandler builds Ballast's REST API (spec §9: "All operations are
+// also full REST API endpoints ... the GUI uses exactly this API").
+// Handlers hold no logic beyond parsing the request and calling Ops;
+// every real decision lives in internal/api.Ops so the CLI and the
+// API can never drift apart.
+//
+// Every route requires `Authorization: Bearer <apiToken>` except
+// POST .../trigger, which uses its own per-service token instead (see
+// auth.go). That route is registered directly on the top-level mux,
+// unwrapped by withAuth, rather than detected by a path-string
+// heuristic in middleware: net/http's ServeMux picks the more
+// specific of two matching patterns, so the exact
+// "POST .../services/{name}/trigger" pattern here always wins over
+// the "/api/v1/" subtree pattern below, by the same routing rules
+// every other route relies on — not a heuristic that could drift out
+// of sync with the route table.
+func NewHandler(ops *Ops, apiToken string) http.Handler {
+	h := &handler{ops: ops}
+	protected := http.NewServeMux()
+
+	protected.HandleFunc("GET /api/v1/status", h.status)
+	protected.HandleFunc("GET /api/v1/catalog", h.catalog)
+
+	protected.HandleFunc("GET /api/v1/services", h.listServices)
+	protected.HandleFunc("POST /api/v1/services", h.createService)
+	protected.HandleFunc("GET /api/v1/services/{name}", h.getService)
+	protected.HandleFunc("PUT /api/v1/services/{name}", h.putService)
+	protected.HandleFunc("DELETE /api/v1/services/{name}", h.deleteService)
+	protected.HandleFunc("POST /api/v1/services/{name}/backup", h.startBackup)
+	protected.HandleFunc("GET /api/v1/services/{name}/snapshots", h.snapshots)
+	protected.HandleFunc("POST /api/v1/services/{name}/restore", h.restore)
+	protected.HandleFunc("GET /api/v1/services/{name}/schedule", h.getSchedule)
+	protected.HandleFunc("PUT /api/v1/services/{name}/schedule", h.putSchedule)
+	protected.HandleFunc("PUT /api/v1/services/{name}/schedule/enabled", h.putScheduleEnabled)
+	protected.HandleFunc("POST /api/v1/services/{name}/trigger-token", h.generateTriggerToken)
+
+	protected.HandleFunc("GET /api/v1/destinations", h.listDestinations)
+	protected.HandleFunc("POST /api/v1/destinations", h.createDestination)
+	protected.HandleFunc("DELETE /api/v1/destinations/{name}", h.deleteDestination)
+	protected.HandleFunc("POST /api/v1/destinations/{name}/test", h.testDestination)
+
+	mux := http.NewServeMux()
+	mux.Handle("/api/v1/", withAuth(protected, apiToken))
+	mux.HandleFunc("POST /api/v1/services/{name}/trigger", h.trigger)
+	return mux
+}
+
+type handler struct{ ops *Ops }
+
+// --- response/request helpers -----------------------------------------
+
+func writeJSON(w http.ResponseWriter, status int, v any) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	_ = json.NewEncoder(w).Encode(v)
+}
+
+func writeErrorMsg(w http.ResponseWriter, status int, msg string) {
+	writeJSON(w, status, map[string]string{"error": msg})
+}
+
+// writeErr maps err to a status code (spec §14 step 11 D3) and writes
+// a JSON error body, with defaultStatus used when err matches none of
+// the known sentinels. The message is redacted (spec rule 2) as a
+// last line of defence before it reaches an API response.
+func (h *handler) writeErr(w http.ResponseWriter, err error, defaultStatus int) {
+	status := defaultStatus
+	switch {
+	case errors.Is(err, inventory.ErrNotFound):
+		status = http.StatusNotFound
+	case errors.Is(err, inventory.ErrInUse), errors.Is(err, scheduler.ErrAlreadyRunning):
+		status = http.StatusConflict
+	case errors.Is(err, ErrValidation):
+		status = http.StatusBadRequest
+	}
+	writeErrorMsg(w, status, h.ops.redact(err.Error()))
+}
+
+// decodeJSON reads and validates a JSON request body, rejecting
+// unknown fields so a client typo is a loud 400, not a silently
+// ignored field.
+func decodeJSON(r *http.Request, v any) error {
+	defer r.Body.Close()
+	dec := json.NewDecoder(r.Body)
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(v); err != nil {
+		return fmt.Errorf("%w: decoding request body: %v", ErrValidation, err)
+	}
+	return nil
+}
+
+func pathName(r *http.Request) string { return r.PathValue("name") }
+
+// --- status & catalog ----------------------------------------------------
+
+func (h *handler) status(w http.ResponseWriter, r *http.Request) {
+	service := r.URL.Query().Get("service")
+	withVerify := r.URL.Query().Get("verify") == "1"
+	st, err := h.ops.Status(r.Context(), service, withVerify)
+	if err != nil {
+		h.writeErr(w, err, http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, http.StatusOK, st)
+}
+
+func (h *handler) catalog(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, http.StatusOK, h.ops.ListCatalog())
+}
+
+// --- services --------------------------------------------------------
+
+func (h *handler) listServices(w http.ResponseWriter, r *http.Request) {
+	list, err := h.ops.ListServices(r.Context())
+	if err != nil {
+		h.writeErr(w, err, http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, http.StatusOK, list)
+}
+
+func (h *handler) createService(w http.ResponseWriter, r *http.Request) {
+	var s inventory.Service
+	if err := decodeJSON(r, &s); err != nil {
+		h.writeErr(w, err, http.StatusBadRequest)
+		return
+	}
+	if err := h.ops.PutService(r.Context(), s); err != nil {
+		h.writeErr(w, err, http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, http.StatusCreated, s)
+}
+
+func (h *handler) getService(w http.ResponseWriter, r *http.Request) {
+	s, err := h.ops.GetService(r.Context(), pathName(r))
+	if err != nil {
+		h.writeErr(w, err, http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, http.StatusOK, s)
+}
+
+func (h *handler) putService(w http.ResponseWriter, r *http.Request) {
+	var s inventory.Service
+	if err := decodeJSON(r, &s); err != nil {
+		h.writeErr(w, err, http.StatusBadRequest)
+		return
+	}
+	s.Name = pathName(r)
+	if err := h.ops.PutService(r.Context(), s); err != nil {
+		h.writeErr(w, err, http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, http.StatusOK, s)
+}
+
+func (h *handler) deleteService(w http.ResponseWriter, r *http.Request) {
+	if err := h.ops.DeleteService(r.Context(), pathName(r)); err != nil {
+		h.writeErr(w, err, http.StatusInternalServerError)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// --- backups, snapshots, restore ----------------------------------------
+
+func (h *handler) startBackup(w http.ResponseWriter, r *http.Request) {
+	interrupted, err := h.ops.StartBackup(r.Context(), pathName(r))
+	if err != nil {
+		h.writeErr(w, err, http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, http.StatusAccepted, map[string]any{
+		"started":                  true,
+		"previous_run_interrupted": interrupted,
+	})
+}
+
+func (h *handler) snapshots(w http.ResponseWriter, r *http.Request) {
+	snaps, err := h.ops.Snapshots(r.Context(), pathName(r))
+	if err != nil {
+		h.writeErr(w, err, http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, http.StatusOK, snaps)
+}
+
+type restoreRequestBody struct {
+	Snapshot string   `json:"snapshot"`
+	Paths    []string `json:"paths"`
+	To       string   `json:"to"`
+}
+
+func (h *handler) restore(w http.ResponseWriter, r *http.Request) {
+	var body restoreRequestBody
+	if err := decodeJSON(r, &body); err != nil {
+		h.writeErr(w, err, http.StatusBadRequest)
+		return
+	}
+	err := h.ops.Restore(r.Context(), RestoreRequest{
+		Service: pathName(r), Snapshot: body.Snapshot, Paths: body.Paths, To: body.To,
+	})
+	if err != nil {
+		h.writeErr(w, err, http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]bool{"restored": true})
+}
+
+// --- schedules -------------------------------------------------------
+
+func (h *handler) getSchedule(w http.ResponseWriter, r *http.Request) {
+	s, err := h.ops.GetSchedule(r.Context(), pathName(r))
+	if err != nil {
+		h.writeErr(w, err, http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, http.StatusOK, s)
+}
+
+type scheduleRequestBody struct {
+	Cron string `json:"cron"`
+}
+
+func (h *handler) putSchedule(w http.ResponseWriter, r *http.Request) {
+	var body scheduleRequestBody
+	if err := decodeJSON(r, &body); err != nil {
+		h.writeErr(w, err, http.StatusBadRequest)
+		return
+	}
+	name := pathName(r)
+	if err := h.ops.SetSchedule(r.Context(), name, body.Cron); err != nil {
+		h.writeErr(w, err, http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, http.StatusOK, scheduler.ScheduledJob{Service: name, Cron: body.Cron, Enabled: true})
+}
+
+type scheduleEnabledBody struct {
+	Enabled bool `json:"enabled"`
+}
+
+func (h *handler) putScheduleEnabled(w http.ResponseWriter, r *http.Request) {
+	var body scheduleEnabledBody
+	if err := decodeJSON(r, &body); err != nil {
+		h.writeErr(w, err, http.StatusBadRequest)
+		return
+	}
+	if err := h.ops.SetScheduleEnabled(r.Context(), pathName(r), body.Enabled); err != nil {
+		h.writeErr(w, err, http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]bool{"enabled": body.Enabled})
+}
+
+// --- trigger tokens & trigger --------------------------------------------
+
+func (h *handler) generateTriggerToken(w http.ResponseWriter, r *http.Request) {
+	token, err := h.ops.GenerateTriggerToken(r.Context(), pathName(r))
+	if err != nil {
+		h.writeErr(w, err, http.StatusInternalServerError)
+		return
+	}
+	// Shown exactly once (spec rule 2): never logged, never returned
+	// by any other endpoint, and never cached.
+	w.Header().Set("Cache-Control", "no-store")
+	writeJSON(w, http.StatusCreated, map[string]string{"token": token})
+}
+
+// trigger is authenticated by its own per-service token, not the
+// ordinary API bearer token — see NewHandler's routing, which
+// registers this route unwrapped by withAuth. Like startBackup, it
+// starts the run in the background and returns 202 immediately: it
+// must not hold the request open for an hours-long backup, nor let
+// the request's own cancellation or timeout kill a run that outlives
+// it (net/http cancels r.Context() the instant this handler returns).
+func (h *handler) trigger(w http.ResponseWriter, r *http.Request) {
+	name := pathName(r)
+	token := r.Header.Get("X-Ballast-Trigger-Token")
+	interrupted, err := h.ops.StartTrigger(r.Context(), name, token)
+	switch {
+	case err == nil:
+		writeJSON(w, http.StatusAccepted, map[string]any{
+			"started":                  true,
+			"previous_run_interrupted": interrupted,
+		})
+	case errors.Is(err, scheduler.ErrInvalidTriggerToken):
+		writeErrorMsg(w, http.StatusUnauthorized, h.ops.redact(err.Error()))
+	default:
+		h.writeErr(w, err, http.StatusInternalServerError)
+	}
+}
+
+// --- destinations ------------------------------------------------------
+
+func (h *handler) listDestinations(w http.ResponseWriter, r *http.Request) {
+	list, err := h.ops.ListDestinations(r.Context())
+	if err != nil {
+		h.writeErr(w, err, http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, http.StatusOK, list)
+}
+
+type createDestinationBody struct {
+	inventory.Destination
+	Init bool `json:"init"`
+}
+
+func (h *handler) createDestination(w http.ResponseWriter, r *http.Request) {
+	var body createDestinationBody
+	if err := decodeJSON(r, &body); err != nil {
+		h.writeErr(w, err, http.StatusBadRequest)
+		return
+	}
+	if err := h.ops.PutDestination(r.Context(), body.Destination, body.Init); err != nil {
+		h.writeErr(w, err, http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, http.StatusCreated, body.Destination)
+}
+
+func (h *handler) deleteDestination(w http.ResponseWriter, r *http.Request) {
+	if err := h.ops.DeleteDestination(r.Context(), pathName(r)); err != nil {
+		h.writeErr(w, err, http.StatusInternalServerError)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (h *handler) testDestination(w http.ResponseWriter, r *http.Request) {
+	if err := h.ops.TestDestination(r.Context(), pathName(r)); err != nil {
+		h.writeErr(w, err, http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
+}

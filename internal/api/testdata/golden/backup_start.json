@@ -1,0 +1,7 @@
+{
+  "status": 202,
+  "body": {
+    "previous_run_interrupted": false,
+    "started": true
+  }
+}

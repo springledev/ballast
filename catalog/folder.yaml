@@ -1,0 +1,25 @@
+# catalog/folder.yaml — "Any folder / any DB you point at" (spec
+# §5.1). Backs up a single user-chosen filesystem path directly.
+#
+# With the files strategy and no dump artifacts, archive-integrity has
+# nothing to inspect; the pipeline satisfies verification with
+# restic's own read-back instead (spec §14 step 11 user decision) and
+# records that explicitly rather than silently skipping the check.
+apiVersion: ballast.dev/v1
+service: folder
+version: 1
+display:
+  name: Any folder
+  description: Back up any folder on this machine directly, no database involved
+parameters:
+  - name: path
+    required: true
+    prompt: "Absolute path to the folder you want backed up"
+backup:
+  strategy: files
+  files:
+    - path: "{{ .Params.path }}"
+verify:
+  method: archive-integrity
+notifications:
+  failureVerbosity: full

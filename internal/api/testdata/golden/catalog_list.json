@@ -1,0 +1,16 @@
+{
+  "status": 200,
+  "body": [
+    {
+      "description": "",
+      "name": "",
+      "parameters": [
+        {
+          "name": "path",
+          "required": true
+        }
+      ],
+      "service": "folder"
+    }
+  ]
+}

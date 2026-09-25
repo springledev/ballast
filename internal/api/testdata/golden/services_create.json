@@ -1,0 +1,11 @@
+{
+  "status": 201,
+  "body": {
+    "catalog_entry": "folder",
+    "destination": "local",
+    "name": "svc",
+    "params": {
+      "path": "/x"
+    }
+  }
+}

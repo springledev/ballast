@@ -1,0 +1,123 @@
+package engine
+
+import (
+	"path/filepath"
+	"testing"
+	"time"
+
+	"github.com/springledev/ballast/internal/store"
+)
+
+func openTestDB(t *testing.T) *store.Store {
+	t.Helper()
+	s, err := store.Open(filepath.Join(t.TempDir(), "ballast.db"))
+	if err != nil {
+		t.Fatalf("opening store: %v", err)
+	}
+	t.Cleanup(func() { s.Close() })
+	return s
+}
+
+func TestSetSnapshotID(t *testing.T) {
+	db := openTestDB(t).DB()
+	m, err := StartRun(db, "immich")
+	if err != nil {
+		t.Fatalf("StartRun: %v", err)
+	}
+	if err := m.SetSnapshotID("abc123"); err != nil {
+		t.Fatalf("SetSnapshotID: %v", err)
+	}
+	if m.Run().SnapshotID != "abc123" {
+		t.Errorf("Run().SnapshotID = %q, want abc123", m.Run().SnapshotID)
+	}
+
+	loaded, err := LoadRun(db, m.Run().ID)
+	if err != nil {
+		t.Fatalf("LoadRun: %v", err)
+	}
+	if loaded.Run().SnapshotID != "abc123" {
+		t.Errorf("LoadRun SnapshotID = %q, want abc123", loaded.Run().SnapshotID)
+	}
+}
+
+func TestRecordVerificationAndResults(t *testing.T) {
+	db := openTestDB(t).DB()
+	m, err := StartRun(db, "immich")
+	if err != nil {
+		t.Fatalf("StartRun: %v", err)
+	}
+	rec := VerificationRecord{
+		Method:   "archive-integrity",
+		Passed:   true,
+		Detail:   "ok",
+		Output:   "checked",
+		Duration: 2 * time.Second,
+	}
+	if err := m.RecordVerification(rec); err != nil {
+		t.Fatalf("RecordVerification: %v", err)
+	}
+	rec2 := VerificationRecord{Method: "restic-read-back", Passed: false, Warning: "amber"}
+	if err := m.RecordVerification(rec2); err != nil {
+		t.Fatalf("RecordVerification 2: %v", err)
+	}
+
+	results, err := VerificationResults(db, m.Run().ID)
+	if err != nil {
+		t.Fatalf("VerificationResults: %v", err)
+	}
+	if len(results) != 2 {
+		t.Fatalf("len(results) = %d, want 2", len(results))
+	}
+	if results[0].Method != "archive-integrity" || !results[0].Passed || results[0].Duration != 2*time.Second {
+		t.Errorf("results[0] = %+v, want archive-integrity passed 2s", results[0])
+	}
+	if results[1].Method != "restic-read-back" || results[1].Passed || results[1].Warning != "amber" {
+		t.Errorf("results[1] = %+v, want restic-read-back failed with warning", results[1])
+	}
+}
+
+func TestVerificationResultsEmpty(t *testing.T) {
+	db := openTestDB(t).DB()
+	results, err := VerificationResults(db, 999)
+	if err != nil {
+		t.Fatalf("VerificationResults: %v", err)
+	}
+	if len(results) != 0 {
+		t.Errorf("results = %v, want none for a nonexistent run", results)
+	}
+}
+
+func TestRecentRuns(t *testing.T) {
+	db := openTestDB(t).DB()
+	var ids []int64
+	for i := 0; i < 3; i++ {
+		m, err := StartRun(db, "immich")
+		if err != nil {
+			t.Fatalf("StartRun: %v", err)
+		}
+		ids = append(ids, m.Run().ID)
+	}
+
+	runs, err := RecentRuns(db, "immich", 2)
+	if err != nil {
+		t.Fatalf("RecentRuns: %v", err)
+	}
+	if len(runs) != 2 {
+		t.Fatalf("len(runs) = %d, want 2 (limit applied)", len(runs))
+	}
+	// Newest first.
+	if runs[0].ID != ids[2] || runs[1].ID != ids[1] {
+		t.Errorf("runs = %+v, want newest first [%d, %d]", runs, ids[2], ids[1])
+	}
+}
+
+func TestRecentRunsUnknownService(t *testing.T) {
+	db := openTestDB(t).DB()
+	runs, err := RecentRuns(db, "nope", 5)
+	if err != nil {
+		t.Fatalf("RecentRuns: %v", err)
+	}
+	if len(runs) != 0 {
+		t.Errorf("runs = %v, want none", runs)
+	}
+}

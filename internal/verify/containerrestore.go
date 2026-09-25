@@ -14,10 +14,12 @@ import (
 )
 
 // defaultReadyTimeout is how long the throwaway container gets to
-// accept client connections before verification fails. Container
-// image pulls and first-boot initialization normally finish well
-// inside this.
-const defaultReadyTimeout = 60 * time.Second
+// accept client connections before verification fails. First-boot
+// initialization (initdb / mysql install-db, now that the image's own
+// entrypoint script performs it — see the ContainerRestore "spec
+// deviation" note) can take upwards of 20-30s for mysql's two-phase
+// startup under load; this leaves comfortable headroom.
+const defaultReadyTimeout = 90 * time.Second
 
 // ContainerRestore implements the throwaway-container restore of
 // spec §7.2: a database dump is fed into a fresh container of the
@@ -27,9 +29,22 @@ const defaultReadyTimeout = 60 * time.Second
 //
 // The spec §7.2 normative MUSTs, each enforced by a test:
 //
-//   - The container runs with an explicit --entrypoint override,
-//     because e.g. the postgres entrypoint only starts a server when
-//     the command is `postgres`.
+//   - The container is started with an explicit command of the
+//     server binary ("postgres", "mysqld"), because e.g. the
+//     postgres image's own entrypoint script only performs first-run
+//     initialization (initdb) and starts a server when the command it
+//     is given is `postgres` — any other command is just exec'd
+//     as-is. NOTE (spec deviation, flagged per AGENTS.md): spec §7.2
+//     says to "override the entrypoint explicitly"; overriding
+//     --entrypoint away from the image's own docker-entrypoint.sh
+//     instead skips that initialization entirely (confirmed against a
+//     real postgres:16 and mysql:8 image: the throwaway container
+//     never runs initdb, so the server refuses to start at all — the
+//     opposite of a working verification). Keeping the image's
+//     default entrypoint and passing the server binary name as the
+//     command is what actually makes "the command is postgres"
+//     trigger the entrypoint script's init-and-start path, which is
+//     what this MUST is actually asking for.
 //   - The container runs with --network none: it holds an
 //     empty-password / trust-local server for the check window, so
 //     it must not be reachable from other containers on the docker
@@ -192,7 +207,13 @@ func dialectFor(image string) restoreDialect {
 		}
 	}
 	return restoreDialect{
-		server:    "postgres",
+		server: "postgres",
+		// POSTGRES_HOST_AUTH_METHOD=trust: the throwaway container
+		// exists only for the duration of the check (--network none
+		// keeps it unreachable from anywhere else) and no secret
+		// travels in argv, matching the mysql dialect's
+		// MYSQL_ALLOW_EMPTY_PASSWORD=yes below.
+		extraRun:  []string{"-e", "POSTGRES_HOST_AUTH_METHOD=trust"},
 		readyArgs: []string{"pg_isready", "-q", "-U", "postgres"},
 		// ON_ERROR_STOP=0 is explicit: psql must continue past errors
 		// so stderr carries ALL of them for the whitelist filter;
@@ -224,16 +245,20 @@ func (c *ContainerRestore) imageDriftWarning(ctx context.Context, source string,
 	return ""
 }
 
-// startContainer creates the throwaway container with an explicit
-// entrypoint override and no network.
+// startContainer creates the throwaway container with no network,
+// keeping the image's own entrypoint (docker-entrypoint.sh) so its
+// first-run initialization (initdb / mysql install-db) actually runs,
+// and passing the server binary name as the command — see the
+// package-level "spec deviation" note on ContainerRestore for why
+// this is used instead of a literal --entrypoint override.
 func (c *ContainerRestore) startContainer(ctx context.Context, name string, d restoreDialect, env []string) error {
 	// --network none: the throwaway runs an empty-password /
 	// trust-local server, so it must not be reachable from other
 	// containers during the check window. Every interaction happens
 	// through docker exec, which works without a network.
-	args := []string{"run", "--detach", "--network", "none", "--entrypoint", d.server, "--name", name}
+	args := []string{"run", "--detach", "--network", "none", "--name", name}
 	args = append(args, d.extraRun...)
-	args = append(args, c.image)
+	args = append(args, c.image, d.server)
 	_, err := c.opts.Runner.Run(ctx, nil, nil, runner.Command{Name: c.opts.docker(), Args: args, Env: env})
 	if err != nil {
 		return fmt.Errorf("starting %s: %w", c.image, err)
@@ -241,8 +266,19 @@ func (c *ContainerRestore) startContainer(ctx context.Context, name string, d re
 	return nil
 }
 
-// waitReady polls the server's readiness probe until it answers or
-// the timeout expires.
+// readySettleDelay is how long waitReady waits before re-confirming a
+// first successful readiness probe. Both the postgres and mysql
+// official images run a brief, unadvertised "temporary" server to
+// execute first-boot initialization before stopping it and starting
+// the real one (confirmed against real postgres:16/mysql:8 images: a
+// readiness probe can succeed against that temporary server only for
+// it to disappear moments later, failing the restore that immediately
+// follows with a connection error). Re-confirming after a short delay
+// catches that transition instead of racing it.
+const readySettleDelay = 300 * time.Millisecond
+
+// waitReady polls the server's readiness probe until it answers twice
+// in a row (settled) or the timeout expires — see readySettleDelay.
 func (c *ContainerRestore) waitReady(ctx context.Context, name string, d restoreDialect, env []string) error {
 	timeout := c.ReadyTimeout
 	if timeout <= 0 {
@@ -252,7 +288,12 @@ func (c *ContainerRestore) waitReady(ctx context.Context, name string, d restore
 	probe := runner.Command{Name: c.opts.docker(), Args: append([]string{"exec", name}, d.readyArgs...), Env: env}
 	for {
 		if _, err := c.opts.Runner.Run(ctx, nil, nil, probe); err == nil {
-			return nil
+			if err := sleepOrDone(ctx, readySettleDelay); err != nil {
+				return err
+			}
+			if _, err := c.opts.Runner.Run(ctx, nil, nil, probe); err == nil {
+				return nil
+			}
 		}
 		if ctx.Err() != nil {
 			return ctx.Err()
@@ -260,7 +301,24 @@ func (c *ContainerRestore) waitReady(ctx context.Context, name string, d restore
 		if !time.Now().Before(deadline) {
 			return fmt.Errorf("not ready after %s (probe: %s)", timeout, strings.Join(d.readyArgs, " "))
 		}
-		time.Sleep(200 * time.Millisecond)
+		if err := sleepOrDone(ctx, 200*time.Millisecond); err != nil {
+			return err
+		}
+	}
+}
+
+// sleepOrDone waits for d or ctx's cancellation, whichever comes
+// first, returning ctx.Err() if it was cancelled first — unlike
+// time.Sleep, it never keeps a caller waiting past a job being
+// cancelled or timing out.
+func sleepOrDone(ctx context.Context, d time.Duration) error {
+	t := time.NewTimer(d)
+	defer t.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-t.C:
+		return nil
 	}
 }
 

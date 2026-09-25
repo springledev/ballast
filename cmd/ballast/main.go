@@ -20,11 +20,13 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"sync"
 	"syscall"
 	"time"
 
+	"github.com/springledev/ballast/internal/api"
 	"github.com/springledev/ballast/internal/config"
-	"github.com/springledev/ballast/internal/engine"
+	"github.com/springledev/ballast/internal/notify"
 	"github.com/springledev/ballast/internal/scheduler"
 	"github.com/springledev/ballast/internal/store"
 	"github.com/springledev/ballast/web"
@@ -60,17 +62,129 @@ var serveCmd = &cobra.Command{
 	Use:   "serve",
 	Short: "Serve the Web UI and REST API",
 	RunE: func(cmd *cobra.Command, args []string) error {
-		h, err := web.Handler()
+		cfg, err := loadConfig()
+		if err != nil {
+			return err
+		}
+		a, err := openApp(cfg, cmd.ErrOrStderr())
+		if err != nil {
+			return err
+		}
+		defer a.Close()
+		if a.apiToken == "" {
+			tokenPath := filepath.Join(cfg.CredentialsDir, apiTokenCredential)
+			return fmt.Errorf("refusing to start: no API token configured; put one in %s (under systemd: LoadCredential=%s:<path>)", tokenPath, apiTokenCredential)
+		}
+
+		// A backup started by POST .../backup must outlive that single
+		// request (net/http cancels a request's Context() the instant
+		// its handler returns — almost immediately for a 202-Accepted
+		// endpoint) but still be canceled when the server itself shuts
+		// down: give it the server's own long-lived context instead of
+		// each request's (see api.Ops.Ctx).
+		ctx := cmd.Context()
+		a.ops.Ctx = ctx
+
+		webUI, err := web.Handler()
 		if err != nil {
 			return fmt.Errorf("loading embedded web UI: %w", err)
 		}
+		mux := http.NewServeMux()
+		mux.Handle("/api/v1/", api.NewHandler(a.ops, a.apiToken))
+		mux.Handle("/", webUI)
+
 		ln, err := net.Listen("tcp", serveAddr)
 		if err != nil {
 			return fmt.Errorf("starting web server: %w", err)
 		}
 		log.Printf("ballast %s listening on http://%s", version, ln.Addr())
-		return serveUntilDone(cmd.Context(), ln, h)
+
+		schedDone := make(chan struct{})
+		go func() {
+			defer close(schedDone)
+			runScheduleLoop(ctx, a)
+		}()
+
+		serveErr := serveUntilDone(ctx, ln, mux)
+		<-schedDone
+		a.ops.Wait()
+		return serveErr
 	},
+}
+
+// runScheduleLoop runs the in-process scheduler: every minute, aligned
+// to the wall-clock minute boundary, it sweeps due jobs (ballast
+// run-due's own logic, shared via the same Coordinator) and, nightly,
+// freshness alerts. Each tick's sweep runs in its own goroutine so one
+// long-running backup (e.g. a multi-hour Immich run) never delays the
+// next minute's sweep from starting for every other service — run
+// locks already make overlapping sweeps safe (spec §14 step 9:
+// "a service never runs twice at once"). It returns once ctx is
+// cancelled (serve shutting down), after every sweep it started has
+// finished.
+func runScheduleLoop(ctx context.Context, a *app) {
+	var wg sync.WaitGroup
+	defer wg.Wait()
+	for {
+		timer := time.NewTimer(time.Until(nextMinuteBoundary(time.Now())))
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return
+		case now := <-timer.C:
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				if err := a.coord.RunDue(ctx, now); err != nil {
+					a.logf("run-due sweep: %v", err)
+				}
+				maybeSweepFreshness(ctx, a)
+			}()
+		}
+	}
+}
+
+// nextMinuteBoundary returns the next wall-clock minute boundary
+// strictly after now, so the scheduler loop's sweeps land on the
+// minute regardless of what moment `ballast serve` itself started at.
+func nextMinuteBoundary(now time.Time) time.Time {
+	return now.Truncate(time.Minute).Add(time.Minute)
+}
+
+// freshnessSweepMetaKey records when the freshness sweep last ran
+// (store.Store.MetaGet/MetaSet), so it runs at most once nightly
+// regardless of how often maybeSweepFreshness is called.
+const freshnessSweepMetaKey = "freshness_last_sweep"
+
+// freshnessSweepInterval is how often the freshness sweep runs (spec
+// §11: freshness alerting is a nightly sweep).
+const freshnessSweepInterval = 24 * time.Hour
+
+// maybeSweepFreshness runs notify.FreshnessChecker.SweepFreshness
+// when at least freshnessSweepInterval has passed since it last ran
+// (or it has never run), from `ballast serve`'s scheduler loop and
+// the end of `ballast run-due` (spec §14 step 11 carry-over from step
+// 10). Errors (including a per-service ErrNoChannels) are logged once
+// per sweep, never fatal: a freshness alert that could not be
+// delivered must not stop backups from running.
+func maybeSweepFreshness(ctx context.Context, a *app) {
+	due := true
+	if last, err := a.store.MetaGet(freshnessSweepMetaKey); err == nil {
+		if t, perr := time.Parse(time.RFC3339, last); perr == nil {
+			due = time.Since(t) >= freshnessSweepInterval
+		}
+	} else if !errors.Is(err, store.ErrMetaNotFound) {
+		a.logf("checking freshness sweep schedule: %v", err)
+	}
+	if !due {
+		return
+	}
+	if err := notify.NewFreshnessChecker(a.store.DB()).SweepFreshness(ctx, a.notifier); err != nil {
+		a.logf("freshness sweep: %v", err)
+	}
+	if err := a.store.MetaSet(freshnessSweepMetaKey, time.Now().UTC().Format(time.RFC3339)); err != nil {
+		a.logf("recording freshness sweep time: %v", err)
+	}
 }
 
 // serveShutdownTimeout bounds how long serve waits for in-flight
@@ -109,21 +223,6 @@ func serveUntilDone(ctx context.Context, ln net.Listener, h http.Handler) error 
 	return nil
 }
 
-// unimplementedRunner is the placeholder for the real backup
-// pipeline (catalog → strategy → restic → verify), which lands with
-// the REST API/CLI step (spec §14 step 11). run-due and trigger are
-// wired against the scheduler.Runner interface now so that step can
-// swap in the real orchestrator without touching this file.
-//
-// Step 11: the real runner must only ever be invoked through
-// scheduler.Coordinator (RunDue/RunNow/Trigger) — including `ballast
-// backup` and the REST API — because the Coordinator's per-service
-// run lock is what prevents duplicate runs and lets interrupted runs
-// be detected. See the step 11 note in PLAN.md.
-var unimplementedRunner = scheduler.RunnerFunc(func(_ context.Context, service string) (engine.State, error) {
-	return "", fmt.Errorf("service %s: job execution is not wired up yet (lands with the REST API/CLI step)", service)
-})
-
 // loadConfig resolves the effective configuration from the
 // environment and ballast.yaml.
 func loadConfig() (config.Config, error) {
@@ -134,45 +233,22 @@ func loadConfig() (config.Config, error) {
 	return cfg, nil
 }
 
-// openCoordinator opens the SQLite store in cfg's data directory
-// (creating it if needed) and returns a Coordinator whose run locks
-// live in <data dir>/locks and whose sweep parallelism comes from
-// max_parallel_jobs. The returned func closes the database and must be
-// called when done.
-func openCoordinator(cfg config.Config, runner scheduler.Runner, logw io.Writer) (*scheduler.Coordinator, func() error, error) {
-	if err := os.MkdirAll(cfg.DataDir, 0o700); err != nil {
-		return nil, nil, fmt.Errorf("creating data directory %s: %w", cfg.DataDir, err)
-	}
-	st, err := store.Open(filepath.Join(cfg.DataDir, "ballast.db"))
-	if err != nil {
-		return nil, nil, fmt.Errorf("opening database: %w", err)
-	}
-	// Step 11 must set Redact to the same secret list given to runner.Runner.Redact:
-	// secrets must never reach logs or API responses (spec rule 2).
-	return &scheduler.Coordinator{
-		DB:          st.DB(),
-		Locks:       scheduler.FileLocker{Dir: filepath.Join(cfg.DataDir, "locks")},
-		Runner:      runner,
-		Log:         logw,
-		MaxParallel: cfg.MaxParallelJobs,
-	}, st.Close, nil
-}
-
-// withCoordinator opens a Coordinator (see openCoordinator), calls fn
-// with it, and closes the database afterwards. A failure to close is
-// reported alongside fn's own result rather than dropped: closing is
-// when SQLite checkpoints the write-ahead log.
-func withCoordinator(cfg config.Config, runner scheduler.Runner, logw io.Writer, fn func(*scheduler.Coordinator) error) (err error) {
-	c, closeDB, err := openCoordinator(cfg, runner, logw)
+// withApp opens the app (see openApp), calls fn with it, and closes
+// the database afterwards. A failure to close is reported alongside
+// fn's own result rather than dropped: closing is when SQLite
+// checkpoints the write-ahead log. Every command uses this (or
+// openApp directly, for serve, which needs the app past fn's return).
+func withApp(cfg config.Config, logw io.Writer, fn func(*app) error) (err error) {
+	a, err := openApp(cfg, logw)
 	if err != nil {
 		return err
 	}
 	defer func() {
-		if cerr := closeDB(); cerr != nil {
+		if cerr := a.Close(); cerr != nil {
 			err = errors.Join(err, fmt.Errorf("closing database: %w", cerr))
 		}
 	}()
-	return fn(c)
+	return fn(a)
 }
 
 // triggerTokenCredentialPrefix starts the name of the credential file
@@ -239,8 +315,13 @@ var runDueCmd = &cobra.Command{
 		if err != nil {
 			return err
 		}
-		return withCoordinator(cfg, runner, cmd.ErrOrStderr(), func(c *scheduler.Coordinator) error {
-			return c.RunDue(cmd.Context(), time.Now())
+		return withApp(cfg, cmd.ErrOrStderr(), func(a *app) error {
+			err := a.coord.RunDue(cmd.Context(), time.Now())
+			// Freshness sweep runs at the end of run-due too (spec §14
+			// step 11 carry-over from step 10), for headless/cron-only
+			// setups that never run `ballast serve`.
+			maybeSweepFreshness(cmd.Context(), a)
+			return err
 		})
 	},
 }
@@ -249,10 +330,6 @@ var (
 	triggerToken     string
 	triggerTokenFile string
 )
-
-// runner is the backup pipeline run-due and trigger execute through
-// the Coordinator. Tests swap it for a stub.
-var runner scheduler.Runner = unimplementedRunner
 
 var triggerCmd = &cobra.Command{
 	Use:   "trigger <service>",
@@ -278,8 +355,20 @@ then gives up without starting a second run.`,
 		if err != nil {
 			return fmt.Errorf("triggering %s: %w", args[0], err)
 		}
-		return withCoordinator(cfg, runner, cmd.ErrOrStderr(), func(c *scheduler.Coordinator) error {
-			return c.Trigger(cmd.Context(), args[0], token)
+		return withApp(cfg, cmd.ErrOrStderr(), func(a *app) error {
+			runErr := a.coord.Trigger(cmd.Context(), args[0], token)
+			if runErr != nil {
+				if !api.InterruptedOnly(runErr) {
+					return runErr
+				}
+				// Only an EARLIER run was found interrupted and marked
+				// failed while claiming the lock (spec §14 step 11 hard
+				// rule 6); this trigger's own run still succeeded and
+				// is verified — report the old failure as a warning,
+				// not as this command failing.
+				fmt.Fprintf(cmd.ErrOrStderr(), "ballast: warning: %s\n", runErr)
+			}
+			return nil
 		})
 	},
 }
@@ -289,6 +378,10 @@ func init() {
 	triggerCmd.Flags().StringVar(&triggerToken, "token", "", "external trigger token for the service (visible in the process list; prefer --token-file)")
 	triggerCmd.Flags().StringVar(&triggerTokenFile, "token-file", "", "path to a file (mode 0600) holding the trigger token")
 	rootCmd.AddCommand(serveCmd, versionCmd, runDueCmd, triggerCmd)
+	registerServiceCommands(rootCmd)
+	registerDestinationCommands(rootCmd)
+	registerScheduleCommands(rootCmd)
+	rootCmd.AddCommand(backupCmd, statusCmd, snapshotsCmd, restoreCmd, tokenCmd, catalogCmd)
 }
 
 // shutdownContext returns a context cancelled by the first SIGINT or

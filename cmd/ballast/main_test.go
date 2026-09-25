@@ -50,10 +50,31 @@ func TestRootListsCoreCommands(t *testing.T) {
 	}
 }
 
-func TestUnimplementedRunnerErrorsClearly(t *testing.T) {
-	_, err := unimplementedRunner.Run(context.Background(), "immich")
-	if err == nil {
-		t.Error("the placeholder runner must error until the real pipeline is wired up")
+// TestDefaultRunnerIsRealPipeline checks that when no test stub has
+// been installed in the `runner` package var, openApp wires up the
+// real pipeline.Pipeline (spec §14 step 11: the placeholder runner is
+// gone). Triggering an unconfigured service reaches all the way into
+// inventory.GetService and fails with a real "not found" error,
+// proving the call went through the real pipeline rather than a
+// leftover placeholder.
+func TestDefaultRunnerIsRealPipeline(t *testing.T) {
+	data := filepath.Join(t.TempDir(), "data")
+	t.Setenv("BALLAST_DATA_DIR", data)
+	t.Setenv("BALLAST_CONFIG_DIR", filepath.Join(t.TempDir(), "config"))
+	t.Setenv("CREDENTIALS_DIRECTORY", "")
+	if runner != nil {
+		t.Fatal("runner package var must be nil by default in this test binary")
+	}
+	var token string
+	withDB(t, data, func(s *store.Store) {
+		var err error
+		if token, err = scheduler.GenerateTriggerToken(s.DB(), "ghost-service"); err != nil {
+			t.Fatalf("GenerateTriggerToken: %v", err)
+		}
+	})
+	_, err := execCLI(t, "trigger", "ghost-service", "--token", token)
+	if err == nil || !strings.Contains(err.Error(), "not found") {
+		t.Errorf("trigger error = %v, want a real inventory \"not found\" error from the real pipeline", err)
 	}
 }
 
@@ -107,6 +128,13 @@ func withDB(t *testing.T, data string, fn func(s *store.Store)) {
 
 func execCLI(t *testing.T, args ...string) (string, error) {
 	t.Helper()
+	// cobra/pflag do not reset a flag-bound package var to its default
+	// when a later Execute() call omits that flag (it just keeps
+	// whatever a previous test last set it to): reset every command's
+	// flag vars before each invocation so tests in this binary cannot
+	// leak flags into one another (e.g. one test's --init leaking into
+	// the next test's plain `destination add`).
+	resetCLIFlags()
 	var out bytes.Buffer
 	rootCmd.SetOut(&out)
 	rootCmd.SetErr(&out)
@@ -202,6 +230,41 @@ func TestTriggerCommand(t *testing.T) {
 	}
 }
 
+// TestTriggerCommandInterruptedPreviousRunIsWarningNotFailure mirrors
+// the same fix for `ballast backup` (spec §14 step 11 hard rule 6): a
+// verified trigger run must not be reported as a failure just because
+// an earlier, unrelated run was found interrupted while claiming the
+// lock.
+func TestTriggerCommandInterruptedPreviousRunIsWarningNotFailure(t *testing.T) {
+	r := &spyRunner{}
+	data := cliEnv(t, r)
+	var token string
+	withDB(t, data, func(s *store.Store) {
+		var err error
+		if token, err = scheduler.GenerateTriggerToken(s.DB(), "immich"); err != nil {
+			t.Fatalf("GenerateTriggerToken: %v", err)
+		}
+		m, err := engine.StartRun(s.DB(), "immich")
+		if err != nil {
+			t.Fatalf("StartRun: %v", err)
+		}
+		if err := m.Transition(engine.PREPARING, ""); err != nil {
+			t.Fatalf("transition: %v", err)
+		}
+	})
+
+	out, err := execCLI(t, "trigger", "immich", "--token", token)
+	if err != nil {
+		t.Fatalf("trigger: %v (output %q), want success despite an interrupted earlier run", err, out)
+	}
+	if !strings.Contains(out, "warning") || !strings.Contains(out, "interrupted") {
+		t.Errorf("output = %q, want the interrupted earlier run reported as a warning", out)
+	}
+	if len(r.ran) != 1 || r.ran[0] != "immich" {
+		t.Errorf("ran = %v, want [immich]", r.ran)
+	}
+}
+
 func TestTriggerCommandReadsConfiguredCredentialDir(t *testing.T) {
 	tests := []struct {
 		name    string
@@ -255,21 +318,6 @@ func TestTriggerCommandReadsConfiguredCredentialDir(t *testing.T) {
 				t.Errorf("output %q leaks the token", out)
 			}
 		})
-	}
-}
-
-func TestTriggerCommandWithPlaceholderRunnerFails(t *testing.T) {
-	data := cliEnv(t, unimplementedRunner)
-	var token string
-	withDB(t, data, func(s *store.Store) {
-		var err error
-		if token, err = scheduler.GenerateTriggerToken(s.DB(), "immich"); err != nil {
-			t.Fatalf("GenerateTriggerToken: %v", err)
-		}
-	})
-	_, err := execCLI(t, "trigger", "immich", "--token", token)
-	if err == nil || !strings.Contains(err.Error(), "not wired up") {
-		t.Errorf("trigger error = %v, want the placeholder's clear failure", err)
 	}
 }
 
@@ -488,20 +536,20 @@ func TestRunDueCommandUsesMaxParallelJobs(t *testing.T) {
 	if err != nil {
 		t.Fatalf("loadConfig: %v", err)
 	}
-	c, closeDB, err := openCoordinator(cfg, unimplementedRunner, &bytes.Buffer{})
+	a, err := openApp(cfg, &bytes.Buffer{})
 	if err != nil {
-		t.Fatalf("openCoordinator: %v", err)
+		t.Fatalf("openApp: %v", err)
 	}
 	t.Cleanup(func() {
-		if err := closeDB(); err != nil {
+		if err := a.Close(); err != nil {
 			t.Errorf("closing database: %v", err)
 		}
 	})
-	if c.MaxParallel != 3 {
-		t.Errorf("MaxParallel = %d, want 3 from ballast.yaml", c.MaxParallel)
+	if a.coord.MaxParallel != 3 {
+		t.Errorf("MaxParallel = %d, want 3 from ballast.yaml", a.coord.MaxParallel)
 	}
-	if want := filepath.Join(data, "locks"); c.Locks.(scheduler.FileLocker).Dir != want {
-		t.Errorf("lock dir = %v, want %s", c.Locks, want)
+	if want := filepath.Join(data, "locks"); a.coord.Locks.(scheduler.FileLocker).Dir != want {
+		t.Errorf("lock dir = %v, want %s", a.coord.Locks, want)
 	}
 }
 
@@ -572,8 +620,17 @@ func TestServeUntilDoneReportsServeFailure(t *testing.T) {
 // child process and sends it a single SIGTERM, as `systemctl stop`
 // does: it must exit cleanly, not wait for a second signal.
 func TestServeExitsOnOneSIGTERM(t *testing.T) {
+	credDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(credDir, "ballast-api-token"), []byte("test-token\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
 	cmd := exec.Command(os.Args[0], "-test.run=^TestHelperMain$")
-	cmd.Env = append(os.Environ(), "BALLAST_TEST_MAIN=serve")
+	cmd.Env = append(os.Environ(),
+		"BALLAST_TEST_MAIN=serve",
+		"BALLAST_DATA_DIR="+filepath.Join(t.TempDir(), "data"),
+		"BALLAST_CONFIG_DIR="+filepath.Join(t.TempDir(), "config"),
+		"CREDENTIALS_DIRECTORY="+credDir,
+	)
 	stderr, err := cmd.StderrPipe()
 	if err != nil {
 		t.Fatal(err)
@@ -631,4 +688,33 @@ func TestHelperMain(t *testing.T) {
 	os.Args = []string{"ballast", "serve", "--addr", "127.0.0.1:0"}
 	main() // exits 1 on error
 	os.Exit(0)
+}
+
+// TestNextMinuteBoundary: the scheduler loop's sweeps must land on the
+// wall-clock minute regardless of what moment `ballast serve` itself
+// started at.
+func TestNextMinuteBoundary(t *testing.T) {
+	tests := []struct {
+		name string
+		now  time.Time
+		want time.Time
+	}{
+		{
+			name: "mid-minute rounds up to the next boundary",
+			now:  time.Date(2024, 1, 1, 10, 30, 15, 500_000_000, time.UTC),
+			want: time.Date(2024, 1, 1, 10, 31, 0, 0, time.UTC),
+		},
+		{
+			name: "exactly on a boundary still advances to the next one",
+			now:  time.Date(2024, 1, 1, 10, 30, 0, 0, time.UTC),
+			want: time.Date(2024, 1, 1, 10, 31, 0, 0, time.UTC),
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := nextMinuteBoundary(tt.now); !got.Equal(tt.want) {
+				t.Errorf("nextMinuteBoundary(%v) = %v, want %v", tt.now, got, tt.want)
+			}
+		})
+	}
 }

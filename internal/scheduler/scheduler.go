@@ -40,8 +40,11 @@ func (f RunnerFunc) Run(ctx context.Context, service string) (engine.State, erro
 }
 
 // ScheduledJob is one configured recurring backup job.
+//
+// JSON tags make this struct directly usable as an API response
+// shape (spec §14 step 11 D3: snake_case, stable field names).
 type ScheduledJob struct {
-	Service string
-	Cron    string
-	Enabled bool
+	Service string `json:"service"`
+	Cron    string `json:"cron"`
+	Enabled bool   `json:"enabled"`
 }

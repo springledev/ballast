@@ -27,9 +27,11 @@ func runCheck(t *testing.T, opts Options, image string, filter []string, req Req
 
 // TestContainerRestorePass runs the happy path against the docker
 // stub and asserts the exact docker argv sequence: network isolation
-// (--network none), entrypoint override (spec §7.2 MUST), readiness
-// probe, restore client reading the dump on stdin, and the guaranteed
-// destroy.
+// (--network none), the server binary passed as the run command so
+// the image's own entrypoint performs its first-run initialization
+// (spec §7.2 MUST — see the ContainerRestore "spec deviation" note),
+// readiness probe, restore client reading the dump on stdin, and the
+// guaranteed destroy.
 func TestContainerRestorePass(t *testing.T) {
 	opts, logPath, withEnv := stubSetup(t)
 	capture := logPath + ".capture"
@@ -51,7 +53,11 @@ func TestContainerRestorePass(t *testing.T) {
 	log := readStubLog(t, logPath)
 	name := containerName(t, log)
 	want := []string{
-		"run --detach --network none --entrypoint postgres --name " + name + " postgres:16",
+		"run --detach --network none --name " + name + " -e POSTGRES_HOST_AUTH_METHOD=trust postgres:16 postgres",
+		"exec " + name + " pg_isready -q -U postgres",
+		// waitReady re-confirms a first successful probe after a short
+		// settle delay (a real postgres/mysql image briefly runs a
+		// temporary init server before the real one starts).
 		"exec " + name + " pg_isready -q -U postgres",
 		"exec -i " + name + " psql -v ON_ERROR_STOP=0 -q -U postgres",
 		"rm --force " + name,
@@ -81,7 +87,7 @@ func TestContainerRestorePass(t *testing.T) {
 }
 
 // TestContainerRestoreMySQLDialect checks the image-driven dialect
-// dispatch: mariadb/mysql images get the mysqld entrypoint, the
+// dispatch: mariadb/mysql images get mysqld as the run command, the
 // empty-password run flag (no secret in argv), mysqladmin readiness,
 // and the mysql client.
 func TestContainerRestoreMySQLDialect(t *testing.T) {
@@ -97,7 +103,8 @@ func TestContainerRestoreMySQLDialect(t *testing.T) {
 	log := readStubLog(t, logPath)
 	name := containerName(t, log)
 	want := []string{
-		"run --detach --network none --entrypoint mysqld --name " + name + " -e MYSQL_ALLOW_EMPTY_PASSWORD=yes mariadb:11",
+		"run --detach --network none --name " + name + " -e MYSQL_ALLOW_EMPTY_PASSWORD=yes mariadb:11 mysqld",
+		"exec " + name + " mysqladmin -s ping",
 		"exec " + name + " mysqladmin -s ping",
 		"exec -i " + name + " mysql -u root",
 		"rm --force " + name,
@@ -131,8 +138,8 @@ func TestContainerRestoreRequestEnv(t *testing.T) {
 		t.Errorf("default log received %v, want every invocation steered by Request.Env", got)
 	}
 	log := readStubLog(t, altLog)
-	if len(log) != 5 {
-		t.Fatalf("steered log = %v, want 5 invocations (inspect, run, probe, restore, rm)", log)
+	if len(log) != 6 {
+		t.Fatalf("steered log = %v, want 6 invocations (inspect, run, probe, settle-confirm probe, restore, rm)", log)
 	}
 }
 
@@ -546,6 +553,52 @@ func TestContainerRestoreCancelDuringReady(t *testing.T) {
 	}
 	if !strings.Contains(res.Detail, "did not come up") {
 		t.Errorf("Check() detail = %q, want the readiness failure", res.Detail)
+	}
+	log := readStubLog(t, logPath)
+	if last := log[len(log)-1]; !strings.HasPrefix(last, "rm --force ") {
+		t.Errorf("last docker invocation = %q, want cleanup even on cancellation", last)
+	}
+}
+
+// TestContainerRestoreCancelDuringReadySettleDelay: cancelling the
+// context while waitReady is re-confirming a first successful probe
+// (the readySettleDelay pause, not the between-attempts poll sleep)
+// must return promptly instead of waiting out the delay — a regression
+// test for sleepOrDone actually selecting on ctx.Done() rather than
+// blindly time.Sleep-ing.
+func TestContainerRestoreCancelDuringReadySettleDelay(t *testing.T) {
+	opts, logPath, _ := stubSetup(t) // default STUB_READY: every probe succeeds
+	artifact := sqlArtifact(t, "database", "SELECT 1;\n")
+
+	entry := containerRestoreEntry("postgres:16")
+	c, err := For(entry, opts)
+	if err != nil {
+		t.Fatalf("For: %v", err)
+	}
+	cr := c.(*ContainerRestore)
+	cr.ReadyTimeout = time.Minute // must not be reached
+
+	ctx, cancel := context.WithCancel(context.Background())
+	go func() {
+		time.Sleep(20 * time.Millisecond)
+		cancel()
+	}()
+
+	start := time.Now()
+	res := cr.Check(ctx, Request{
+		Service:   entry.Service,
+		Artifacts: []strategy.Artifact{artifact},
+	})
+	elapsed := time.Since(start)
+
+	if res.Passed {
+		t.Fatal("Check() passed with a cancelled context, want failure")
+	}
+	if !strings.Contains(res.Detail, "did not come up") {
+		t.Errorf("Check() detail = %q, want the readiness failure", res.Detail)
+	}
+	if elapsed >= readySettleDelay {
+		t.Errorf("Check() took %s to notice cancellation, want well under the %s settle delay", elapsed, readySettleDelay)
 	}
 	log := readStubLog(t, logPath)
 	if last := log[len(log)-1]; !strings.HasPrefix(last, "rm --force ") {

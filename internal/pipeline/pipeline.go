@@ -1,0 +1,394 @@
+// Package pipeline wires the real backup pipeline (spec §14 step 11):
+// catalog entry → strategy → restic → verification, driven through
+// the job state machine. Pipeline.Run is the only production
+// implementation of scheduler.Runner; every backup Ballast performs
+// still only reaches it through scheduler.Coordinator
+// (RunNow/RunDue/Trigger — hard rule: only the Coordinator starts a
+// run, and only Pipeline.Run calls engine.StartRun).
+package pipeline
+
+import (
+	"context"
+	"database/sql"
+	"fmt"
+	"io"
+	"os"
+	"path/filepath"
+	"strings"
+
+	"github.com/springledev/ballast/internal/catalog"
+	"github.com/springledev/ballast/internal/engine"
+	"github.com/springledev/ballast/internal/inventory"
+	"github.com/springledev/ballast/internal/restic"
+	"github.com/springledev/ballast/internal/runner"
+	"github.com/springledev/ballast/internal/strategy"
+	"github.com/springledev/ballast/internal/verify"
+)
+
+// Pipeline turns a configured service into a verified restic backup.
+// It is the only real implementer of scheduler.Runner; tests and the
+// scheduler's own unit tests use a stub instead.
+type Pipeline struct {
+	// DB is the Ballast database (inventory, engine runs).
+	DB *sql.DB
+	// Catalog is the loaded catalog registry (bundled + user entries).
+	Catalog *catalog.Registry
+	// Runner executes every restic/docker/dump subprocess. Its Redact
+	// list must be the same secret list as Redact below (built once,
+	// in the wiring).
+	Runner *runner.Runner
+	// CredDir is the resolved credential directory
+	// (config.Config.CredentialsDir): destination password files live
+	// here.
+	CredDir string
+	// WorkRoot is the parent of each service's stable per-run work
+	// directory (<WorkRoot>/<service>), typically <DataDir>/work.
+	WorkRoot string
+	// Notifier delivers run-outcome notifications; nil disables them.
+	Notifier engine.Notifier
+	// Log receives one plain-English line per notable event. Nil
+	// means os.Stderr.
+	Log io.Writer
+	// Redact lists secret strings that must never reach Log or a
+	// returned error's text (spec rule 2). Must be the same list given
+	// to Runner.Redact and scheduler.Coordinator.Redact.
+	Redact []string
+
+	// ResticBin and DockerBin override the restic/docker binaries;
+	// empty resolves against $PATH. Tests point these at stubs.
+	ResticBin, DockerBin string
+}
+
+// Run backs up service: PREPARING → DUMPING → UPLOADING → VERIFYING →
+// SUCCESS, or SUCCESS_UNVERIFIED (amber) when verification could not
+// be completed, or FAILED/CANCELLED along the way.
+//
+// It returns a nil error only for engine.SUCCESS (scheduler.Runner's
+// contract): SUCCESS_UNVERIFIED is always accompanied by a non-nil
+// error, so a caller like `ballast run-due` can never mistake amber
+// for a clean success. ctx cancellation is never swallowed: a run cut
+// short transitions to CANCELLED and returns ctx's error.
+func (p *Pipeline) Run(ctx context.Context, service string) (engine.State, error) {
+	// Step 1 (spec plan): resolve configuration before a run exists.
+	// A bad service/destination/catalog config is not a run — nothing
+	// is persisted for it.
+	svc, err := inventory.GetService(p.DB, service)
+	if err != nil {
+		return "", fmt.Errorf("service %s: %w", service, err)
+	}
+	dest, err := inventory.GetDestination(p.DB, svc.Destination)
+	if err != nil {
+		return "", fmt.Errorf("service %s: %w", service, err)
+	}
+	entry, ok := p.Catalog.Get(svc.CatalogEntry)
+	if !ok {
+		return "", fmt.Errorf("service %s: catalog entry %q is not loaded", service, svc.CatalogEntry)
+	}
+	if err := entry.Resolve(catalog.TemplateContext{Params: svc.Params, Services: svc.Containers}); err != nil {
+		return "", fmt.Errorf("service %s: resolving catalog entry %q: %w", service, svc.CatalogEntry, err)
+	}
+
+	m, err := engine.StartRun(p.DB, service)
+	if err != nil {
+		return "", fmt.Errorf("service %s: %w", service, err)
+	}
+	if p.Notifier != nil {
+		m.SetNotifier(ctx, p.Notifier)
+	}
+	defer p.logNotifyErr(service, m)
+
+	// fail is the single terminal-outcome path (spec plan hard rule):
+	// a cancelled context always wins and transitions to CANCELLED,
+	// returning ctx's own error; otherwise the run is FAILED with a
+	// redacted, service-attributed detail.
+	fail := func(cause error) (engine.State, error) {
+		if ctx.Err() != nil {
+			if terr := m.Transition(engine.CANCELLED, "cancelled: Ballast is shutting down"); terr != nil {
+				p.logf("%s: recording cancellation: %v", service, terr)
+			}
+			p.logf("%s: run %d cancelled", service, m.Run().ID)
+			return engine.CANCELLED, ensureServiceContext(service, ctx.Err())
+		}
+		err := ensureServiceContext(service, cause)
+		detail := p.redact(err.Error())
+		if terr := m.Transition(engine.FAILED, detail); terr != nil {
+			p.logf("%s: recording failure: %v", service, terr)
+		}
+		p.logf("%s: run %d failed: %s", service, m.Run().ID, detail)
+		return engine.FAILED, err
+	}
+
+	// PREPARING: build every dependency this run needs, and stage a
+	// clean, stable-per-service work directory. The directory is
+	// stable (not per-run) because restic groups retention by
+	// path-set (spec §8): a per-run directory would defeat `forget`.
+	// Wiping and recreating it here is safe because the Coordinator's
+	// run lock is held for the whole call.
+	if err := m.Transition(engine.PREPARING, "preparing"); err != nil {
+		return fail(err)
+	}
+	strat, err := strategy.For(entry, strategy.Options{Runner: p.Runner, DockerBin: p.DockerBin})
+	if err != nil {
+		return fail(err)
+	}
+	checker, err := verify.For(entry, verify.Options{Runner: p.Runner, DockerBin: p.DockerBin})
+	if err != nil {
+		return fail(err)
+	}
+	repo, err := restic.Open(dest.Location, restic.Options{
+		Runner:       p.Runner,
+		PasswordFile: filepath.Join(p.CredDir, dest.PasswordCredential),
+		ResticBin:    p.ResticBin,
+	})
+	if err != nil {
+		return fail(err)
+	}
+	workDir := filepath.Join(p.WorkRoot, service)
+	if err := os.RemoveAll(workDir); err != nil {
+		return fail(fmt.Errorf("preparing work directory %s: %w", workDir, err))
+	}
+	if err := os.MkdirAll(workDir, 0o700); err != nil {
+		return fail(fmt.Errorf("preparing work directory %s: %w", workDir, err))
+	}
+
+	// DUMPING
+	if err := m.Transition(engine.DUMPING, "dumping"); err != nil {
+		return fail(err)
+	}
+	res, err := strat.Backup(ctx, strategy.Request{WorkDir: workDir})
+	if err != nil {
+		return fail(err)
+	}
+
+	// UPLOADING
+	if err := m.Transition(engine.UPLOADING, "uploading"); err != nil {
+		return fail(err)
+	}
+	paths := append(append([]string(nil), res.Paths...), artifactPaths(res.Artifacts)...)
+	br, err := repo.Backup(ctx, restic.BackupOptions{
+		Paths: paths,
+		Tags:  []string{"ballast", "ballast-service:" + service},
+	})
+	if err != nil {
+		return fail(err)
+	}
+	if err := m.SetSnapshotID(br.SnapshotID); err != nil {
+		return fail(err)
+	}
+
+	// VERIFYING (mandatory, spec §4.1: SUCCESS is unreachable without it).
+	if err := m.Transition(engine.VERIFYING, "verifying"); err != nil {
+		return fail(err)
+	}
+	checks, err := p.runChecks(ctx, service, entry, checker, res, repo, br.SnapshotID)
+	if err != nil {
+		return fail(err)
+	}
+	for _, c := range checks {
+		if err := m.RecordVerification(c.rec); err != nil {
+			return fail(err)
+		}
+	}
+
+	if failedCheck, ok := firstHardFailure(checks); ok {
+		return fail(fmt.Errorf("verification failed (%s): %s", failedCheck.rec.Method, failedCheck.rec.Detail))
+	}
+	if anyUnverifiable(checks) {
+		detail := "backup uploaded but could not be fully verified: " + unverifiableSummary(checks)
+		if err := m.Transition(engine.SUCCESS_UNVERIFIED, detail); err != nil {
+			return fail(err)
+		}
+		p.logf("%s: run %d succeeded but is unverified (amber): %s", service, m.Run().ID, detail)
+		return engine.SUCCESS_UNVERIFIED, ensureServiceContext(service, fmt.Errorf("%s", detail))
+	}
+	if err := m.Transition(engine.SUCCESS, "backup verified"); err != nil {
+		return fail(err)
+	}
+	p.logf("%s: run %d succeeded and is verified", service, m.Run().ID)
+
+	// Retention cleanup only after a verified SUCCESS, and never lets
+	// its own failure change the run's outcome (spec plan step 8).
+	if _, err := repo.Forget(ctx, dest.Retention()); err != nil {
+		p.logf("%s: retention cleanup (forget) failed, the backup itself succeeded: %s", service, p.redact(err.Error()))
+	}
+	return engine.SUCCESS, nil
+}
+
+// verifyCheck pairs a persisted verification record with whether it
+// represents an "impossible to verify" outcome (destination
+// unreadable) rather than a real fail/pass verdict — the distinction
+// that decides FAILED vs SUCCESS_UNVERIFIED.
+type verifyCheck struct {
+	rec          engine.VerificationRecord
+	unverifiable bool
+}
+
+// runChecks runs every verification check the VERIFYING phase
+// requires:
+//
+//   - the catalog's declared checker, unless the backup is a
+//     zero-artifact files backup verified by archive-integrity — with
+//     no artifacts to inspect, archive-integrity would report a
+//     silent failure; that case is folded into the read-back result
+//     below instead (step 11 user decision).
+//   - always, restic's own read-back, which is what proves a
+//     zero-artifact files backup is restorable at all, and is
+//     recorded as an explicit result either way — never silently
+//     skipped.
+func (p *Pipeline) runChecks(ctx context.Context, service string, entry *catalog.Entry, checker verify.Checker, res *strategy.Result, repo *restic.Repository, snapshotID string) ([]verifyCheck, error) {
+	var checks []verifyCheck
+
+	runDeclaredChecker := len(res.Artifacts) > 0 || checker.Method() != "archive-integrity"
+	if runDeclaredChecker {
+		var sourceContainer string
+		if len(entry.Backup.Dumps) > 0 {
+			sourceContainer = entry.Backup.Dumps[0].Container
+		}
+		vres := checker.Check(ctx, verify.Request{
+			Service:         service,
+			Artifacts:       res.Artifacts,
+			SourceContainer: sourceContainer,
+		})
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		checks = append(checks, verifyCheck{rec: p.toRecord(vres)})
+	}
+
+	rb, rbErr := repo.ReadBack(ctx, snapshotID)
+	switch {
+	case rbErr != nil && ctx.Err() != nil:
+		return nil, ctx.Err()
+	case rbErr != nil:
+		checks = append(checks, verifyCheck{
+			rec: engine.VerificationRecord{
+				Method: "restic-read-back",
+				Passed: false,
+				Detail: p.redact(fmt.Sprintf("could not read the backup back from the destination to confirm it is restorable: %v", rbErr)),
+			},
+			unverifiable: true,
+		})
+	default:
+		checks = append(checks, verifyCheck{
+			rec: engine.VerificationRecord{
+				Method: "restic-read-back",
+				Passed: true,
+				Detail: fmt.Sprintf("read %d sample file(s) back from snapshot %s to confirm the backup is restorable", len(rb.Samples), rb.Snapshot.ShortID),
+			},
+		})
+	}
+
+	if len(res.Artifacts) == 0 && checker.Method() == "archive-integrity" {
+		readBack := checks[len(checks)-1]
+		checks = append(checks, verifyCheck{
+			rec: engine.VerificationRecord{
+				Method:  "archive-integrity",
+				Passed:  readBack.rec.Passed,
+				Warning: readBack.rec.Warning,
+				Detail:  "No archive files were produced (files are uploaded directly); integrity was proven by reading the files back from the backup.",
+			},
+			unverifiable: readBack.unverifiable,
+		})
+	}
+
+	return checks, nil
+}
+
+// toRecord converts a verify.Result into the engine's persisted
+// record shape, redacting Detail/Output/Warning (internal/verify's
+// checkers already redact command stderr via the runner, but this is
+// the last line of defence before the DB, matching spec rule 2).
+func (p *Pipeline) toRecord(r verify.Result) engine.VerificationRecord {
+	return engine.VerificationRecord{
+		Method:   r.Method,
+		Passed:   r.Passed,
+		Warning:  p.redact(r.Warning),
+		Detail:   p.redact(r.Detail),
+		Output:   p.redact(r.Output),
+		Duration: r.Duration,
+	}
+}
+
+// firstHardFailure returns the first check that is neither passed nor
+// merely unverifiable — a real verification failure.
+func firstHardFailure(checks []verifyCheck) (verifyCheck, bool) {
+	for _, c := range checks {
+		if !c.rec.Passed && !c.unverifiable {
+			return c, true
+		}
+	}
+	return verifyCheck{}, false
+}
+
+// anyUnverifiable reports whether any check could not be completed
+// (destination unreadable), which makes the run amber rather than red
+// or green.
+func anyUnverifiable(checks []verifyCheck) bool {
+	for _, c := range checks {
+		if c.unverifiable {
+			return true
+		}
+	}
+	return false
+}
+
+// unverifiableSummary describes every unverifiable check, for the
+// SUCCESS_UNVERIFIED detail and returned error.
+func unverifiableSummary(checks []verifyCheck) string {
+	var parts []string
+	for _, c := range checks {
+		if c.unverifiable {
+			parts = append(parts, c.rec.Method+": "+c.rec.Detail)
+		}
+	}
+	return strings.Join(parts, "; ")
+}
+
+// artifactPaths extracts every strategy artifact's file path.
+func artifactPaths(artifacts []strategy.Artifact) []string {
+	out := make([]string, 0, len(artifacts))
+	for _, a := range artifacts {
+		out = append(out, a.Path)
+	}
+	return out
+}
+
+// ensureServiceContext guarantees err's text names service, without
+// doubling an existing "service <name>:" prefix that most internal
+// package errors already carry.
+func ensureServiceContext(service string, err error) error {
+	prefix := "service " + service + ":"
+	if strings.HasPrefix(err.Error(), prefix) {
+		return err
+	}
+	return fmt.Errorf("%s %w", prefix, err)
+}
+
+// redact scrubs every configured secret from s.
+func (p *Pipeline) redact(s string) string {
+	for _, secret := range p.Redact {
+		if secret != "" {
+			s = strings.ReplaceAll(s, secret, "[redacted]")
+		}
+	}
+	return s
+}
+
+// logf writes one redacted, plain-English line to Log (os.Stderr when
+// unset).
+func (p *Pipeline) logf(format string, args ...any) {
+	w := p.Log
+	if w == nil {
+		w = os.Stderr
+	}
+	fmt.Fprintln(w, p.redact(fmt.Sprintf("ballast: "+format, args...)))
+}
+
+// logNotifyErr logs the run's most recent notification delivery
+// failure, if any, without ever masking the run's own outcome (which
+// is already committed by the time this runs).
+func (p *Pipeline) logNotifyErr(service string, m *engine.Machine) {
+	if err := m.NotifyErr(); err != nil {
+		p.logf("%s: notification delivery failed (run outcome unaffected): %v", service, err)
+	}
+}

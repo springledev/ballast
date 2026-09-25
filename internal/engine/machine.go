@@ -20,6 +20,10 @@ type Run struct {
 	StartedAt  time.Time
 	FinishedAt *time.Time
 	Error      string
+	// SnapshotID is the restic snapshot this run produced, set by
+	// SetSnapshotID after a successful upload. Empty until then, and
+	// for runs that never reached UPLOADING.
+	SnapshotID string
 }
 
 // Machine is a handle over a persisted run. It enforces the §4.1 state
@@ -87,7 +91,7 @@ func StartRun(db *sql.DB, service string) (_ *Machine, err error) {
 // process restart. It errors if the run is in an illegal stored state.
 func LoadRun(db *sql.DB, runID int64) (*Machine, error) {
 	row := db.QueryRow(`
-		SELECT r.id, r.job_id, j.service, r.state, r.started_at, r.finished_at, r.error
+		SELECT r.id, r.job_id, j.service, r.state, r.started_at, r.finished_at, r.error, r.snapshot_id
 		FROM runs r JOIN jobs j ON j.id = r.job_id WHERE r.id = ?`, runID)
 
 	r := Run{ID: runID}
@@ -95,10 +99,12 @@ func LoadRun(db *sql.DB, runID int64) (*Machine, error) {
 	var started string
 	var finished sql.NullString
 	var errorText sql.NullString
-	if err := row.Scan(&r.ID, &r.JobID, &r.Service, &state, &started, &finished, &errorText); err != nil {
+	var snapshotID sql.NullString
+	if err := row.Scan(&r.ID, &r.JobID, &r.Service, &state, &started, &finished, &errorText, &snapshotID); err != nil {
 		return nil, fmt.Errorf("loading run %d: %w", runID, err)
 	}
 	r.Error = errorText.String
+	r.SnapshotID = snapshotID.String
 	r.State = State(state)
 	if !valid(r.State) {
 		return nil, fmt.Errorf("loading run %d: unrecognized stored state %q", runID, state)

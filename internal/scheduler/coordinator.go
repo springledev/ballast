@@ -25,6 +25,12 @@ var ErrAlreadyRunning = errors.New("a backup run for this service is already in 
 // exit non-zero when wrapped in this error, never silently report as green.
 var ErrNotVerified = errors.New("the backup did not finish as a verified success")
 
+// ErrInvalidTriggerToken reports that Trigger was called with a
+// token that does not match (or a service with no token configured
+// at all). Callers can map it to an HTTP 401 with errors.Is instead
+// of matching error text.
+var ErrInvalidTriggerToken = errors.New("invalid or missing trigger token")
+
 // ErrPreviousRunInterrupted reports that RunNow or Trigger found the
 // service's previous run unfinished with no process still working on
 // it (Ballast was stopped, killed, or the machine rebooted) and marked
@@ -332,25 +338,28 @@ func (c *Coordinator) Trigger(ctx context.Context, service, token string) error 
 		return c.redactErr(fmt.Errorf("triggering %s: %w", service, err))
 	}
 	if !ok {
-		return c.redactErr(fmt.Errorf("triggering %s: invalid or missing trigger token", service))
+		return c.redactErr(fmt.Errorf("triggering %s: %w", service, ErrInvalidTriggerToken))
 	}
 	return c.RunNow(ctx, service)
 }
 
-// withClaim takes service's run lock (retrying for up to wait, or
-// until ctx is done), fails any run a dead process left unfinished
-// (reporting whether it did), and calls fn while still holding the
-// lock. It returns ErrAlreadyRunning if the lock stayed taken.
-func (c *Coordinator) withClaim(ctx context.Context, service string, wait time.Duration, fn func() error) (interrupted bool, err error) {
-	release, err := c.lock(ctx, service, wait)
+// claim takes service's run lock (retrying for up to wait, or until
+// ctx is done) and fails any run a dead process left unfinished
+// (reporting whether it did). The caller owns the lock on success and
+// must call release exactly once. It returns ErrAlreadyRunning if the
+// lock stayed taken. This is the shared primitive behind withClaim
+// (RunDue/RunNow: run synchronously, release before returning) and
+// Start (release only after the background run finishes).
+func (c *Coordinator) claim(ctx context.Context, service string, wait time.Duration) (release func(), interrupted bool, err error) {
+	release, err = c.lock(ctx, service, wait)
 	if err != nil {
-		return false, err
+		return nil, false, err
 	}
-	defer release()
 
 	last, interrupted, err := engine.FailInterruptedRun(ctx, c.DB, service, c.Notifier)
 	if err != nil {
-		return false, fmt.Errorf("checking for an interrupted run: %w", err)
+		release()
+		return nil, false, fmt.Errorf("checking for an interrupted run: %w", err)
 	}
 	if interrupted {
 		// The dead run never got to its cleanup, so a service whose
@@ -361,7 +370,66 @@ func (c *Coordinator) withClaim(ctx context.Context, service string, wait time.D
 			"If this service's containers are stopped during backups, check that they are running again (docker ps -a) and start them if not",
 			last.StartedAt.Local().Format(time.RFC3339))
 	}
+	return release, interrupted, nil
+}
+
+// withClaim takes service's run lock via claim and calls fn while
+// still holding it, releasing before returning. It returns
+// ErrAlreadyRunning if the lock stayed taken.
+func (c *Coordinator) withClaim(ctx context.Context, service string, wait time.Duration, fn func() error) (interrupted bool, err error) {
+	release, interrupted, err := c.claim(ctx, service, wait)
+	if err != nil {
+		return false, err
+	}
+	defer release()
 	return interrupted, fn()
+}
+
+// Start takes service's run lock (waiting up to LockWait) and then
+// runs it in the background, releasing the lock only once that run
+// finishes. It returns ErrAlreadyRunning synchronously if the lock
+// could not be taken — an HTTP handler can report 409 immediately
+// without holding the request open for an hours-long backup.
+// interrupted reports, synchronously, whether an earlier run was
+// found interrupted (and marked failed) while claiming the lock.
+//
+// done receives exactly one value: the same nil-only-on-SUCCESS error
+// RunNow returns, redacted like every other Coordinator error (spec
+// rule 2). ctx governs the background run exactly as it would for
+// RunNow — cancelling it (e.g. on shutdown) cancels the run.
+func (c *Coordinator) Start(ctx context.Context, service string) (done <-chan error, interrupted bool, err error) {
+	release, interrupted, err := c.claim(ctx, service, c.lockWait())
+	if errors.Is(err, ErrAlreadyRunning) {
+		return nil, false, c.redactErr(fmt.Errorf("%s: %w; not starting another", service, err))
+	}
+	if err != nil {
+		return nil, false, c.redactErr(err)
+	}
+	ch := make(chan error, 1)
+	go func() {
+		defer release()
+		state, runErr := c.Runner.Run(ctx, service)
+		ch <- c.redactErr(checkRunSuccess(service, state, runErr))
+	}()
+	return ch, interrupted, nil
+}
+
+// StartTrigger authenticates an externally-triggered run like Trigger,
+// but starts it in the background via Start instead of running it
+// synchronously via RunNow — for the HTTP trigger endpoint, which must
+// not hold the request open for an hours-long backup. err is returned
+// synchronously for a bad token (before anything is started) or a
+// busy service; once started, the run's own outcome only ever reaches
+// done, exactly as Start documents.
+func (c *Coordinator) StartTrigger(ctx context.Context, service, token string) (done <-chan error, interrupted bool, err error) {
+	ok, err := VerifyTriggerToken(c.DB, service, token)
+	if err != nil {
+		return nil, false, c.redactErr(fmt.Errorf("triggering %s: %w", service, err))
+	}
+	if !ok {
+		return nil, false, c.redactErr(fmt.Errorf("triggering %s: %w", service, ErrInvalidTriggerToken))
+	}
+	return c.Start(ctx, service)
 }
 
 // lock takes service's run lock, retrying every lockPollInterval for up

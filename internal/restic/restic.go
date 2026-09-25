@@ -321,22 +321,22 @@ type SnapshotFilter struct {
 // Snapshot is one snapshot in the repository (one completed backup).
 type Snapshot struct {
 	// ID is the full snapshot ID; ShortID the usual 8-hex prefix.
-	ID      string
-	ShortID string
+	ID      string `json:"id"`
+	ShortID string `json:"short_id"`
 
 	// Time is when the snapshot was taken.
-	Time time.Time
+	Time time.Time `json:"time"`
 
 	// Hostname is the snapshot's host label.
-	Hostname string
+	Hostname string `json:"hostname"`
 
 	// Tags are the snapshot's tags.
-	Tags []string
+	Tags []string `json:"tags,omitempty"`
 
 	// Paths is the path-set this snapshot covers. Snapshots are
 	// grouped by path-set (spec §8) — two services in one repository
 	// have disjoint path-sets and never mix in one snapshot.
-	Paths []string
+	Paths []string `json:"paths,omitempty"`
 }
 
 // Snapshots lists the snapshots matching the filter. The listing is

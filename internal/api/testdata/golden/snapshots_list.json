@@ -1,0 +1,18 @@
+{
+  "status": 200,
+  "body": [
+    {
+      "hostname": "test",
+      "id": "1111111111111111111111111111111111111111111111111111111111111111",
+      "paths": [
+        "/stub/data"
+      ],
+      "short_id": "11111111",
+      "tags": [
+        "ballast",
+        "ballast-service:svc"
+      ],
+      "time": "\u003ctime\u003e"
+    }
+  ]
+}

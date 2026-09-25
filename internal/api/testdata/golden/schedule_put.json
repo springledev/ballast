@@ -1,0 +1,8 @@
+{
+  "status": 200,
+  "body": {
+    "cron": "0 3 * * *",
+    "enabled": true,
+    "service": "svc"
+  }
+}

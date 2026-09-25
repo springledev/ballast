@@ -1,0 +1,11 @@
+{
+  "status": 201,
+  "body": {
+    "keep_daily": 7,
+    "keep_monthly": 0,
+    "keep_weekly": 0,
+    "location": "/stub-repo",
+    "name": "local",
+    "password_credential": ""
+  }
+}
