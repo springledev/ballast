@@ -8,9 +8,11 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/springledev/ballast/internal/runner"
 )
@@ -492,7 +494,7 @@ func TestForgetBuildsPolicy(t *testing.T) {
 	s := newResticStub(t)
 	repo := s.openStub(t)
 
-	res, err := repo.Forget(context.Background(), DefaultRetention())
+	res, err := repo.Forget(context.Background(), DefaultRetention(), ForgetOptions{})
 	if err != nil {
 		t.Fatalf("Forget: %v", err)
 	}
@@ -520,7 +522,7 @@ func TestForgetBuildsPolicy(t *testing.T) {
 func TestForgetRefusesEmptyPolicy(t *testing.T) {
 	s := newResticStub(t)
 	repo := s.openStub(t)
-	if _, err := repo.Forget(context.Background(), RetentionPolicy{}); err == nil {
+	if _, err := repo.Forget(context.Background(), RetentionPolicy{}, ForgetOptions{}); err == nil {
 		t.Fatal("Forget with empty policy = nil error, want refusal")
 	} else if !strings.Contains(err.Error(), "delete every snapshot") {
 		t.Errorf("error = %q, want the plain-English refusal", err)
@@ -989,7 +991,7 @@ func TestIntegrationLocalRepo(t *testing.T) {
 	}
 
 	// Retention: keep only the newest, then prune the old data.
-	forgetRes, err := repo.Forget(ctx, RetentionPolicy{KeepLast: 1})
+	forgetRes, err := repo.Forget(ctx, RetentionPolicy{KeepLast: 1}, ForgetOptions{})
 	if err != nil {
 		t.Fatalf("Forget: %v", err)
 	}
@@ -1070,5 +1072,101 @@ func TestIsBucketMissing(t *testing.T) {
 				t.Errorf("IsBucketMissing = %v, want %v", got, tt.want)
 			}
 		})
+	}
+}
+
+// TestForgetOptions: the service tag and group-by reach restic in the
+// forms that mean "only this service's snapshots, as one series", and
+// malformed options are refused before restic runs.
+func TestForgetOptions(t *testing.T) {
+	tests := []struct {
+		name     string
+		opts     ForgetOptions
+		wantArgs []string // consecutive argv fragments
+		notArgs  []string
+		wantErr  string
+	}{
+		{name: "no scoping", opts: ForgetOptions{}, notArgs: []string{"--tag", "--group-by"}},
+		{name: "one tag", opts: ForgetOptions{Tags: []string{"ballast-service:immich"}}, wantArgs: []string{"--tag ballast-service:immich"}},
+		{name: "all tags in one flag", opts: ForgetOptions{Tags: []string{"ballast", "ballast-service:immich"}}, wantArgs: []string{"--tag ballast,ballast-service:immich"}},
+		{name: "group by tags", opts: ForgetOptions{GroupBy: "tags"}, wantArgs: []string{"--group-by tags"}},
+		{name: "group by host,paths", opts: ForgetOptions{GroupBy: "host,paths"}, wantArgs: []string{"--group-by host,paths"}},
+		{name: "empty tag", opts: ForgetOptions{Tags: []string{""}}, wantErr: "must be non-empty"},
+		{name: "comma in tag", opts: ForgetOptions{Tags: []string{"a,b"}}, wantErr: "must not contain a comma"},
+		{name: "bad group-by", opts: ForgetOptions{GroupBy: "tags,time"}, wantErr: "host, paths or tags"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			s := newResticStub(t)
+			repo := s.openStub(t)
+			_, err := repo.Forget(context.Background(), DefaultRetention(), tt.opts)
+			if tt.wantErr != "" {
+				if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
+					t.Fatalf("Forget error = %v, want %q", err, tt.wantErr)
+				}
+				if n := len(s.invocations(t)); n != 0 {
+					t.Errorf("restic ran %d times, want none for invalid options", n)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("Forget: %v", err)
+			}
+			log := s.invocations(t)
+			if len(log) != 1 {
+				t.Fatalf("invocations = %v, want one", log)
+			}
+			for _, part := range tt.wantArgs {
+				if !strings.Contains(log[0], part) {
+					t.Errorf("argv = %q, want %q", log[0], part)
+				}
+			}
+			for _, part := range tt.notArgs {
+				if strings.Contains(log[0], part) {
+					t.Errorf("argv = %q, want no %q", log[0], part)
+				}
+			}
+		})
+	}
+}
+
+// TestRetryLockPlacement: --retry-lock follows the subcommand of
+// every locking command, and is left off where restic never locks or
+// where it conflicts with --no-lock.
+func TestRetryLockPlacement(t *testing.T) {
+	tests := []struct {
+		name      string
+		retryLock time.Duration
+		args      []string
+		want      []string
+	}{
+		{name: "backup", retryLock: 10 * time.Minute, args: []string{"backup", "--json", "/p"}, want: []string{"backup", "--retry-lock", "10m0s", "--json", "/p"}},
+		{name: "forget", retryLock: time.Minute, args: []string{"forget", "--json"}, want: []string{"forget", "--retry-lock", "1m0s", "--json"}},
+		{name: "prune", retryLock: time.Minute, args: []string{"prune"}, want: []string{"prune", "--retry-lock", "1m0s"}},
+		{name: "no-lock read", retryLock: time.Minute, args: []string{"snapshots", "--json", "--no-lock"}, want: []string{"snapshots", "--json", "--no-lock"}},
+		{name: "init never locks", retryLock: time.Minute, args: []string{"init"}, want: []string{"init"}},
+		{name: "version never locks", retryLock: time.Minute, args: []string{"version"}, want: []string{"version"}},
+		{name: "unset", args: []string{"prune"}, want: []string{"prune"}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			repo := &Repository{Location: "/srv/backups", Runner: &runner.Runner{}, RetryLock: tt.retryLock, ExtendedOptions: []string{"k=v"}}
+			got := repo.command(tt.args...).Args
+			want := append([]string{"-o", "k=v"}, tt.want...)
+			if !slices.Equal(got, want) {
+				t.Errorf("argv = %q, want %q", got, want)
+			}
+		})
+	}
+}
+
+// TestOpenCarriesRetryLock: Options.RetryLock reaches the repository.
+func TestOpenCarriesRetryLock(t *testing.T) {
+	repo, err := Open("/srv/backups", Options{Runner: &runner.Runner{}, RetryLock: DefaultRetryLock})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	if repo.RetryLock != DefaultRetryLock {
+		t.Errorf("RetryLock = %v, want %v", repo.RetryLock, DefaultRetryLock)
 	}
 }

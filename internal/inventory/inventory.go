@@ -84,7 +84,7 @@ type Destination struct {
 
 // Retention returns d's restic retention policy.
 func (d Destination) Retention() restic.RetentionPolicy {
-	return restic.RetentionPolicy{KeepDaily: d.KeepDaily, KeepWeekly: d.KeepWeekly, KeepMonthly: d.KeepMonthly}
+	return Retention{KeepDaily: d.KeepDaily, KeepWeekly: d.KeepWeekly, KeepMonthly: d.KeepMonthly}.Policy()
 }
 
 // Target returns what backend.Resolver needs to open d's repository.
@@ -150,13 +150,37 @@ func (d *Destination) Normalize() error {
 			return fmt.Errorf("destination %s: the backend credential file and the repository password file must be different files", d.Name)
 		}
 	}
-	if d.KeepDaily < 0 || d.KeepWeekly < 0 || d.KeepMonthly < 0 {
-		return fmt.Errorf("destination %s: retention counts must not be negative", d.Name)
-	}
-	if d.KeepDaily == 0 && d.KeepWeekly == 0 && d.KeepMonthly == 0 {
-		return fmt.Errorf("destination %s: retention policy must keep at least one snapshot (keep_daily, keep_weekly and keep_monthly are all zero)", d.Name)
+	if err := (Retention{KeepDaily: d.KeepDaily, KeepWeekly: d.KeepWeekly, KeepMonthly: d.KeepMonthly}).Validate(); err != nil {
+		return fmt.Errorf("destination %s: %w", d.Name, err)
 	}
 	return nil
+}
+
+// Retention is a keep_daily/keep_weekly/keep_monthly policy: how many
+// of the newest daily, weekly and monthly backups to keep. Older
+// backups are removed and their space reclaimed after each verified
+// backup.
+type Retention struct {
+	KeepDaily   int `json:"keep_daily"`
+	KeepWeekly  int `json:"keep_weekly"`
+	KeepMonthly int `json:"keep_monthly"`
+}
+
+// Validate rejects negative counts and a policy that keeps nothing
+// (which would delete every backup).
+func (r Retention) Validate() error {
+	if r.KeepDaily < 0 || r.KeepWeekly < 0 || r.KeepMonthly < 0 {
+		return fmt.Errorf("retention counts must not be negative")
+	}
+	if r.KeepDaily == 0 && r.KeepWeekly == 0 && r.KeepMonthly == 0 {
+		return fmt.Errorf("retention policy must keep at least one snapshot (keep_daily, keep_weekly and keep_monthly are all zero)")
+	}
+	return nil
+}
+
+// Policy converts r to the restic forget policy.
+func (r Retention) Policy() restic.RetentionPolicy {
+	return restic.RetentionPolicy{KeepDaily: r.KeepDaily, KeepWeekly: r.KeepWeekly, KeepMonthly: r.KeepMonthly}
 }
 
 func typeNames() string {
@@ -316,6 +340,18 @@ type Service struct {
 	// uses. `ballast secret set` fills in a default name
 	// ("ballast-secret.<service>.<name>") when empty.
 	Secrets map[string]string `json:"secrets,omitempty"`
+	// Retention overrides the destination's retention policy for this
+	// service alone. Nil means "same as the destination".
+	Retention *Retention `json:"retention,omitempty"`
+}
+
+// EffectiveRetention is the policy applied to s's backups in d: its
+// own override when set, otherwise the destination's.
+func (s Service) EffectiveRetention(d Destination) Retention {
+	if s.Retention != nil {
+		return *s.Retention
+	}
+	return Retention{KeepDaily: d.KeepDaily, KeepWeekly: d.KeepWeekly, KeepMonthly: d.KeepMonthly}
 }
 
 // PutService inserts or updates a service. name is validated; the
@@ -358,11 +394,22 @@ func PutService(db *sql.DB, s Service) error {
 	if err != nil {
 		return fmt.Errorf("service %s: encoding secrets: %w", s.Name, err)
 	}
+	retentionJSON := ""
+	if s.Retention != nil {
+		if err := s.Retention.Validate(); err != nil {
+			return fmt.Errorf("service %s: %w", s.Name, err)
+		}
+		b, err := json.Marshal(s.Retention)
+		if err != nil {
+			return fmt.Errorf("service %s: encoding retention: %w", s.Name, err)
+		}
+		retentionJSON = string(b)
+	}
 
 	now := time.Now().UTC().Format(time.RFC3339Nano)
 	_, err = db.Exec(`
-		INSERT INTO services (name, catalog_entry, destination, docker_host, params_json, containers_json, secrets_json, created_at, updated_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+		INSERT INTO services (name, catalog_entry, destination, docker_host, params_json, containers_json, secrets_json, retention_json, created_at, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(name) DO UPDATE SET
 			catalog_entry = excluded.catalog_entry,
 			destination = excluded.destination,
@@ -370,8 +417,9 @@ func PutService(db *sql.DB, s Service) error {
 			params_json = excluded.params_json,
 			containers_json = excluded.containers_json,
 			secrets_json = excluded.secrets_json,
+			retention_json = excluded.retention_json,
 			updated_at = excluded.updated_at`,
-		s.Name, s.CatalogEntry, s.Destination, s.DockerHost, paramsJSON, containersJSON, secretsJSON, now, now,
+		s.Name, s.CatalogEntry, s.Destination, s.DockerHost, paramsJSON, containersJSON, secretsJSON, retentionJSON, now, now,
 	)
 	if err != nil {
 		return fmt.Errorf("saving service %s: %w", s.Name, err)
@@ -381,33 +429,47 @@ func PutService(db *sql.DB, s Service) error {
 
 // GetService returns the named service, or ErrNotFound.
 func GetService(db *sql.DB, name string) (Service, error) {
-	var s Service
-	var paramsJSON, containersJSON, secretsJSON string
-	err := db.QueryRow(`
-		SELECT name, catalog_entry, destination, docker_host, params_json, containers_json, secrets_json
-		FROM services WHERE name = ?`, name,
-	).Scan(&s.Name, &s.CatalogEntry, &s.Destination, &s.DockerHost, &paramsJSON, &containersJSON, &secretsJSON)
+	s, err := scanService(db.QueryRow(`SELECT `+serviceColumns+` FROM services WHERE name = ?`, name))
 	if errors.Is(err, sql.ErrNoRows) {
 		return Service{}, fmt.Errorf("service %s: %w", name, ErrNotFound)
 	}
 	if err != nil {
 		return Service{}, fmt.Errorf("getting service %s: %w", name, err)
 	}
+	return s, nil
+}
+
+const serviceColumns = `name, catalog_entry, destination, docker_host, params_json, containers_json, secrets_json, retention_json`
+
+// scanService reads one serviceColumns row.
+func scanService(row interface{ Scan(...any) error }) (Service, error) {
+	var s Service
+	var paramsJSON, containersJSON, secretsJSON, retentionJSON string
+	if err := row.Scan(&s.Name, &s.CatalogEntry, &s.Destination, &s.DockerHost, &paramsJSON, &containersJSON, &secretsJSON, &retentionJSON); err != nil {
+		return Service{}, err
+	}
+	var err error
 	if s.Params, err = unmarshalMap(paramsJSON); err != nil {
-		return Service{}, fmt.Errorf("service %s: decoding params: %w", name, err)
+		return Service{}, fmt.Errorf("service %s: decoding params: %w", s.Name, err)
 	}
 	if s.Containers, err = unmarshalMap(containersJSON); err != nil {
-		return Service{}, fmt.Errorf("service %s: decoding containers: %w", name, err)
+		return Service{}, fmt.Errorf("service %s: decoding containers: %w", s.Name, err)
 	}
 	if s.Secrets, err = unmarshalMap(secretsJSON); err != nil {
-		return Service{}, fmt.Errorf("service %s: decoding secrets: %w", name, err)
+		return Service{}, fmt.Errorf("service %s: decoding secrets: %w", s.Name, err)
+	}
+	if retentionJSON != "" {
+		s.Retention = &Retention{}
+		if err := json.Unmarshal([]byte(retentionJSON), s.Retention); err != nil {
+			return Service{}, fmt.Errorf("service %s: decoding retention: %w", s.Name, err)
+		}
 	}
 	return s, nil
 }
 
 // ListServices returns every configured service, ordered by name.
 func ListServices(db *sql.DB) ([]Service, error) {
-	rows, err := db.Query(`SELECT name, catalog_entry, destination, docker_host, params_json, containers_json, secrets_json FROM services ORDER BY name`)
+	rows, err := db.Query(`SELECT ` + serviceColumns + ` FROM services ORDER BY name`)
 	if err != nil {
 		return nil, fmt.Errorf("listing services: %w", err)
 	}
@@ -417,19 +479,9 @@ func ListServices(db *sql.DB) ([]Service, error) {
 	// is a JSON API response body, and a nil slice marshals as `null`.
 	out := []Service{}
 	for rows.Next() {
-		var s Service
-		var paramsJSON, containersJSON, secretsJSON string
-		if err := rows.Scan(&s.Name, &s.CatalogEntry, &s.Destination, &s.DockerHost, &paramsJSON, &containersJSON, &secretsJSON); err != nil {
+		s, err := scanService(rows)
+		if err != nil {
 			return nil, fmt.Errorf("listing services: %w", err)
-		}
-		if s.Params, err = unmarshalMap(paramsJSON); err != nil {
-			return nil, fmt.Errorf("service %s: decoding params: %w", s.Name, err)
-		}
-		if s.Containers, err = unmarshalMap(containersJSON); err != nil {
-			return nil, fmt.Errorf("service %s: decoding containers: %w", s.Name, err)
-		}
-		if s.Secrets, err = unmarshalMap(secretsJSON); err != nil {
-			return nil, fmt.Errorf("service %s: decoding secrets: %w", s.Name, err)
 		}
 		out = append(out, s)
 	}

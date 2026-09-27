@@ -159,6 +159,9 @@ export const api = {
   testDestination(name: string): Promise<{ ok: boolean }> {
     return request("POST", `${base}/destinations/${encodeURIComponent(name)}/test`);
   },
+  initDestination(name: string): Promise<{ initialized: boolean }> {
+    return request("POST", `${base}/destinations/${encodeURIComponent(name)}/init`);
+  },
 
   // --- docker hosts ---
   listDockerHosts(): Promise<DockerHost[]> {

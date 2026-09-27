@@ -2,7 +2,9 @@ package backend
 
 import (
 	"bufio"
+	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
@@ -55,8 +57,11 @@ func (r Resolver) Open(t Target) (*restic.Repository, error) {
 		return nil, fmt.Errorf("destination %s: no repository password credential is configured", t.Name)
 	}
 	pwFile := r.path(t.PasswordCredential)
+	if _, err := os.Stat(pwFile); errors.Is(err, fs.ErrNotExist) {
+		return nil, fmt.Errorf("destination %s has not been set up yet: set it up with `ballast destination init %s` (or \"Set up repository\" on the Destinations page); if its repository already exists, put that repository's password in %s first: %w", t.Name, t.Name, pwFile, err)
+	}
 	r.Redact.AddFile(pwFile)
-	opts := restic.Options{Runner: r.Runner, PasswordFile: pwFile, ResticBin: r.ResticBin}
+	opts := restic.Options{Runner: r.Runner, PasswordFile: pwFile, ResticBin: r.ResticBin, RetryLock: restic.DefaultRetryLock}
 
 	kind := t.Type.CredentialKind()
 	if kind != NoCredential && t.BackendCredential == "" {

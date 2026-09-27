@@ -64,6 +64,26 @@ func resetCLIFlags() {
 
 	serviceCatalogEntry, serviceDestination, serviceDockerHost = "", "", ""
 	serviceParams, serviceContainers, serviceSecrets = nil, nil, nil
+	serviceKeepDaily, serviceKeepWeekly, serviceKeepMonthly = 0, 0, 0
+	retentionKeepDaily, retentionKeepWeekly, retentionKeepMonthly = 0, 0, 0
+	retentionInherit = false
+	// serviceAddCmd/serviceRetentionCmd read cmd.Flags().Changed(...)
+	// for their --keep-* flags (unlike every other flag here, which
+	// only reads the package var): pflag's own Changed bit is not
+	// reset by resetting the var above, so it must be cleared by hand
+	// or a later test's `service add` with no --keep-* flags would
+	// still see an earlier test's flag as "given".
+	for _, name := range []string{"keep-daily", "keep-weekly", "keep-monthly"} {
+		if f := serviceAddCmd.Flags().Lookup(name); f != nil {
+			f.Changed = false
+		}
+		if f := serviceRetentionCmd.Flags().Lookup(name); f != nil {
+			f.Changed = false
+		}
+	}
+	if f := serviceRetentionCmd.Flags().Lookup("inherit"); f != nil {
+		f.Changed = false
+	}
 
 	destLocation, destType, destPasswordCredential, destInit = "", "", "", false
 	destKeepDaily, destKeepWeekly, destKeepMonthly = 7, 4, 6

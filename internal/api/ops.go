@@ -1109,6 +1109,26 @@ func (o *Ops) DeleteDestination(ctx context.Context, name string) error {
 	return nil
 }
 
+// InitDestination makes sure the named destination's restic
+// repository exists (`ballast destination init <name>`, or the web
+// UI's "Set up repository" button), for a destination that was added
+// without --init/"set up the storage now", or whose storage was later
+// emptied out from under it. It is idempotent: an already-initialized
+// repository is left untouched (see ensureRepoInitialized).
+//
+// It re-runs SetupDestination with Init on the saved destination, so
+// it gets the same handling as setting up at add time: a repository
+// password is generated if the destination never had one, an existing
+// repository whose password Ballast lacks is reported rather than
+// overwritten, and a failure leaves no unused password file behind.
+func (o *Ops) InitDestination(ctx context.Context, name string) error {
+	dest, err := inventory.GetDestination(o.DB, name)
+	if err != nil {
+		return wrapf("destination "+name, err)
+	}
+	return o.SetupDestination(ctx, DestinationSetup{Destination: dest, Init: true})
+}
+
 // TestDestination checks that a destination is reachable and that its
 // credentials and repository password work, for the
 // GUI/CLI "Test connection" action (spec §10).

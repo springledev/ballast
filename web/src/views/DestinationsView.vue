@@ -14,6 +14,8 @@ const showAdvancedType = ref(false);
 const created = ref<Destination | null>(null);
 const checking = ref<Set<string>>(new Set());
 const checkResult = reactive<Record<string, { ok: boolean; text: string }>>({});
+const initializing = ref<Set<string>>(new Set());
+const initResult = reactive<Record<string, { ok: boolean; text: string }>>({});
 
 interface Form extends DestinationFormFields {
   name: string;
@@ -156,6 +158,19 @@ async function check(name: string) {
   }
 }
 
+async function initRepo(name: string) {
+  initializing.value.add(name);
+  delete initResult[name];
+  try {
+    await api.initDestination(name);
+    initResult[name] = { ok: true, text: "The repository is ready." };
+  } catch (e) {
+    initResult[name] = { ok: false, text: (e as Error).message };
+  } finally {
+    initializing.value.delete(name);
+  }
+}
+
 async function remove(name: string) {
   if (!confirm(`Forget "${name}"? The backups stored there are not deleted. Anything still backing up to it must be moved first.`)) {
     return;
@@ -202,6 +217,9 @@ load();
             <button class="btn" type="button" :disabled="checking.has(d.name)" @click="check(d.name)">
               {{ checking.has(d.name) ? "Checking…" : "Test connection" }}
             </button>
+            <button class="btn" type="button" :disabled="initializing.has(d.name)" @click="initRepo(d.name)">
+              {{ initializing.has(d.name) ? "Setting up…" : "Set up repository" }}
+            </button>
             <button class="btn btn-quiet btn-danger" type="button" @click="remove(d.name)">Forget</button>
           </div>
         </div>
@@ -212,6 +230,14 @@ load();
           style="margin: 0.6rem 0 0"
         >
           {{ checkResult[d.name].text }}
+        </p>
+        <p
+          v-if="initResult[d.name]"
+          class="notice"
+          :class="initResult[d.name].ok ? 'notice--ok' : 'notice--error'"
+          style="margin: 0.6rem 0 0"
+        >
+          {{ initResult[d.name].text }}
         </p>
         <details class="advanced">
           <summary>Details</summary>
@@ -226,6 +252,10 @@ load();
               <dt>Old backups kept</dt>
               <dd>{{ d.keep_daily }} daily, {{ d.keep_weekly }} weekly, {{ d.keep_monthly }} monthly</dd>
             </dl>
+            <p class="hint">
+              "Set up repository" is only needed if this destination was added without setting it up, or if the
+              storage it points at was emptied since — it's safe to use any time, even if it's already set up.
+            </p>
           </div>
         </details>
       </li>

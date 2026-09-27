@@ -246,6 +246,38 @@ func TestHTTPGolden(t *testing.T) {
 			},
 		},
 		{
+			// A per-service retention override must round-trip through
+			// PUT (spec §14 step 19: keep_daily/weekly/monthly overrides
+			// the destination's own policy).
+			name:    "services_put_retention",
+			arrange: withService,
+			req: func(h *harness) *http.Request {
+				body := inventory.Service{
+					CatalogEntry: "folder", Destination: "local", Params: map[string]string{"path": "/y"},
+					Retention: &inventory.Retention{KeepDaily: 3, KeepWeekly: 0, KeepMonthly: 0},
+				}
+				r := httptest.NewRequest(http.MethodPut, "/api/v1/services/svc", jsonBody(t, body))
+				r.Header.Set("Content-Type", "application/json")
+				return r
+			},
+		},
+		{
+			// An all-zero retention override keeps nothing, which is
+			// never valid (it would delete every backup): the server
+			// rejects it with a plain-English 400, not a 500.
+			name:    "services_put_retention_invalid",
+			arrange: withService,
+			req: func(h *harness) *http.Request {
+				body := inventory.Service{
+					CatalogEntry: "folder", Destination: "local", Params: map[string]string{"path": "/y"},
+					Retention: &inventory.Retention{},
+				}
+				r := httptest.NewRequest(http.MethodPut, "/api/v1/services/svc", jsonBody(t, body))
+				r.Header.Set("Content-Type", "application/json")
+				return r
+			},
+		},
+		{
 			name:    "services_delete",
 			arrange: withService,
 			req: func(h *harness) *http.Request {
@@ -530,6 +562,13 @@ func TestHTTPGolden(t *testing.T) {
 			arrange: func(t *testing.T, h *harness) { h.addDestination("local") },
 			req: func(h *harness) *http.Request {
 				return httptest.NewRequest(http.MethodPost, "/api/v1/destinations/local/test", nil)
+			},
+		},
+		{
+			name:    "destinations_init",
+			arrange: func(t *testing.T, h *harness) { h.addDestination("local") },
+			req: func(h *harness) *http.Request {
+				return httptest.NewRequest(http.MethodPost, "/api/v1/destinations/local/init", nil)
 			},
 		},
 		{

@@ -1,0 +1,17 @@
+{
+  "status": 200,
+  "body": {
+    "catalog_entry": "folder",
+    "destination": "local",
+    "docker_host": "local",
+    "name": "svc",
+    "params": {
+      "path": "/y"
+    },
+    "retention": {
+      "keep_daily": 3,
+      "keep_monthly": 0,
+      "keep_weekly": 0
+    }
+  }
+}

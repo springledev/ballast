@@ -231,10 +231,22 @@ func (p *Pipeline) Run(ctx context.Context, service string) (engine.State, error
 	if err := m.Transition(engine.UPLOADING, "uploading"); err != nil {
 		return fail(err)
 	}
+	// Uploading and verifying hold the repository's shared lock, so
+	// another service's prune never runs under them (see repoLocks).
+	shared := repoLock(repo.Location)
+	shared.RLock()
+	sharedHeld := true
+	releaseShared := func() {
+		if sharedHeld {
+			shared.RUnlock()
+			sharedHeld = false
+		}
+	}
+	defer releaseShared()
 	paths := append(append([]string(nil), res.Paths...), artifactPaths(res.Artifacts)...)
 	br, err := repo.Backup(ctx, restic.BackupOptions{
 		Paths: paths,
-		Tags:  []string{"ballast", "ballast-service:" + service},
+		Tags:  []string{"ballast", serviceTag(service)},
 	})
 	if err != nil {
 		return fail(err)
@@ -251,6 +263,7 @@ func (p *Pipeline) Run(ctx context.Context, service string) (engine.State, error
 	if err != nil {
 		return fail(err)
 	}
+	releaseShared()
 	for _, c := range checks {
 		if err := m.RecordVerification(c.rec); err != nil {
 			return fail(err)
@@ -275,9 +288,7 @@ func (p *Pipeline) Run(ctx context.Context, service string) (engine.State, error
 
 	// Retention cleanup only after a verified SUCCESS, and never lets
 	// its own failure change the run's outcome (spec plan step 8).
-	if _, err := repo.Forget(ctx, dest.Retention()); err != nil {
-		p.logf("%s: retention cleanup (forget) failed, the backup itself succeeded: %s", service, p.redact(err.Error()))
-	}
+	p.applyRetention(ctx, service, repo, svc.EffectiveRetention(dest))
 	return engine.SUCCESS, nil
 }
 

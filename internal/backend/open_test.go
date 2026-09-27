@@ -1,6 +1,8 @@
 package backend
 
 import (
+	"errors"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
@@ -138,6 +140,26 @@ func TestResolverOpenMissingPasswordCredential(t *testing.T) {
 	target := Target{Name: "dest", Type: Local, Settings: Settings{Path: "/srv"}, Location: "/srv"}
 	if _, err := r.Open(target); err == nil || !strings.Contains(err.Error(), "no repository password credential is configured") {
 		t.Errorf("error = %v, want the missing-password-credential message", err)
+	}
+}
+
+// TestResolverOpenPasswordFileNotYetCreated: a destination added
+// without setting up its repository has no password file yet; Open
+// names the fix instead of surfacing a raw stat error.
+func TestResolverOpenPasswordFileNotYetCreated(t *testing.T) {
+	r := Resolver{CredDirs: []string{t.TempDir()}, Runner: &runner.Runner{}, Redact: secret.NewSet()}
+	target := Target{Name: "dest", Type: Local, Settings: Settings{Path: "/srv"}, Location: "/srv", PasswordCredential: "ballast-restic-password.dest"}
+	_, err := r.Open(target)
+	if err == nil {
+		t.Fatal("Open = nil error, want not-set-up error")
+	}
+	for _, want := range []string{"has not been set up yet", "ballast destination init dest", "ballast-restic-password.dest"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("error = %q, want %q", err, want)
+		}
+	}
+	if !errors.Is(err, fs.ErrNotExist) {
+		t.Errorf("error = %v, want it to wrap fs.ErrNotExist", err)
 	}
 }
 

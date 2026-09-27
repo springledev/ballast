@@ -64,6 +64,103 @@ func TestServiceAddSecretFlag(t *testing.T) {
 	}
 }
 
+// TestServiceAddRetentionFlags checks that giving any --keep-* flag
+// on `service add` sets a per-service retention override, filling in
+// the destination's own value for any flag not given, and that a
+// service added with none of them has no override at all (nil ==
+// "follow the destination").
+func TestServiceAddRetentionFlags(t *testing.T) {
+	withStubRestic(t)
+	cliEnv(t, &spyRunner{})
+	if _, err := execCLI(t, "destination", "add", "local", "--location", "/srv/backups",
+		"--keep-daily", "7", "--keep-weekly", "4", "--keep-monthly", "6"); err != nil {
+		t.Fatalf("destination add: %v", err)
+	}
+
+	out, err := execCLI(t, "service", "add", "docs", "--catalog", "folder", "--destination", "local",
+		"--param", "path=/tmp", "--keep-daily", "3")
+	if err != nil {
+		t.Fatalf("service add: %v (output %q)", err, out)
+	}
+	if !strings.Contains(out, "3 daily") {
+		t.Errorf("output = %q, want it to confirm the override", out)
+	}
+
+	cfg, err := loadConfig()
+	if err != nil {
+		t.Fatalf("loadConfig: %v", err)
+	}
+	a, err := openApp(cfg, &discardWriter{})
+	if err != nil {
+		t.Fatalf("openApp: %v", err)
+	}
+	defer a.Close()
+	svc, err := a.ops.GetService(t.Context(), "docs")
+	if err != nil {
+		t.Fatalf("GetService: %v", err)
+	}
+	if svc.Retention == nil {
+		t.Fatal("Retention = nil, want an override")
+	}
+	if svc.Retention.KeepDaily != 3 || svc.Retention.KeepWeekly != 4 || svc.Retention.KeepMonthly != 6 {
+		t.Errorf("Retention = %+v, want {3 4 6} (unspecified flags fall back to the destination's own value)", svc.Retention)
+	}
+
+	if _, err := execCLI(t, "service", "add", "notes", "--catalog", "folder", "--destination", "local", "--param", "path=/tmp2"); err != nil {
+		t.Fatalf("service add: %v", err)
+	}
+	svc2, err := a.ops.GetService(t.Context(), "notes")
+	if err != nil {
+		t.Fatalf("GetService: %v", err)
+	}
+	if svc2.Retention != nil {
+		t.Errorf("Retention = %+v, want nil (no --keep-* flag given)", svc2.Retention)
+	}
+}
+
+// TestServiceRetentionCommand checks `ballast service retention` can
+// set an override, print the effective policy with no flags, and
+// clear the override again with --inherit.
+func TestServiceRetentionCommand(t *testing.T) {
+	withStubRestic(t)
+	cliEnv(t, &spyRunner{})
+	if _, err := execCLI(t, "destination", "add", "local", "--location", "/srv/backups",
+		"--keep-daily", "7", "--keep-weekly", "4", "--keep-monthly", "6"); err != nil {
+		t.Fatalf("destination add: %v", err)
+	}
+	if _, err := execCLI(t, "service", "add", "docs", "--catalog", "folder", "--destination", "local", "--param", "path=/tmp"); err != nil {
+		t.Fatalf("service add: %v", err)
+	}
+
+	out, err := execCLI(t, "service", "retention", "docs")
+	if err != nil {
+		t.Fatalf("service retention: %v", err)
+	}
+	if !strings.Contains(out, "same as local") {
+		t.Errorf("output = %q, want it to say the service inherits the destination's policy", out)
+	}
+
+	out, err = execCLI(t, "service", "retention", "docs", "--keep-daily", "2")
+	if err != nil {
+		t.Fatalf("service retention --keep-daily: %v (output %q)", err, out)
+	}
+	if !strings.Contains(out, "2 daily") || !strings.Contains(out, "its own setting") {
+		t.Errorf("output = %q, want it to show the new override", out)
+	}
+
+	out, err = execCLI(t, "service", "retention", "docs", "--inherit")
+	if err != nil {
+		t.Fatalf("service retention --inherit: %v (output %q)", err, out)
+	}
+	if !strings.Contains(out, "same as local") {
+		t.Errorf("output = %q, want the override cleared", out)
+	}
+
+	if _, err := execCLI(t, "service", "retention", "docs", "--inherit", "--keep-daily", "1"); err == nil {
+		t.Error("service retention --inherit --keep-daily: want an error (mutually exclusive)")
+	}
+}
+
 func TestServiceAddRequiresCatalogAndDestination(t *testing.T) {
 	cliEnv(t, &spyRunner{})
 	if _, err := execCLI(t, "service", "add", "docs"); err == nil {

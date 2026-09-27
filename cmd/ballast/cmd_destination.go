@@ -199,6 +199,35 @@ var destinationTestCmd = &cobra.Command{
 	},
 }
 
+// destinationInitCmd is `ballast destination init <name>` (spec §14
+// step 19): set up (or re-check) a destination's restic repository
+// without resending its settings, for a destination that was added
+// without --init, or whose storage was emptied out from under it.
+var destinationInitCmd = &cobra.Command{
+	Use:   "init <name>",
+	Short: "Set up a destination's backup repository",
+	Long: `Set up a destination's backup repository.
+
+This is only needed if the destination was added without ticking "set
+up the storage now" (or, on the command line, without --init), or if
+the storage it points at was emptied since. It's safe to run again on
+a destination that's already set up — nothing happens.`,
+	Args: cobra.ExactArgs(1),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		cfg, err := loadConfig()
+		if err != nil {
+			return err
+		}
+		return withApp(cfg, cmd.ErrOrStderr(), func(a *app) error {
+			if err := a.ops.InitDestination(cmd.Context(), args[0]); err != nil {
+				return err
+			}
+			cmd.Printf("repository for %s is ready\n", args[0])
+			return nil
+		})
+	},
+}
+
 var destinationRemoveCmd = &cobra.Command{
 	Use:   "remove <name>",
 	Short: "Remove a configured destination",
@@ -241,6 +270,6 @@ func registerDestinationCommands(root *cobra.Command) {
 	destinationAddCmd.Flags().IntVar(&destKeepMonthly, "keep-monthly", 6, "monthly snapshots to keep")
 
 	destinationCmd := &cobra.Command{Use: "destination", Short: "Manage backup destinations"}
-	destinationCmd.AddCommand(destinationAddCmd, destinationListCmd, destinationTestCmd, destinationRemoveCmd)
+	destinationCmd.AddCommand(destinationAddCmd, destinationListCmd, destinationTestCmd, destinationInitCmd, destinationRemoveCmd)
 	root.AddCommand(destinationCmd)
 }

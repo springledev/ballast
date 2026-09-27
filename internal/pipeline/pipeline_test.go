@@ -27,7 +27,8 @@ import (
 // subcommand with fixed, internally-consistent --json output: one
 // snapshot ("1111...") covering path "/stub/data", with one sample
 // file node so ReadBack's LS+Dump sampling succeeds. Any subcommand
-// named by $RESTIC_STUB_FAIL_CMD exits 1 instead.
+// named by $RESTIC_STUB_FAIL_CMD exits 1 instead. `forget` answers
+// $RESTIC_STUB_FORGET when set (to simulate removed snapshots).
 const resticStubScript = `#!/bin/sh
 printf '%s\n' "$*" >> "$RESTIC_STUB_LOG"
 cmd="$1"
@@ -50,7 +51,9 @@ case "$cmd" in
     printf 'sample-content'
     ;;
   forget)
-    printf '[]'
+    if [ -n "$RESTIC_STUB_FORGET" ]; then printf '%s' "$RESTIC_STUB_FORGET"; else printf '[]'; fi
+    ;;
+  prune)
     ;;
   *)
     echo "unknown stub restic command: $cmd" >&2

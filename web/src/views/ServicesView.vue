@@ -2,7 +2,9 @@
 import { computed, onMounted, reactive, ref } from "vue";
 
 import { api } from "@/api/client";
-import type { CatalogSummary, Destination, DockerHost, Service } from "@/api/types";
+import type { CatalogSummary, Destination, DockerHost, Retention, Service, Snapshot } from "@/api/types";
+import { formatDateTime, formatRelative } from "@/lib/format";
+import { describeServiceRetention } from "@/lib/retention";
 
 const services = ref<Service[]>([]);
 const catalog = ref<CatalogSummary[]>([]);
@@ -14,11 +16,118 @@ const saved = ref("");
 const saving = ref(false);
 const showForm = ref(false);
 
+const destinationByName = computed(() => {
+  const map = new Map<string, Destination>();
+  for (const d of destinations.value) map.set(d.name, d);
+  return map;
+});
+
+/** The retention policy actually applied to a service's backups: its own override, or its destination's. */
+function effectiveRetention(s: Service): Retention {
+  if (s.retention) return s.retention;
+  const d = destinationByName.value.get(s.destination);
+  return { keep_daily: d?.keep_daily ?? 0, keep_weekly: d?.keep_weekly ?? 0, keep_monthly: d?.keep_monthly ?? 0 };
+}
+
+function retentionLine(s: Service): string {
+  return describeServiceRetention(effectiveRetention(s), s.destination, !!s.retention);
+}
+
+// --- backups (snapshots), loaded on demand per service ---
+
+interface SnapshotState {
+  open: boolean;
+  loading: boolean;
+  error: string;
+  loaded: boolean;
+  snapshots: Snapshot[];
+}
+
+const snapshotState = reactive<Record<string, SnapshotState>>({});
+
+function stateFor(name: string): SnapshotState {
+  if (!snapshotState[name]) {
+    snapshotState[name] = { open: false, loading: false, error: "", loaded: false, snapshots: [] };
+  }
+  return snapshotState[name];
+}
+
+async function toggleBackups(name: string) {
+  const st = stateFor(name);
+  st.open = !st.open;
+  if (!st.open || st.loaded || st.loading) return;
+  st.loading = true;
+  st.error = "";
+  try {
+    st.snapshots = (await api.snapshots(name)).slice().sort((a, b) => (a.time < b.time ? 1 : -1));
+    st.loaded = true;
+  } catch (e) {
+    st.error = (e as Error).message;
+  } finally {
+    st.loading = false;
+  }
+}
+
+// --- per-service retention override editor ---
+
+interface RetentionForm {
+  keep_daily: number;
+  keep_weekly: number;
+  keep_monthly: number;
+}
+
+const retentionForms = reactive<Record<string, RetentionForm>>({});
+const retentionSaving = ref<Set<string>>(new Set());
+
+function retentionFormFor(s: Service): RetentionForm {
+  if (!retentionForms[s.name]) {
+    const eff = effectiveRetention(s);
+    retentionForms[s.name] = { keep_daily: eff.keep_daily, keep_weekly: eff.keep_weekly, keep_monthly: eff.keep_monthly };
+  }
+  return retentionForms[s.name];
+}
+
+async function saveRetentionOverride(s: Service) {
+  const form = retentionFormFor(s);
+  retentionSaving.value.add(s.name);
+  error.value = "";
+  try {
+    const updated = await api.updateService(s.name, { ...s, retention: { ...form } });
+    Object.assign(s, updated);
+    saved.value = `Saved backup-keeping settings for ${s.name}.`;
+  } catch (e) {
+    error.value = (e as Error).message;
+  } finally {
+    retentionSaving.value.delete(s.name);
+  }
+}
+
+async function useDestinationRetention(s: Service) {
+  retentionSaving.value.add(s.name);
+  error.value = "";
+  try {
+    const updated = await api.updateService(s.name, { ...s, retention: null });
+    Object.assign(s, updated);
+    delete retentionForms[s.name];
+    saved.value = `${s.name} now follows ${s.destination}'s backup-keeping setting.`;
+  } catch (e) {
+    error.value = (e as Error).message;
+  } finally {
+    retentionSaving.value.delete(s.name);
+  }
+}
+
 // Most people only ever have "local"; don't show a picker for a
 // choice that isn't really a choice yet.
 const showHostPicker = computed(() => dockerHosts.value.length > 1);
 
 const editingName = ref<string | null>(null);
+// Kept so submit() can carry a retention override forward: the edit
+// form itself has no retention fields (that's handled by the
+// per-service "Backups to keep" panel below), and PUT replaces the
+// whole service, so submitting the edit form must not silently clear
+// an override set through that panel.
+const editingService = ref<Service | null>(null);
 const form = reactive({
   name: "",
   catalog_entry: "",
@@ -52,6 +161,7 @@ async function load() {
 
 function openAdd() {
   editingName.value = null;
+  editingService.value = null;
   form.name = "";
   form.catalog_entry = "";
   form.destination = destinations.value[0]?.name ?? "";
@@ -63,6 +173,7 @@ function openAdd() {
 
 function startEdit(s: Service) {
   editingName.value = s.name;
+  editingService.value = s;
   form.name = s.name;
   form.catalog_entry = s.catalog_entry;
   form.destination = s.destination;
@@ -75,6 +186,7 @@ function startEdit(s: Service) {
 function closeForm() {
   showForm.value = false;
   editingName.value = null;
+  editingService.value = null;
 }
 
 function onEntryChange() {
@@ -101,6 +213,7 @@ async function submit() {
     destination: form.destination,
     docker_host: form.docker_host,
     params: { ...form.params },
+    retention: editingService.value?.retention,
   };
   try {
     if (editingName.value) {
@@ -161,14 +274,42 @@ onMounted(load);
             <div class="item-sub">{{ entryName(s.catalog_entry) }}, stored in {{ s.destination }}</div>
           </div>
           <div class="actions">
+            <button class="btn" type="button" @click="toggleBackups(s.name)">
+              {{ stateFor(s.name).open ? "Hide backups" : "Backups" }}
+            </button>
             <button class="btn" type="button" @click="startEdit(s)">Edit</button>
             <button class="btn btn-quiet btn-danger" type="button" @click="remove(s.name)">Stop backing up</button>
           </div>
         </div>
-        <details v-if="s.params && Object.keys(s.params).length" class="advanced">
+
+        <p class="item-sub">{{ retentionLine(s) }}</p>
+
+        <div v-if="stateFor(s.name).open" class="panel" style="margin-top: 0.6rem">
+          <p v-if="stateFor(s.name).loading" class="loading">Loading backups…</p>
+          <p v-else-if="stateFor(s.name).error" class="notice notice--error" role="alert">{{ stateFor(s.name).error }}</p>
+          <p v-else-if="!stateFor(s.name).snapshots.length">No backups yet.</p>
+          <ul v-else class="list">
+            <li v-for="(snap, i) in stateFor(s.name).snapshots" :key="snap.id">
+              {{ formatDateTime(snap.time) }} ({{ formatRelative(snap.time) }})<span v-if="i === 0"> — most recent</span>
+              <details class="advanced" style="display: inline-block; margin-left: 0.5rem">
+                <summary>Details</summary>
+                <div class="advanced-body">
+                  <dl class="kv">
+                    <dt>ID</dt>
+                    <dd><code>{{ snap.short_id }}</code></dd>
+                    <dt v-if="snap.paths?.length">Paths</dt>
+                    <dd v-if="snap.paths?.length">{{ snap.paths.join(", ") }}</dd>
+                  </dl>
+                </div>
+              </details>
+            </li>
+          </ul>
+        </div>
+
+        <details class="advanced">
           <summary>Details</summary>
           <div class="advanced-body">
-            <dl class="kv">
+            <dl v-if="s.params && Object.keys(s.params).length" class="kv">
               <dt>Catalog entry</dt>
               <dd><code>{{ s.catalog_entry }}</code></dd>
               <template v-for="(v, k) in s.params" :key="k">
@@ -176,6 +317,41 @@ onMounted(load);
                 <dd>{{ v }}</dd>
               </template>
             </dl>
+
+            <div class="field-label">Backups to keep</div>
+            <div class="inline-fields">
+              <div class="field">
+                <label :for="`ret-daily-${s.name}`" class="hint">Daily</label>
+                <input :id="`ret-daily-${s.name}`" v-model.number="retentionFormFor(s).keep_daily" type="number" min="0" />
+              </div>
+              <div class="field">
+                <label :for="`ret-weekly-${s.name}`" class="hint">Weekly</label>
+                <input :id="`ret-weekly-${s.name}`" v-model.number="retentionFormFor(s).keep_weekly" type="number" min="0" />
+              </div>
+              <div class="field">
+                <label :for="`ret-monthly-${s.name}`" class="hint">Monthly</label>
+                <input :id="`ret-monthly-${s.name}`" v-model.number="retentionFormFor(s).keep_monthly" type="number" min="0" />
+              </div>
+            </div>
+            <div class="actions">
+              <button
+                class="btn"
+                type="button"
+                :disabled="retentionSaving.has(s.name)"
+                @click="saveRetentionOverride(s)"
+              >
+                {{ retentionSaving.has(s.name) ? "Saving…" : "Save" }}
+              </button>
+              <button
+                v-if="s.retention"
+                class="btn btn-quiet"
+                type="button"
+                :disabled="retentionSaving.has(s.name)"
+                @click="useDestinationRetention(s)"
+              >
+                Use {{ s.destination }}'s setting
+              </button>
+            </div>
           </div>
         </details>
       </li>

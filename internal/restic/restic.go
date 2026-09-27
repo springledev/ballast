@@ -27,6 +27,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -99,7 +100,21 @@ type Repository struct {
 	// ResticBin is the restic binary to invoke; empty means "restic"
 	// resolved against $PATH. Tests point it at a stub.
 	ResticBin string
+
+	// RetryLock, when positive, makes every command that locks the
+	// repository wait up to this long for another process's lock
+	// (restic --retry-lock) instead of failing at once. Pruning holds
+	// an exclusive lock, so without it a backup started by `ballast
+	// run-due` while `ballast serve` prunes the same repository would
+	// fail with "repository is already locked".
+	RetryLock time.Duration
 }
+
+// DefaultRetryLock is how long Ballast's own repository handles wait
+// for another process's lock: long enough to ride out a routine
+// prune, short enough that a stale lock still surfaces as a failure
+// the same night.
+const DefaultRetryLock = 10 * time.Minute
 
 // Options configures Open. See the matching Repository fields.
 type Options struct {
@@ -118,6 +133,10 @@ type Options struct {
 
 	// ResticBin overrides the restic binary (tests).
 	ResticBin string
+
+	// RetryLock is how long locking commands wait for another
+	// process's lock; zero fails at once (restic's default).
+	RetryLock time.Duration
 }
 
 // Open validates the destination configuration and returns a ready
@@ -154,6 +173,7 @@ func Open(location string, opts Options) (*Repository, error) {
 		ExtendedOptions: opts.ExtendedOptions,
 		Runner:          opts.Runner,
 		ResticBin:       opts.ResticBin,
+		RetryLock:       opts.RetryLock,
 	}, nil
 }
 
@@ -207,12 +227,29 @@ func (r *Repository) command(args ...string) runner.Command {
 	if r.PasswordFile != "" {
 		env = append(env, "RESTIC_PASSWORD_FILE="+r.PasswordFile)
 	}
-	full := make([]string, 0, 2*len(r.ExtendedOptions)+len(args))
+	full := make([]string, 0, 2*len(r.ExtendedOptions)+len(args)+2)
 	for _, o := range r.ExtendedOptions {
 		full = append(full, "-o", o)
 	}
-	full = append(full, args...)
+	if r.RetryLock > 0 && takesLock(args) {
+		// Right after the subcommand: restic's global flags are
+		// accepted there too, and argv[0] stays the subcommand.
+		full = append(full, args[0], "--retry-lock", r.RetryLock.String())
+		full = append(full, args[1:]...)
+	} else {
+		full = append(full, args...)
+	}
 	return runner.Command{Name: r.bin(), Args: full, Env: env, AbortOn: permanentBackendError}
+}
+
+// takesLock reports whether the restic invocation args locks the
+// repository, so --retry-lock applies: restic rejects --retry-lock
+// combined with --no-lock, and `version`/`init` never lock.
+func takesLock(args []string) bool {
+	if len(args) == 0 || args[0] == "version" || args[0] == "init" {
+		return false
+	}
+	return !slices.Contains(args, "--no-lock")
 }
 
 // permanentBackendRetry are storage-provider errors restic keeps
@@ -283,7 +320,7 @@ func (r *Repository) explain(op string, err error) error {
 	}
 	switch ee.Code {
 	case exitRepoMissing:
-		return fmt.Errorf("%s: no backup repository exists at %s yet — run the first backup (or `ballast destination add`) to create it: %w", op, r.Location, err)
+		return fmt.Errorf("%s: no backup repository exists at %s — if this destination is new, set it up with `ballast destination init <name>` (or \"Set up repository\" on the Destinations page); if it held backups before, check that its disk or bucket is still there first: %w", op, r.Location, err)
 	case exitRepoLocked:
 		return fmt.Errorf("%s: another restic process is using the repository at %s right now (this is safe to retry): %w", op, r.Location, err)
 	case exitWrongPassword:
@@ -655,11 +692,26 @@ type ForgetResult struct {
 	Removed []string
 }
 
+// ForgetOptions scopes a Forget run.
+type ForgetOptions struct {
+	// Tags limits the run to snapshots carrying ALL of these tags.
+	// Ballast always passes the service's own tag, so one service's
+	// policy can never remove another service's snapshots from a
+	// shared repository.
+	Tags []string
+
+	// GroupBy is restic's --group-by: the snapshot attributes
+	// ("host", "paths", "tags", comma-separated) that split the
+	// matched snapshots into series, each kept by the policy on its
+	// own. Empty means restic's default, "host,paths".
+	GroupBy string
+}
+
 // Forget applies the retention policy: snapshots matching no keep
 // rule are removed (metadata only — call Prune to reclaim space). A
 // policy that keeps nothing is rejected: that would delete every
 // snapshot, which is never what a retention rule means.
-func (r *Repository) Forget(ctx context.Context, policy RetentionPolicy) (*ForgetResult, error) {
+func (r *Repository) Forget(ctx context.Context, policy RetentionPolicy, opts ForgetOptions) (*ForgetResult, error) {
 	if policy.empty() {
 		return nil, fmt.Errorf("restic forget: retention policy must keep something (e.g. KeepDaily 7, KeepWeekly 4, KeepMonthly 6); refusing a policy that would delete every snapshot")
 	}
@@ -675,6 +727,24 @@ func (r *Repository) Forget(ctx context.Context, policy RetentionPolicy) (*Forge
 	add("--keep-weekly", policy.KeepWeekly)
 	add("--keep-monthly", policy.KeepMonthly)
 	add("--keep-yearly", policy.KeepYearly)
+	if len(opts.Tags) > 0 {
+		for _, tag := range opts.Tags {
+			if tag == "" || strings.Contains(tag, ",") {
+				return nil, fmt.Errorf("restic forget: tag %q must be non-empty and must not contain a comma", tag)
+			}
+		}
+		// One --tag with a comma list means "all of these"; repeated
+		// --tag flags would mean "any of these".
+		args = append(args, "--tag", strings.Join(opts.Tags, ","))
+	}
+	if opts.GroupBy != "" {
+		for _, g := range strings.Split(opts.GroupBy, ",") {
+			if g != "host" && g != "paths" && g != "tags" {
+				return nil, fmt.Errorf("restic forget: group-by %q: each part must be host, paths or tags", opts.GroupBy)
+			}
+		}
+		args = append(args, "--group-by", opts.GroupBy)
+	}
 
 	res, err := r.run(ctx, args...)
 	if err != nil {

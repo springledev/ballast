@@ -3,6 +3,7 @@ package inventory
 import (
 	"errors"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/springledev/ballast/internal/backend"
@@ -515,5 +516,252 @@ func TestMigrationAppliesOnFreshAndExistingDB(t *testing.T) {
 	defer s2.Close()
 	if _, err := GetDestination(s2.DB(), "local"); err != nil {
 		t.Errorf("GetDestination after reopen: %v", err)
+	}
+}
+
+// TestRetentionValidate checks that Validate rejects negative counts
+// and all-zero policies, while accepting valid policies.
+func TestRetentionValidate(t *testing.T) {
+	tests := []struct {
+		name    string
+		r       Retention
+		wantErr bool
+	}{
+		{"valid 7/4/6", Retention{KeepDaily: 7, KeepWeekly: 4, KeepMonthly: 6}, false},
+		{"valid only monthly", Retention{KeepDaily: 0, KeepWeekly: 0, KeepMonthly: 6}, false},
+		{"valid only daily", Retention{KeepDaily: 7, KeepWeekly: 0, KeepMonthly: 0}, false},
+		{"valid only weekly", Retention{KeepDaily: 0, KeepWeekly: 4, KeepMonthly: 0}, false},
+		{"negative daily", Retention{KeepDaily: -1, KeepWeekly: 4, KeepMonthly: 6}, true},
+		{"negative weekly", Retention{KeepDaily: 7, KeepWeekly: -1, KeepMonthly: 6}, true},
+		{"negative monthly", Retention{KeepDaily: 7, KeepWeekly: 4, KeepMonthly: -1}, true},
+		{"all zero", Retention{KeepDaily: 0, KeepWeekly: 0, KeepMonthly: 0}, true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := tt.r.Validate()
+			if (err != nil) != tt.wantErr {
+				t.Errorf("Retention.Validate() error = %v, wantErr %v", err, tt.wantErr)
+			}
+		})
+	}
+}
+
+// TestServiceRetentionRoundTrip checks that service retention overrides
+// round-trip through the database correctly.
+func TestServiceRetentionRoundTrip(t *testing.T) {
+	tests := []struct {
+		name            string
+		retention       *Retention
+		updateTo        *Retention
+		wantAfterGet    *Retention
+		wantInList      *Retention
+		testUpdate      bool // whether to test an update
+		wantAfterUpdate *Retention
+		wantPutErr      bool
+		errMsgSubstr    string
+	}{
+		{
+			name:         "nil override stays nil",
+			retention:    nil,
+			wantAfterGet: nil,
+			wantInList:   nil,
+		},
+		{
+			name:         "override 1/0/3 round-trips",
+			retention:    &Retention{KeepDaily: 1, KeepWeekly: 0, KeepMonthly: 3},
+			wantAfterGet: &Retention{KeepDaily: 1, KeepWeekly: 0, KeepMonthly: 3},
+			wantInList:   &Retention{KeepDaily: 1, KeepWeekly: 0, KeepMonthly: 3},
+		},
+		{
+			name:            "update override to nil clears it",
+			retention:       &Retention{KeepDaily: 1, KeepWeekly: 2, KeepMonthly: 3},
+			updateTo:        nil,
+			wantAfterGet:    &Retention{KeepDaily: 1, KeepWeekly: 2, KeepMonthly: 3},
+			wantInList:      &Retention{KeepDaily: 1, KeepWeekly: 2, KeepMonthly: 3},
+			testUpdate:      true,
+			wantAfterUpdate: nil,
+		},
+		{
+			name:         "invalid override (all zero) rejected",
+			retention:    &Retention{KeepDaily: 0, KeepWeekly: 0, KeepMonthly: 0},
+			wantPutErr:   true,
+			errMsgSubstr: "myservice",
+		},
+		{
+			name:         "invalid override (negative) rejected",
+			retention:    &Retention{KeepDaily: -1, KeepWeekly: 0, KeepMonthly: 0},
+			wantPutErr:   true,
+			errMsgSubstr: "myservice",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			db := openDB(t).DB()
+			if err := PutDestination(db, Destination{Name: "dest", Location: "/srv", KeepDaily: 7}); err != nil {
+				t.Fatalf("PutDestination: %v", err)
+			}
+
+			// Put service with the retention override.
+			s := Service{Name: "myservice", CatalogEntry: "postgres", Destination: "dest", Retention: tt.retention}
+			err := PutService(db, s)
+			if (err != nil) != tt.wantPutErr {
+				t.Errorf("PutService() error = %v, wantErr %v", err, tt.wantPutErr)
+			}
+			if tt.wantPutErr {
+				if tt.errMsgSubstr != "" && !strings.Contains(err.Error(), tt.errMsgSubstr) {
+					t.Errorf("PutService() error message %q does not contain %q", err.Error(), tt.errMsgSubstr)
+				}
+				// Verify nothing was stored when PutService fails.
+				if got, err := GetService(db, "myservice"); err == nil {
+					t.Errorf("GetService after failed PutService = %+v, want ErrNotFound", got)
+				}
+				return
+			}
+
+			// GetService should return the same retention.
+			got, err := GetService(db, "myservice")
+			if err != nil {
+				t.Fatalf("GetService: %v", err)
+			}
+			if !retentionEqual(got.Retention, tt.wantAfterGet) {
+				t.Errorf("GetService().Retention = %+v, want %+v", got.Retention, tt.wantAfterGet)
+			}
+
+			// ListServices should also return the same retention.
+			list, err := ListServices(db)
+			if err != nil {
+				t.Fatalf("ListServices: %v", err)
+			}
+			if len(list) != 1 {
+				t.Fatalf("ListServices() = %d services, want 1", len(list))
+			}
+			if !retentionEqual(list[0].Retention, tt.wantInList) {
+				t.Errorf("ListServices()[0].Retention = %+v, want %+v", list[0].Retention, tt.wantInList)
+			}
+
+			// If testUpdate is true, update the service and check again.
+			if tt.testUpdate {
+				s.Retention = tt.updateTo
+				if err := PutService(db, s); err != nil {
+					t.Fatalf("PutService update: %v", err)
+				}
+				got, err := GetService(db, "myservice")
+				if err != nil {
+					t.Fatalf("GetService after update: %v", err)
+				}
+				if !retentionEqual(got.Retention, tt.wantAfterUpdate) {
+					t.Errorf("GetService after update = %+v, want %+v", got.Retention, tt.wantAfterUpdate)
+				}
+			}
+		})
+	}
+}
+
+// retentionEqual checks if two Retention pointers are equal.
+func retentionEqual(a, b *Retention) bool {
+	if a == nil && b == nil {
+		return true
+	}
+	if a == nil || b == nil {
+		return false
+	}
+	return a.KeepDaily == b.KeepDaily && a.KeepWeekly == b.KeepWeekly && a.KeepMonthly == b.KeepMonthly
+}
+
+// TestEffectiveRetention checks that Service.EffectiveRetention returns
+// the override when set, otherwise the destination's retention policy.
+func TestEffectiveRetention(t *testing.T) {
+	tests := []struct {
+		name        string
+		override    *Retention
+		dest        Destination
+		wantDaily   int
+		wantWeekly  int
+		wantMonthly int
+	}{
+		{
+			name:        "nil override uses destination",
+			override:    nil,
+			dest:        Destination{KeepDaily: 7, KeepWeekly: 4, KeepMonthly: 6},
+			wantDaily:   7,
+			wantWeekly:  4,
+			wantMonthly: 6,
+		},
+		{
+			name:        "override replaces destination",
+			override:    &Retention{KeepDaily: 1, KeepWeekly: 2, KeepMonthly: 3},
+			dest:        Destination{KeepDaily: 7, KeepWeekly: 4, KeepMonthly: 6},
+			wantDaily:   1,
+			wantWeekly:  2,
+			wantMonthly: 3,
+		},
+		{
+			name:        "override with zeros uses those zeros",
+			override:    &Retention{KeepDaily: 0, KeepWeekly: 0, KeepMonthly: 5},
+			dest:        Destination{KeepDaily: 7, KeepWeekly: 4, KeepMonthly: 6},
+			wantDaily:   0,
+			wantWeekly:  0,
+			wantMonthly: 5,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			s := Service{Retention: tt.override}
+			got := s.EffectiveRetention(tt.dest)
+			if got.KeepDaily != tt.wantDaily || got.KeepWeekly != tt.wantWeekly || got.KeepMonthly != tt.wantMonthly {
+				t.Errorf("EffectiveRetention() = {%d, %d, %d}, want {%d, %d, %d}",
+					got.KeepDaily, got.KeepWeekly, got.KeepMonthly,
+					tt.wantDaily, tt.wantWeekly, tt.wantMonthly)
+			}
+		})
+	}
+}
+
+// TestRetentionPolicy checks that Retention.Policy converts the
+// retention fields to a restic.RetentionPolicy with other fields zero.
+func TestRetentionPolicy(t *testing.T) {
+	tests := []struct {
+		name      string
+		r         Retention
+		wantDay   int
+		wantWeek  int
+		wantMonth int
+	}{
+		{
+			name:      "standard 7/4/6",
+			r:         Retention{KeepDaily: 7, KeepWeekly: 4, KeepMonthly: 6},
+			wantDay:   7,
+			wantWeek:  4,
+			wantMonth: 6,
+		},
+		{
+			name:      "only monthly",
+			r:         Retention{KeepDaily: 0, KeepWeekly: 0, KeepMonthly: 12},
+			wantDay:   0,
+			wantWeek:  0,
+			wantMonth: 12,
+		},
+		{
+			name:      "custom 2/3/4",
+			r:         Retention{KeepDaily: 2, KeepWeekly: 3, KeepMonthly: 4},
+			wantDay:   2,
+			wantWeek:  3,
+			wantMonth: 4,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := tt.r.Policy()
+			if got.KeepDaily != tt.wantDay || got.KeepWeekly != tt.wantWeek || got.KeepMonthly != tt.wantMonth {
+				t.Errorf("Policy() = {Daily: %d, Weekly: %d, Monthly: %d}, want {Daily: %d, Weekly: %d, Monthly: %d}",
+					got.KeepDaily, got.KeepWeekly, got.KeepMonthly,
+					tt.wantDay, tt.wantWeek, tt.wantMonth)
+			}
+			// Verify other fields are zero (should be if correctly mapping).
+			if got.KeepLast != 0 || got.KeepHourly != 0 || got.KeepYearly != 0 {
+				t.Errorf("Policy() has non-zero other fields: KeepLast=%d, KeepHourly=%d, KeepYearly=%d",
+					got.KeepLast, got.KeepHourly, got.KeepYearly)
+			}
+		})
 	}
 }

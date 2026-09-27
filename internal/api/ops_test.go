@@ -1447,6 +1447,56 @@ func TestOpsEnsurePasswordGeneratesForNonLocalTypes(t *testing.T) {
 	}
 }
 
+// TestOpsInitDestinationCreatesRepo: InitDestination against a
+// destination whose repository does not exist yet actually creates
+// it (`restic init`), the same idempotent probe-then-init
+// ensureRepoInitialized uses during SetupDestination.
+func TestOpsInitDestinationCreatesRepo(t *testing.T) {
+	h := newHarness(t)
+	h.addDestination("local")
+	t.Setenv("STUB_SNAPSHOTS_MISSING_COUNT", "1")
+
+	if err := h.ops.InitDestination(context.Background(), "local"); err != nil {
+		t.Fatalf("InitDestination: %v", err)
+	}
+	found := false
+	for _, line := range h.resticInvocations(t) {
+		if strings.HasPrefix(line, "init") {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("restic invocations = %v, want an init call", h.resticInvocations(t))
+	}
+}
+
+// TestOpsInitDestinationAlreadyInitialized: InitDestination against a
+// repository that already exists is a no-op (never calls `restic
+// init` again), so it's safe to call more than once.
+func TestOpsInitDestinationAlreadyInitialized(t *testing.T) {
+	h := newHarness(t)
+	h.addDestination("local")
+
+	if err := h.ops.InitDestination(context.Background(), "local"); err != nil {
+		t.Fatalf("InitDestination: %v", err)
+	}
+	for _, line := range h.resticInvocations(t) {
+		if strings.HasPrefix(line, "init") {
+			t.Errorf("restic invocations = %v, want no init call (repository already exists)", h.resticInvocations(t))
+		}
+	}
+}
+
+// TestOpsInitDestinationNotFound: InitDestination against an unknown
+// destination name is inventory.ErrNotFound, not a raw restic error.
+func TestOpsInitDestinationNotFound(t *testing.T) {
+	h := newHarness(t)
+	err := h.ops.InitDestination(context.Background(), "nope")
+	if !errors.Is(err, inventory.ErrNotFound) {
+		t.Errorf("InitDestination(nope) = %v, want inventory.ErrNotFound", err)
+	}
+}
+
 // TestOpsTestDestinationRepoMissing: TestDestination against a
 // destination whose repository was never initialized gives a message
 // explaining that Ballast reached the destination but found no

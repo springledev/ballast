@@ -179,6 +179,51 @@ These numbers intentionally lean generous — a weekday-only schedule,
 say — so a normal weekend or a slightly late run never fires a false
 alarm.
 
+## Backup retention and setup
+
+Each destination has its own "keep" policy — how many of the newest
+daily, weekly and monthly backups to hang on to (`--keep-daily`,
+`--keep-weekly`, `--keep-monthly` on `ballast destination add`, or the
+"Old backups to keep" fields in the web UI). Older backups beyond that
+are removed, and the space they used is reclaimed, **after every
+*verified* backup** — a run that fails verification is never allowed
+to age out anything, so a bad backup can't quietly push a good one out
+of the retention window.
+
+A service can set its own retention policy instead of following its
+destination's, with `ballast service add --keep-daily/--keep-weekly/
+--keep-monthly` (given at add time) or `ballast service retention
+<name> --keep-daily ... --keep-weekly ... --keep-monthly ...`
+afterwards; give only the flags you want to change and the rest keep
+following the destination. `ballast service retention <name>
+--inherit` removes the override again. In the web UI, each service's
+"Backups to keep" panel (under its Details) does the same thing. Only
+give one or two of the three flags/fields if that's all you want to
+change — e.g. `--keep-daily 3` alone leaves weekly and monthly exactly
+as the destination has them.
+
+Whichever policy applies, cleanup only ever touches that one service's
+own backups, identified by its tag — even when several services share
+one destination, cleaning up after one service's backup never removes
+another service's snapshots.
+
+### Setting up a destination's repository
+
+A destination needs its restic repository created once before backups
+can be sent to it — normally done automatically the first time you add
+it (tick "set up the storage now" in the web UI, or pass `--init` to
+`ballast destination add`). If you skipped that, or the storage a
+destination points at was later emptied out (a fresh bucket, a wiped
+disk), run:
+
+```
+ballast destination init <name>
+```
+
+or click "Set up repository" next to that destination in the web UI.
+It's safe to run at any time, including against a destination that's
+already set up — nothing happens if the repository already exists.
+
 ## See also
 
 - [Quickstart](quickstart.md) — quick first-run setup.

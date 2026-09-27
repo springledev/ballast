@@ -18,6 +18,13 @@ export interface CatalogSummary {
   parameters?: CatalogParameter[];
 }
 
+/** How many of the newest daily/weekly/monthly backups to keep. */
+export interface Retention {
+  keep_daily: number;
+  keep_weekly: number;
+  keep_monthly: number;
+}
+
 export interface Service {
   name: string;
   catalog_entry: string;
@@ -26,6 +33,8 @@ export interface Service {
   containers?: Record<string, string>;
   /** Which Docker host runs this service's containers. Defaults to "local". */
   docker_host?: string;
+  /** This service's own backup-retention override. Unset: follow the destination's policy. */
+  retention?: Retention | null;
 }
 
 /** Which storage backend a destination uses. */

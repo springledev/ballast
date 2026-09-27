@@ -60,6 +60,7 @@ func NewHandler(ops *Ops, apiToken string) http.Handler {
 	protected.HandleFunc("POST /api/v1/destinations", h.createDestination)
 	protected.HandleFunc("DELETE /api/v1/destinations/{name}", h.deleteDestination)
 	protected.HandleFunc("POST /api/v1/destinations/{name}/test", h.testDestination)
+	protected.HandleFunc("POST /api/v1/destinations/{name}/init", h.initDestination)
 
 	protected.HandleFunc("GET /api/v1/docker-hosts", h.listDockerHosts)
 	protected.HandleFunc("POST /api/v1/docker-hosts", h.createDockerHost)
@@ -491,6 +492,18 @@ func (h *handler) testDestination(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
+}
+
+// initDestination makes sure a destination's repository exists,
+// without requiring the caller to resend the whole destination (spec
+// §14 step 19: "restic init per destination", available on demand for
+// a destination added without --init or whose storage was emptied).
+func (h *handler) initDestination(w http.ResponseWriter, r *http.Request) {
+	if err := h.ops.InitDestination(r.Context(), pathName(r)); err != nil {
+		h.writeErr(w, err, http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]bool{"initialized": true})
 }
 
 // --- docker hosts --------------------------------------------------------

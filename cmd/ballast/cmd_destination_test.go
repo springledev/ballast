@@ -63,6 +63,48 @@ func TestDestinationAddInit(t *testing.T) {
 	}
 }
 
+// TestDestinationInit checks `ballast destination init` sets up a
+// repository for a destination that was added without --init, and
+// that running it again against an already-initialized repository is
+// a harmless no-op.
+func TestDestinationInit(t *testing.T) {
+	withStubRestic(t)
+	cliEnv(t, &spyRunner{})
+	credDir := filepath.Join(os.Getenv("BALLAST_CONFIG_DIR"), "credentials")
+	if err := os.MkdirAll(credDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(credDir, "ballast-restic-password.local"), []byte("pw\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := execCLI(t, "destination", "add", "local", "--location", "/srv/backups"); err != nil {
+		t.Fatalf("destination add: %v", err)
+	}
+
+	out, err := execCLI(t, "destination", "init", "local")
+	if err != nil {
+		t.Fatalf("destination init: %v (output %q)", err, out)
+	}
+	if !strings.Contains(out, "local") || !strings.Contains(out, "ready") {
+		t.Errorf("output = %q, want it to confirm the repository is ready", out)
+	}
+
+	// Running it again against an already-initialized repository must
+	// not error.
+	if out, err := execCLI(t, "destination", "init", "local"); err != nil {
+		t.Fatalf("destination init (second run): %v (output %q)", err, out)
+	}
+}
+
+func TestDestinationInitUnknownDestination(t *testing.T) {
+	cliEnv(t, &spyRunner{})
+	_, err := execCLI(t, "destination", "init", "nope")
+	if err == nil {
+		t.Error("destination init nope: want an error")
+	}
+}
+
 func TestDestinationAddRequiresLocation(t *testing.T) {
 	cliEnv(t, &spyRunner{})
 	_, err := execCLI(t, "destination", "add", "local")
