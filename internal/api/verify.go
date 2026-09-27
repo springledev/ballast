@@ -109,7 +109,7 @@ func (o *Ops) VerifyService(ctx context.Context, service string) (VerifyReport, 
 	snap := snaps[0]
 	rep.SnapshotID = snap.ShortID
 
-	checker, err := verify.For(entry, verify.Options{Runner: o.Runner, Docker: docker})
+	checkers, err := verify.For(entry, verify.Options{Runner: o.Runner, Docker: docker})
 	if err != nil {
 		return rep, wrapf("service "+service, err)
 	}
@@ -156,7 +156,7 @@ func (o *Ops) VerifyService(ctx context.Context, service string) (VerifyReport, 
 		sourceContainer = entry.Backup.Dumps[0].Container
 	}
 
-	checks, unverifiable, failed := o.runVerifyChecks(ctx, service, checker, artifacts, len(entry.Backup.Dumps) > 0, sourceContainer, repo, snap.ID)
+	checks, unverifiable, failed := o.runVerifyChecks(ctx, service, checkers, artifacts, len(entry.Backup.Dumps) > 0, sourceContainer, repo, snap.ID)
 	if ctx.Err() != nil {
 		return rep, ctx.Err()
 	}
@@ -172,27 +172,33 @@ func (o *Ops) VerifyService(ctx context.Context, service string) (VerifyReport, 
 	return rep, nil
 }
 
-// runVerifyChecks runs the declared checker (unless this is an
+// runVerifyChecks runs every declared checker (except an
 // archive-integrity check with no artifacts — folded into the
 // read-back result instead, mirroring pipeline.runChecks's step 11
 // user decision) and restic's own read-back, redacting every result
 // (spec rule 2, last line of defence before it reaches an API
 // response or CLI output).
-func (o *Ops) runVerifyChecks(ctx context.Context, service string, checker verify.Checker, artifacts []strategy.Artifact, expectArtifacts bool, sourceContainer string, repo *restic.Repository, snapshotID string) (checks []VerifyCheck, unverifiable, failed bool) {
-	runDeclaredChecker := len(artifacts) > 0 || checker.Method() != "archive-integrity"
-	if expectArtifacts && len(artifacts) == 0 {
-		// A dump backup always writes its files under the work
-		// directory; finding none means they cannot be located (e.g.
-		// no work directory is configured), not that they are bad.
-		runDeclaredChecker = false
-		unverifiable = true
-		checks = append(checks, VerifyCheck{
-			Method: checker.Method(),
-			Passed: false,
-			Detail: "No database dump files were found in the latest snapshot, so the restore test could not run. Check that Ballast's work directory is configured.",
-		})
-	}
-	if runDeclaredChecker {
+func (o *Ops) runVerifyChecks(ctx context.Context, service string, checkers []verify.Checker, artifacts []strategy.Artifact, expectArtifacts bool, sourceContainer string, repo *restic.Repository, snapshotID string) (checks []VerifyCheck, unverifiable, failed bool) {
+	foldArchive := false
+	for _, checker := range checkers {
+		method := checker.Method()
+		switch {
+		case needsArtifacts(method) && expectArtifacts && len(artifacts) == 0:
+			// A dump backup always writes its files under the work
+			// directory; finding none means they cannot be located
+			// (e.g. no work directory is configured), not that they
+			// are bad.
+			unverifiable = true
+			checks = append(checks, VerifyCheck{
+				Method: method,
+				Passed: false,
+				Detail: "No database dump files were found in the latest snapshot, so this check could not run. Check that Ballast's work directory is configured.",
+			})
+			continue
+		case method == verify.MethodArchiveIntegrity && len(artifacts) == 0:
+			foldArchive = true
+			continue
+		}
 		vres := checker.Check(ctx, verify.Request{Service: service, Artifacts: artifacts, SourceContainer: sourceContainer})
 		c := VerifyCheck{Method: vres.Method, Passed: vres.Passed, Warning: o.redact(vres.Warning), Detail: o.redact(vres.Detail)}
 		checks = append(checks, c)
@@ -219,14 +225,20 @@ func (o *Ops) runVerifyChecks(ctx context.Context, service string, checker verif
 		})
 	}
 
-	if len(artifacts) == 0 && checker.Method() == "archive-integrity" {
+	if foldArchive {
 		checks = append(checks, VerifyCheck{
-			Method: "archive-integrity",
+			Method: verify.MethodArchiveIntegrity,
 			Passed: readBackPassed,
 			Detail: "No archive files were produced (files are uploaded directly); integrity was proven by reading the files back from the backup.",
 		})
 	}
 	return checks, unverifiable, failed
+}
+
+// needsArtifacts reports whether method inspects the backup's artifact
+// files (as opposed to the live service, like restart-smoke).
+func needsArtifacts(method string) bool {
+	return method == verify.MethodArchiveIntegrity || method == verify.MethodDBRestoreDrill
 }
 
 // VerifyAllServices re-verifies every configured service's latest

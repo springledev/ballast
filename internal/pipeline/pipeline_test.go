@@ -761,3 +761,95 @@ func TestRunRoutesDockerToServiceHost(t *testing.T) {
 		t.Fatalf("Run on a host without its TLS files = %s, %v; want FAILED naming the host", state, err)
 	}
 }
+
+const dumpSmokeEntryYAML = `
+apiVersion: ballast.dev/v1
+service: dumpsmoke
+version: 1
+backup:
+  strategy: dump
+  dumps:
+    - name: data
+      container: mycontainer
+      command: ["mydump"]
+      format: sql
+verify:
+  methods:
+    - archive-integrity
+    - %q
+  smoke:
+    container: mycontainer
+    timeout: 1s
+`
+
+// TestRunEveryDeclaredMethodEnforced pins spec §17.6: a run declaring
+// several verification methods is FAILED when any one of them fails
+// (here restart-smoke — the docker stub never reports the container
+// as running — while archive-integrity passes), and a declared method
+// Ballast cannot run is a hard failure before anything is touched,
+// never a silent pass.
+func TestRunEveryDeclaredMethodEnforced(t *testing.T) {
+	cases := []struct {
+		name        string
+		method      string
+		wantRecords map[string]bool // method -> Passed; nil = no run should reach VERIFYING
+		wantErr     string
+	}{
+		{
+			name:        "failing restart-smoke fails the run",
+			method:      "restart-smoke",
+			wantRecords: map[string]bool{"archive-integrity": true, "restart-smoke": false, "restic-read-back": true},
+			wantErr:     "restart-smoke",
+		},
+		{
+			name:    "unimplemented method fails the run",
+			method:  "read-back",
+			wantErr: `"read-back" is not available`,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			h := newHarness(t)
+			if err := inventory.PutService(h.db, inventory.Service{Name: "dumpsmoke", CatalogEntry: "dumpsmoke", Destination: "local"}); err != nil {
+				t.Fatalf("PutService: %v", err)
+			}
+			p := h.pipeline()
+			p.Catalog = registryWith(t, map[string]string{"dumpsmoke.yaml": yamlf(dumpSmokeEntryYAML, tc.method)})
+
+			state, err := p.Run(context.Background(), "dumpsmoke")
+			if state != engine.FAILED {
+				t.Errorf("state = %s, want FAILED", state)
+			}
+			if err == nil || !strings.Contains(err.Error(), tc.wantErr) {
+				t.Fatalf("Run error = %v, want it to contain %q", err, tc.wantErr)
+			}
+
+			runs, err := engine.RecentRuns(h.db, "dumpsmoke", 1)
+			if err != nil || len(runs) != 1 {
+				t.Fatalf("RecentRuns: %v, %v", runs, err)
+			}
+			seq := transitionsOf(t, h.db, runs[0].ID)
+			for _, s := range seq {
+				if s == string(engine.SUCCESS) || s == string(engine.SUCCESS_UNVERIFIED) {
+					t.Fatalf("transitions = %v, must never reach %s", seq, s)
+				}
+			}
+			results, err := engine.VerificationResults(h.db, runs[0].ID)
+			if err != nil {
+				t.Fatalf("VerificationResults: %v", err)
+			}
+			got := map[string]bool{}
+			for _, r := range results {
+				got[r.Method] = r.Passed
+			}
+			if len(got) != len(tc.wantRecords) {
+				t.Fatalf("verification records = %v, want %v", got, tc.wantRecords)
+			}
+			for m, passed := range tc.wantRecords {
+				if g, ok := got[m]; !ok || g != passed {
+					t.Errorf("record %s = %v (present %v), want passed=%v", m, g, ok, passed)
+				}
+			}
+		})
+	}
+}

@@ -63,11 +63,23 @@ backup:                      # required
     verifyScript: "/path/to/verify-script"
 
 verify:                      # required
-  method: container-restore   # required: see "Choosing a verification method" below
-  image: "postgres:16"        # required when method is container-restore
-  filterStderr:                # optional: benign stderr substrings to ignore during container-restore
+  method: db-restore-drill     # required (single method): see "Choosing a verification method" below
+  methods:                     # or required (multiple methods, all must pass):
+    - archive-integrity         #   - archive-integrity
+    - restart-smoke             #   - restart-smoke
+  image: "postgres:16"        # required when method is db-restore-drill
+  filterStderr:                # optional: benign stderr substrings to ignore during db-restore-drill
     - "already exists"
   restartPolicy: never         # optional: never | always (documents whether this strategy restarts containers)
+  smoke:                       # optional: required when methods includes restart-smoke
+    container: "{{ .Params.container }}" # required, the container to check
+    timeout: 2m                # optional, default 2m
+    http:                      # optional: HTTP probe (or tcp, not both)
+      port: 80                 # required: port inside the container
+      path: /                  # optional, default /
+      expectStatus: 200        # optional, default 200
+    # or: tcp:
+    #   port: 5432
 
 notifications:                # optional
   failureVerbosity: full       # optional: full | brief
@@ -81,7 +93,9 @@ A few rules worth calling out:
   fails to load instead of being silently ignored.
 - `backup.strategy: dump` requires at least one entry in `backup.dumps`.
 - `backup.strategy: volume` requires at least one entry in `backup.volumes`.
-- `verify.method: container-restore` requires `verify.image`.
+- `verify.method: db-restore-drill` requires `verify.image`.
+- `verify.methods` (a list) declares multiple checks that all must pass; use
+  `method` (singular) for a single check.
 - Every entry **must** define a `verify` block — there is no way to skip
   verification. That's the whole point of Ballast (see below).
 
@@ -118,22 +132,30 @@ empty string, that empty string wins, not the default.
 
 ## Choosing a verification method
 
-Only two of the five schema-allowed `verify.method` values actually run
-today: **`archive-integrity`** and **`container-restore`**. The other three
-— `read-back`, `restart-smoke`, `exec-script` — pass schema validation but
-are rejected at run time with "verification method is not implemented yet."
-Don't declare them in a new entry; the backup would never be able to
-succeed.
+Three methods are available today: **`archive-integrity`**, **`db-restore-drill`**
+(formerly called `container-restore`; the old name still works as an alias),
+and **`restart-smoke`**. Two others — `read-back` and `exec-script` — pass schema
+validation but are not yet implemented; don't declare them in a catalog entry.
+
+You can declare either a single `verify.method` or a list `verify.methods`
+where all listed methods must pass. Every backup that reaches the verification
+phase runs all of them before reporting a result.
 
 - **`archive-integrity`** — checks that the backed-up archive/artifact is
   structurally intact and readable (the equivalent of `tar -tf` or
   `gzip -t`, depending on format). This is the right (and simplest) choice
   for `stop-start` and `files` entries.
-- **`container-restore`** — for `dump` entries with a SQL dump artifact:
+- **`db-restore-drill`** — for `dump` entries with a SQL dump artifact:
   starts a fresh, disposable container of `verify.image`, restores the dump
   into it, and checks the restore produced no unexpected errors, then
   destroys the container. This is the only way to actually prove a database
-  dump is restorable, not just present.
+  dump is restorable, not just present. (Older catalog files may use the
+  alias `container-restore` instead; both names work.)
+- **`restart-smoke`** — after a backup, checks that the service's container
+  is running and healthy. Optionally probes HTTP (default status 200) or TCP
+  from inside the container's own network. Configuration goes in `verify.smoke`,
+  which specifies the container name and optional probes; see the
+  `catalog/vaultwarden.yaml` and `catalog/couchdb.yaml` examples below.
 
 Whichever method you pick, restic's own read-back (a sample read of what
 was actually stored, proving the snapshot exists and is fresh) also runs
@@ -146,9 +168,9 @@ there's no archive artifact of Ballast's own to check.
 option.** A backup whose checks don't pass is reported amber (backed up,
 unverified), never green, no matter what the entry declares.
 
-### Container-restore image matching
+### Database-restore-drill image matching
 
-For `container-restore`, `verify.image` **must be the same image** the
+For `db-restore-drill`, `verify.image` **must be the same image** the
 service's own database container runs — not just "a Postgres image." Some
 apps ship a customized database image with extensions the stock image
 doesn't have: Immich's Postgres needs vector-search extensions
@@ -202,7 +224,7 @@ in this repo, or ask before submitting.
 
 ## Worked examples
 
-### `catalog/immich.yaml` — dump + files, container-restore
+### `catalog/immich.yaml` — dump + files, db-restore-drill
 
 - **`detect.docker.imagePattern`** and **`orEnv.IMMICH_VERSION`** let the
   wizard spot a running Immich install automatically.
@@ -217,7 +239,7 @@ in this repo, or ask before submitting.
   as.
 - `backup.files` backs up `{{ .Params.library_dir }}` directly — that's the
   actual photo/video files, which restic can read live.
-- `verify.method: container-restore` with `verify.image` set to the
+- `verify.method: db-restore-drill` with `verify.image` set to the
   parameterized `db_image`, and `filterStderr: ["already exists"]` to
   tolerate the one expected benign error from skipping `--clean`.
 - The database container could in principle be templated as
@@ -225,7 +247,7 @@ in this repo, or ask before submitting.
   yet, so this entry asks for `db_container` as an ordinary parameter
   instead, matching how the generic `postgres` entry does it.
 
-### `catalog/vaultwarden.yaml` — stop-start + files, archive-integrity
+### `catalog/vaultwarden.yaml` — stop-start + files, archive-integrity + restart-smoke
 
 - Vaultwarden keeps its database (SQLite) and everything else in one data
   folder. Copying a live SQLite file risks catching it mid-write, so this
@@ -234,18 +256,17 @@ in this repo, or ask before submitting.
   (`{{ .Params.container }}`, defaulting to `vaultwarden`); `backup.files`
   backs up `{{ .Params.data_dir }}` (the folder mounted at `/data`) while
   the container is down.
-- `verify.method: archive-integrity` — there's no SQL dump to restore, so
-  the check is that the resulting archive is complete and readable, plus
-  the automatic restic read-back.
+- `verify.methods` declares two checks, both of which must pass:
+  - `archive-integrity` — the resulting archive is complete and readable,
+    plus the automatic restic read-back.
+  - `restart-smoke` — after the backup, the container is running and responds
+    on its health endpoint (`/alive` on port 80 inside the container).
 - `restartPolicy: always` documents (for humans reading the file) that this
   strategy restarts the container on every run, success or failure — the
   engine itself guarantees the restart regardless of what this field says;
   it's not a switch you can use to skip restarting.
-- A login smoke test (checking Vaultwarden actually answers after the
-  restart) would need the `restart-smoke` verification method, which isn't
-  implemented yet — this is an honest limitation, not a hidden gap.
 
-### `catalog/couchdb.yaml` — stop-start + files, archive-integrity
+### `catalog/couchdb.yaml` — stop-start + files, archive-integrity + restart-smoke
 
 - Structurally identical to Vaultwarden's entry: CouchDB's data files are
   append-only, but a copy taken mid-compaction can still be caught in an
@@ -253,8 +274,10 @@ in this repo, or ask before submitting.
 - `container` defaults to `couchdb`; `data_dir` has no default because the
   mount path varies by install (the prompt tells the user it's normally
   mounted at `/opt/couchdb/data`).
-- Same `verify.method: archive-integrity` and `restartPolicy: always` as
-  Vaultwarden, for the same reasons.
+- Same `verify.methods: [archive-integrity, restart-smoke]` and
+  `restartPolicy: always` as Vaultwarden, for the same reasons. The
+  restart-smoke probe checks that CouchDB's health endpoint (`/_up` on
+  port 5984) responds after the container restarts.
 
 ## Contribution checklist
 

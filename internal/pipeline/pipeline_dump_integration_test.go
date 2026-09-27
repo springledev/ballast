@@ -31,7 +31,7 @@ backup:
       command: ["pg_dumpall", "-U", "postgres"]
       format: sql
 verify:
-  method: container-restore
+%s
   image: %s
   filterStderr:
     - "already exists"
@@ -39,13 +39,17 @@ verify:
 `
 
 // TestPipelineDumpPostgresIntegration runs the `dump` strategy and
-// `container-restore` verification end-to-end against a real
-// PostgreSQL container (spec §14 step 11: "a dump integration test
-// against a real Postgres container"), via testcontainers-go
-// (AGENTS.md mandates it for Docker-dependent tests). It seeds a
-// table, backs it up through the postgres catalog entry to a local
-// restic repository, and asserts the run reaches SUCCESS with a
-// passing container-restore verification record.
+// its verification end-to-end — once with the legacy single
+// `container-restore` method (alias for `db-restore-drill`), and once
+// declaring every built-in registry method together
+// (archive-integrity + db-restore-drill + restart-smoke probing the
+// live database over TCP; spec §17.6) — against a real PostgreSQL container (spec
+// §14 step 11: "a dump integration test against a real Postgres
+// container"), via testcontainers-go (AGENTS.md mandates it for
+// Docker-dependent tests). It seeds a table, backs it up through the
+// postgres catalog entry to a local restic repository, and asserts
+// each run passes VERIFYING → SUCCESS with a passing record for every
+// declared method plus restic's read-back.
 //
 // It skips cleanly, naming the reason, when restic or Docker is not
 // available.
@@ -88,6 +92,36 @@ func TestPipelineDumpPostgresIntegration(t *testing.T) {
 		t.Fatalf("seeding postgres: %v (stderr: %s)", err, res.Stderr)
 	}
 
+	cases := []struct {
+		name        string
+		verifyBlock string
+		wantMethods []string
+	}{
+		{
+			name:        "legacy container-restore alias",
+			verifyBlock: "  method: container-restore",
+			wantMethods: []string{"db-restore-drill", "restic-read-back"},
+		},
+		{
+			name: "every registry method together",
+			verifyBlock: "  methods: [archive-integrity, db-restore-drill, restart-smoke]\n" +
+				"  smoke:\n    container: " + containerName + "\n    timeout: 60s\n    tcp:\n      port: 5432",
+			wantMethods: []string{"archive-integrity", "db-restore-drill", "restart-smoke", "restic-read-back"},
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			runPostgresDumpCase(t, ctx, r, bin, containerName, image, tc.verifyBlock, tc.wantMethods)
+		})
+	}
+}
+
+// runPostgresDumpCase backs up the running postgres container through
+// a fresh store and repository using verifyBlock, and asserts the run
+// reaches SUCCESS through VERIFYING with every wantMethods record
+// passing.
+func runPostgresDumpCase(t *testing.T, ctx context.Context, r *runner.Runner, bin, containerName, image, verifyBlock string, wantMethods []string) {
+	t.Helper()
 	credDir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(credDir, "ballast-restic-password.local"), []byte("integration-test-password\n"), 0o600); err != nil {
 		t.Fatal(err)
@@ -124,7 +158,7 @@ func TestPipelineDumpPostgresIntegration(t *testing.T) {
 
 	p := &Pipeline{
 		DB:        db,
-		Catalog:   registryWith(t, map[string]string{"postgres.yaml": fmt.Sprintf(postgresIntegrationEntryYAML, containerName, image)}),
+		Catalog:   registryWith(t, map[string]string{"postgres.yaml": fmt.Sprintf(postgresIntegrationEntryYAML, containerName, verifyBlock, image)}),
 		Runner:    r,
 		CredDir:   credDir,
 		WorkRoot:  t.TempDir(),
@@ -143,20 +177,24 @@ func TestPipelineDumpPostgresIntegration(t *testing.T) {
 	if err != nil || len(runs) != 1 {
 		t.Fatalf("RecentRuns: %v, %v", runs, err)
 	}
+	seq := transitionsOf(t, db, runs[0].ID)
+	if !containsInOrder(seq, string(engine.VERIFYING), string(engine.SUCCESS)) {
+		t.Errorf("transitions = %v, want VERIFYING then SUCCESS", seq)
+	}
 	results, err := engine.VerificationResults(db, runs[0].ID)
 	if err != nil {
 		t.Fatalf("VerificationResults: %v", err)
 	}
-	found := false
+	passed := map[string]bool{}
 	for _, res := range results {
-		if res.Method == "container-restore" {
-			found = true
-			if !res.Passed {
-				t.Errorf("container-restore record not passed: %+v", res)
-			}
+		if !res.Passed {
+			t.Errorf("verification record not passed: %+v", res)
 		}
+		passed[res.Method] = res.Passed
 	}
-	if !found {
-		t.Error("no container-restore verification record recorded")
+	for _, m := range wantMethods {
+		if !passed[m] {
+			t.Errorf("no passing %s verification record (got %v)", m, passed)
+		}
 	}
 }

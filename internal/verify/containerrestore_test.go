@@ -15,10 +15,11 @@ import (
 func runCheck(t *testing.T, opts Options, image string, filter []string, req Request) Result {
 	t.Helper()
 	entry := containerRestoreEntry(image, filter...)
-	c, err := For(entry, opts)
+	checks, err := For(entry, opts)
 	if err != nil {
 		t.Fatalf("For: %v", err)
 	}
+	c := checks[0]
 	if req.Service == "" {
 		req.Service = entry.Service
 	}
@@ -149,10 +150,11 @@ func TestContainerRestoreRequestEnv(t *testing.T) {
 func TestContainerRestoreEmptyRequestService(t *testing.T) {
 	opts, _, _ := stubSetup(t)
 	entry := containerRestoreEntry("postgres:16")
-	c, err := For(entry, opts)
+	checks, err := For(entry, opts)
 	if err != nil {
 		t.Fatalf("For: %v", err)
 	}
+	c := checks[0]
 	// Bypass runCheck (which fills Service in): no Service, no
 	// artifacts — the failure must still name the service.
 	res := c.Check(context.Background(), Request{})
@@ -317,10 +319,11 @@ func TestContainerRestoreReadyTimeout(t *testing.T) {
 	artifact := sqlArtifact(t, "database", "SELECT 1;\n")
 
 	entry := containerRestoreEntry("postgres:16")
-	c, err := For(entry, opts)
+	checks, err := For(entry, opts)
 	if err != nil {
 		t.Fatalf("For: %v", err)
 	}
+	c := checks[0]
 	cr := c.(*ContainerRestore)
 	cr.ReadyTimeout = 450 * time.Millisecond
 
@@ -528,10 +531,11 @@ func TestContainerRestoreCancelDuringReady(t *testing.T) {
 	artifact := sqlArtifact(t, "database", "SELECT 1;\n")
 
 	entry := containerRestoreEntry("postgres:16")
-	c, err := For(entry, opts)
+	checks, err := For(entry, opts)
 	if err != nil {
 		t.Fatalf("For: %v", err)
 	}
+	c := checks[0]
 	cr := c.(*ContainerRestore)
 	cr.ReadyTimeout = time.Minute // must not be reached
 
@@ -567,10 +571,11 @@ func TestContainerRestoreCancelDuringReadySettleDelay(t *testing.T) {
 	artifact := sqlArtifact(t, "database", "SELECT 1;\n")
 
 	entry := containerRestoreEntry("postgres:16")
-	c, err := For(entry, opts)
+	checks, err := For(entry, opts)
 	if err != nil {
 		t.Fatalf("For: %v", err)
 	}
+	c := checks[0]
 	cr := c.(*ContainerRestore)
 	cr.ReadyTimeout = time.Minute // must not be reached
 

@@ -42,6 +42,8 @@ type Machine struct {
 	notifier  Notifier        // optional; nil = no notifications (see SetNotifier)
 	notifyCtx context.Context // bounds each notifier call; set with notifier via SetNotifier
 	notifyErr error           // result of the most recent notification attempt (see NotifyErr)
+
+	required []string // verification methods SUCCESS needs (see RequireVerifications)
 }
 
 // StartRun creates (if needed) the job for service, creates a new run
@@ -152,6 +154,11 @@ func (m *Machine) Transition(to State, detail string) error {
 	}
 	if (to == FAILED || to == CANCELLED) && detail == "" {
 		return fmt.Errorf("transition to %s requires a detail (reason)", to)
+	}
+	if to == SUCCESS {
+		if err := m.checkRequired(); err != nil {
+			return err
+		}
 	}
 
 	if err := m.record(from, to, detail); err != nil {

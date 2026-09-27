@@ -67,7 +67,7 @@ backup:
   files:
     - path: "{{ .Params.library_dir }}"
 verify:
-  method: container-restore
+  method: db-restore-drill
   image: "{{ .Params.db_image }}" # MUST match the service's extensions (pgvector/vchord)
   filterStderr:
     - "already exists" # benign during restore into a fresh cluster

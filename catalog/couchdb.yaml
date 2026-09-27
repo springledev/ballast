@@ -7,9 +7,10 @@
 # starts the container again — even when the backup fails or is
 # cancelled.
 #
-# Verification: the archive is fully read back (tar index test) and
-# restic re-reads a sample of the snapshot. A failed restart fails the
-# run.
+# Verification: the archive is fully read back (tar index test),
+# restic re-reads a sample of the snapshot, and a restart smoke test
+# waits for the container to come back and answer on /_up (CouchDB's
+# unauthenticated health endpoint on its internal port 5984).
 apiVersion: ballast.dev/v1
 service: couchdb
 version: 1
@@ -35,7 +36,14 @@ backup:
   files:
     - path: "{{ .Params.data_dir }}"
 verify:
-  method: archive-integrity
+  methods:
+    - archive-integrity
+    - restart-smoke
   restartPolicy: always # stop-start restarts the container every run
+  smoke:
+    container: "{{ .Params.container }}"
+    http:
+      port: 5984
+      path: /_up
 notifications:
   failureVerbosity: full

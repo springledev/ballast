@@ -14,7 +14,7 @@ import (
 // the pipeline package translates between the two.
 type VerificationRecord struct {
 	// Method is the verification method, e.g. "archive-integrity",
-	// "container-restore", "restic-read-back".
+	// "db-restore-drill", "restic-read-back", "restart-smoke".
 	Method string
 	// Passed is the verdict. Anything that is not Passed and not
 	// Warning-only fails the VERIFYING phase.
@@ -157,4 +157,43 @@ func RecentRuns(db *sql.DB, service string, limit int) ([]Run, error) {
 		return nil, fmt.Errorf("listing recent runs for %s: %w", service, err)
 	}
 	return out, nil
+}
+
+// RequireVerifications declares the verification methods this run's
+// catalog entry asked for (spec §17.6). Once set, Transition refuses
+// SUCCESS unless every one of them has at least one recorded result
+// for this run and all of that method's results passed — so a method
+// that was skipped, never implemented, or silently dropped can never
+// turn a run green. Calling it again replaces the list.
+func (m *Machine) RequireVerifications(methods ...string) {
+	m.required = append([]string(nil), methods...)
+}
+
+// checkRequired enforces RequireVerifications against the persisted
+// results of this run.
+func (m *Machine) checkRequired() error {
+	if len(m.required) == 0 {
+		return nil
+	}
+	recs, err := VerificationResults(m.store, m.run.ID)
+	if err != nil {
+		return err
+	}
+	seen := make(map[string]bool, len(recs))
+	failed := make(map[string]bool)
+	for _, r := range recs {
+		seen[r.Method] = true
+		if !r.Passed {
+			failed[r.Method] = true
+		}
+	}
+	for _, method := range m.required {
+		if !seen[method] {
+			return fmt.Errorf("cannot mark %s run %d as verified: verification method %q never ran", m.run.Service, m.run.ID, method)
+		}
+		if failed[method] {
+			return fmt.Errorf("cannot mark %s run %d as verified: verification method %q did not pass", m.run.Service, m.run.ID, method)
+		}
+	}
+	return nil
 }

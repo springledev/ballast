@@ -1,0 +1,1 @@
+import{l as t}from"./status-CcShyWOw.js";import{d as e,k as s,c as l,n,t as r,m as i}from"./index-BaV7IYTY.js";const f=e({__name:"TrafficLight",props:{light:{}},setup(a){return(o,m)=>(s(),l("span",{class:n(["lamp",`lamp--${a.light}`])},r(i(t)[a.light]),3))}});export{f as _};

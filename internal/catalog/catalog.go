@@ -137,13 +137,68 @@ type ExecBackup struct {
 	VerifyScript string   `yaml:"verifyScript,omitempty" json:"verifyScript,omitempty"`
 }
 
-// Verify defines the verification hook paired with the backup strategy.
-// Every entry must define at least method "archive-integrity".
+// Verify defines the verification methods paired with the backup
+// strategy (spec §7, §17.6). An entry names exactly one of Method (a
+// single method) or Methods (several, all of which must pass).
 type Verify struct {
-	Method        string   `yaml:"method" json:"method"`
+	Method        string   `yaml:"method,omitempty" json:"method,omitempty"`
+	Methods       []string `yaml:"methods,omitempty" json:"methods,omitempty"`
 	Image         string   `yaml:"image,omitempty" json:"image,omitempty"`
 	FilterStderr  []string `yaml:"filterStderr,omitempty" json:"filterStderr,omitempty"`
 	RestartPolicy string   `yaml:"restartPolicy,omitempty" json:"restartPolicy,omitempty"`
+	Smoke         *Smoke   `yaml:"smoke,omitempty" json:"smoke,omitempty"`
+}
+
+// LegacyContainerRestore is the pre-registry name of the
+// db-restore-drill method. Entries written before the rename keep
+// working; MethodList reports the new name.
+const LegacyContainerRestore = "container-restore"
+
+// MethodList returns the declared verification methods in catalog
+// order, without duplicates, with the legacy "container-restore" name
+// reported as "db-restore-drill".
+func (v Verify) MethodList() []string {
+	all := v.Methods
+	if v.Method != "" {
+		all = append([]string{v.Method}, all...)
+	}
+	out := make([]string, 0, len(all))
+	seen := make(map[string]bool, len(all))
+	for _, m := range all {
+		if m == LegacyContainerRestore {
+			m = "db-restore-drill"
+		}
+		if !seen[m] {
+			seen[m] = true
+			out = append(out, m)
+		}
+	}
+	return out
+}
+
+// Smoke configures the restart-smoke verification method: after the
+// backup, Container must be running (and healthy, if it has a Docker
+// health check), and the optional HTTP or TCP probe must succeed from
+// inside the container's own network — all within Timeout.
+type Smoke struct {
+	Container string     `yaml:"container" json:"container"`
+	Timeout   string     `yaml:"timeout,omitempty" json:"timeout,omitempty"`
+	HTTP      *SmokeHTTP `yaml:"http,omitempty" json:"http,omitempty"`
+	TCP       *SmokeTCP  `yaml:"tcp,omitempty" json:"tcp,omitempty"`
+}
+
+// SmokeHTTP is an HTTP probe against the container's own localhost.
+// ExpectStatus defaults to 200; Path defaults to "/".
+type SmokeHTTP struct {
+	Port         int    `yaml:"port" json:"port"`
+	Path         string `yaml:"path,omitempty" json:"path,omitempty"`
+	ExpectStatus int    `yaml:"expectStatus,omitempty" json:"expectStatus,omitempty"`
+}
+
+// SmokeTCP is a TCP connect probe against the container's own
+// localhost.
+type SmokeTCP struct {
+	Port int `yaml:"port" json:"port"`
 }
 
 // Notifications configures per-service alerting behaviour.

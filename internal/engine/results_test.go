@@ -2,6 +2,7 @@ package engine
 
 import (
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -119,5 +120,62 @@ func TestRecentRunsUnknownService(t *testing.T) {
 	}
 	if len(runs) != 0 {
 		t.Errorf("runs = %v, want none", runs)
+	}
+}
+
+func TestRequireVerifications(t *testing.T) {
+	type rec struct {
+		method string
+		passed bool
+	}
+	cases := []struct {
+		name     string
+		required []string
+		recs     []rec
+		wantErr  string // "" = SUCCESS allowed
+	}{
+		{name: "no requirements", recs: []rec{{"archive-integrity", true}}},
+		{name: "all required passed", required: []string{"archive-integrity", "restart-smoke"}, recs: []rec{{"archive-integrity", true}, {"restart-smoke", true}, {"restic-read-back", true}}},
+		{name: "required method never ran", required: []string{"archive-integrity", "restart-smoke"}, recs: []rec{{"archive-integrity", true}}, wantErr: `"restart-smoke" never ran`},
+		{name: "required method failed", required: []string{"restart-smoke"}, recs: []rec{{"restart-smoke", false}}, wantErr: `"restart-smoke" did not pass`},
+		{name: "one of several results failed", required: []string{"db-restore-drill"}, recs: []rec{{"db-restore-drill", true}, {"db-restore-drill", false}}, wantErr: "did not pass"},
+		{name: "nothing recorded", required: []string{"archive-integrity"}, wantErr: "never ran"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			db := openTestDB(t).DB()
+			m, err := StartRun(db, "vaultwarden")
+			if err != nil {
+				t.Fatalf("StartRun: %v", err)
+			}
+			m.RequireVerifications(tc.required...)
+			for _, s := range []State{PREPARING, DUMPING, UPLOADING, VERIFYING} {
+				if err := m.Transition(s, string(s)); err != nil {
+					t.Fatalf("Transition(%s): %v", s, err)
+				}
+			}
+			for _, r := range tc.recs {
+				if err := m.RecordVerification(VerificationRecord{Method: r.method, Passed: r.passed}); err != nil {
+					t.Fatalf("RecordVerification: %v", err)
+				}
+			}
+			err = m.Transition(SUCCESS, "backup verified")
+			if tc.wantErr == "" {
+				if err != nil {
+					t.Fatalf("Transition(SUCCESS): %v", err)
+				}
+				return
+			}
+			if err == nil || !strings.Contains(err.Error(), tc.wantErr) {
+				t.Fatalf("Transition(SUCCESS) = %v, want error containing %q", err, tc.wantErr)
+			}
+			if m.Run().State != VERIFYING {
+				t.Errorf("state after refused SUCCESS = %s, want VERIFYING", m.Run().State)
+			}
+			// A refused SUCCESS must still leave FAILED reachable.
+			if err := m.Transition(FAILED, "verification incomplete"); err != nil {
+				t.Errorf("Transition(FAILED) after refusal: %v", err)
+			}
+		})
 	}
 }

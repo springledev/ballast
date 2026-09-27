@@ -73,7 +73,7 @@ type ContainerRestore struct {
 }
 
 // Method implements Checker.
-func (*ContainerRestore) Method() string { return "container-restore" }
+func (*ContainerRestore) Method() string { return MethodDBRestoreDrill }
 
 // Check restores every SQL artifact of the run into one new throwaway
 // container and reports the aggregate verdict.

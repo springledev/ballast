@@ -33,7 +33,7 @@ backup:
       command: ["mysqldump", "--all-databases", "--single-transaction", "-u", "root"]
       format: sql
 verify:
-  method: container-restore
+  method: db-restore-drill
   image: "{{ .Params.image }}"
   restartPolicy: never # dump strategy never stops containers
 notifications:

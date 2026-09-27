@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 	"testing"
 
@@ -187,8 +188,8 @@ func TestImmichCatalogRequirements(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LoadFile(immich.yaml): %v", err)
 	}
-	if entry.Verify.Method != "container-restore" {
-		t.Errorf("Verify.Method = %q, want container-restore", entry.Verify.Method)
+	if entry.Verify.Method != "db-restore-drill" {
+		t.Errorf("Verify.Method = %q, want db-restore-drill", entry.Verify.Method)
 	}
 	found := false
 	for _, s := range entry.Verify.FilterStderr {
@@ -211,9 +212,10 @@ func TestImmichCatalogRequirements(t *testing.T) {
 }
 
 // TestStopStartCatalogRequirements pins that vaultwarden and couchdb
-// use the stop-start strategy verified by archive-integrity — the
-// combination that guarantees the container is restarted and the
-// data-folder archive is read back, per catalog/vaultwarden.yaml and
+// use the stop-start strategy verified by archive-integrity and
+// restart-smoke — the combination that guarantees the container is
+// restarted, answers its health endpoint again, and the data-folder
+// archive is read back, per catalog/vaultwarden.yaml and
 // catalog/couchdb.yaml's own doc comments.
 func TestStopStartCatalogRequirements(t *testing.T) {
 	for _, svc := range []string{"vaultwarden", "couchdb"} {
@@ -225,8 +227,11 @@ func TestStopStartCatalogRequirements(t *testing.T) {
 			if entry.Backup.Strategy != "stop-start" {
 				t.Errorf("Backup.Strategy = %q, want stop-start", entry.Backup.Strategy)
 			}
-			if entry.Verify.Method != "archive-integrity" {
-				t.Errorf("Verify.Method = %q, want archive-integrity", entry.Verify.Method)
+			if got := entry.Verify.MethodList(); !slices.Equal(got, []string{"archive-integrity", "restart-smoke"}) {
+				t.Errorf("Verify.MethodList() = %v, want [archive-integrity restart-smoke]", got)
+			}
+			if sm := entry.Verify.Smoke; sm == nil || sm.HTTP == nil || sm.Container != "{{ .Params.container }}" {
+				t.Errorf("Verify.Smoke = %+v, want an HTTP probe of the service's container", sm)
 			}
 			if entry.Backup.StopStart == nil || len(entry.Backup.StopStart.Containers) == 0 {
 				t.Error("Backup.StopStart.Containers is empty")

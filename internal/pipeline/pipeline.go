@@ -199,10 +199,13 @@ func (p *Pipeline) Run(ctx context.Context, service string) (engine.State, error
 	if err != nil {
 		return fail(err)
 	}
-	checker, err := verify.For(entry, verify.Options{Runner: p.Runner, Docker: docker})
+	checkers, err := verify.For(entry, verify.Options{Runner: p.Runner, Docker: docker})
 	if err != nil {
 		return fail(err)
 	}
+	// SUCCESS is refused by the engine unless every declared method
+	// and restic's read-back recorded a passing result (spec §17.6).
+	m.RequireVerifications(append(entry.Verify.MethodList(), readBackMethod)...)
 	// Credential files are read fresh for every run (inside Open): a
 	// destination added, or a key file replaced, after Ballast started
 	// must still be redacted.
@@ -259,7 +262,7 @@ func (p *Pipeline) Run(ctx context.Context, service string) (engine.State, error
 	if err := m.Transition(engine.VERIFYING, "verifying"); err != nil {
 		return fail(err)
 	}
-	checks, err := p.runChecks(ctx, service, entry, checker, res, repo, br.SnapshotID)
+	checks, err := p.runChecks(ctx, service, entry, checkers, res, repo, br.SnapshotID)
 	if err != nil {
 		return fail(err)
 	}
@@ -301,26 +304,34 @@ type verifyCheck struct {
 	unverifiable bool
 }
 
+// readBackMethod is the method name of restic's own read-back check,
+// which every run records.
+const readBackMethod = "restic-read-back"
+
 // runChecks runs every verification check the VERIFYING phase
 // requires:
 //
-//   - the catalog's declared checker, unless the backup is a
-//     zero-artifact files backup verified by archive-integrity — with
-//     no artifacts to inspect, archive-integrity would report a
-//     silent failure; that case is folded into the read-back result
-//     below instead (step 11 user decision).
+//   - every checker the catalog declares, in order — except that an
+//     archive-integrity check of a zero-artifact files backup has
+//     nothing to inspect and would report a silent failure; that case
+//     is folded into the read-back result below instead (step 11 user
+//     decision).
 //   - always, restic's own read-back, which is what proves a
 //     zero-artifact files backup is restorable at all, and is
 //     recorded as an explicit result either way — never silently
 //     skipped.
-func (p *Pipeline) runChecks(ctx context.Context, service string, entry *catalog.Entry, checker verify.Checker, res *strategy.Result, repo *restic.Repository, snapshotID string) ([]verifyCheck, error) {
+func (p *Pipeline) runChecks(ctx context.Context, service string, entry *catalog.Entry, checkers []verify.Checker, res *strategy.Result, repo *restic.Repository, snapshotID string) ([]verifyCheck, error) {
 	var checks []verifyCheck
 
-	runDeclaredChecker := len(res.Artifacts) > 0 || checker.Method() != "archive-integrity"
-	if runDeclaredChecker {
-		var sourceContainer string
-		if len(entry.Backup.Dumps) > 0 {
-			sourceContainer = entry.Backup.Dumps[0].Container
+	var sourceContainer string
+	if len(entry.Backup.Dumps) > 0 {
+		sourceContainer = entry.Backup.Dumps[0].Container
+	}
+	foldArchive := false
+	for _, checker := range checkers {
+		if len(res.Artifacts) == 0 && checker.Method() == verify.MethodArchiveIntegrity {
+			foldArchive = true
+			continue
 		}
 		vres := checker.Check(ctx, verify.Request{
 			Service:         service,
@@ -333,34 +344,35 @@ func (p *Pipeline) runChecks(ctx context.Context, service string, entry *catalog
 		checks = append(checks, verifyCheck{rec: p.toRecord(vres)})
 	}
 
+	var readBack verifyCheck
 	rb, rbErr := repo.ReadBack(ctx, snapshotID)
 	switch {
 	case rbErr != nil && ctx.Err() != nil:
 		return nil, ctx.Err()
 	case rbErr != nil:
-		checks = append(checks, verifyCheck{
+		readBack = verifyCheck{
 			rec: engine.VerificationRecord{
-				Method: "restic-read-back",
+				Method: readBackMethod,
 				Passed: false,
 				Detail: p.redact(fmt.Sprintf("could not read the backup back from the destination to confirm it is restorable: %v", rbErr)),
 			},
 			unverifiable: true,
-		})
+		}
 	default:
-		checks = append(checks, verifyCheck{
+		readBack = verifyCheck{
 			rec: engine.VerificationRecord{
-				Method: "restic-read-back",
+				Method: readBackMethod,
 				Passed: true,
 				Detail: fmt.Sprintf("read %d sample file(s) back from snapshot %s to confirm the backup is restorable", len(rb.Samples), rb.Snapshot.ShortID),
 			},
-		})
+		}
 	}
+	checks = append(checks, readBack)
 
-	if len(res.Artifacts) == 0 && checker.Method() == "archive-integrity" {
-		readBack := checks[len(checks)-1]
+	if foldArchive {
 		checks = append(checks, verifyCheck{
 			rec: engine.VerificationRecord{
-				Method:  "archive-integrity",
+				Method:  verify.MethodArchiveIntegrity,
 				Passed:  readBack.rec.Passed,
 				Warning: readBack.rec.Warning,
 				Detail:  "No archive files were produced (files are uploaded directly); integrity was proven by reading the files back from the backup.",

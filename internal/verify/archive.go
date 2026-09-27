@@ -24,7 +24,7 @@ import (
 //   - zip: every member opens and fully decompresses;
 //   - anything else (sql, text, unspecified): the file must exist,
 //     be regular, and be non-empty — real proof for database dumps
-//     comes from container-restore, this is the floor every entry
+//     comes from db-restore-drill, this is the floor every entry
 //     must clear (spec §6 schema rules).
 //
 // It uses the standard library for the structure checks — verifying a

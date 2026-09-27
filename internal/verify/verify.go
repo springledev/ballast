@@ -9,29 +9,36 @@
 // pass; if no checker can run, the run stays amber
 // (SUCCESS_UNVERIFIED) — never green.
 //
-// This step's checkers (PLAN step 8):
+// Methods are pluggable (spec §17.6): a Registry maps each catalog
+// method name to a Factory, and DefaultRegistry holds the built-in
+// ones:
 //
 //   - archive-integrity: every artifact is readable and structurally
 //     sound — tar headers walk to EOF, gzip streams checksum to EOF,
 //     zip members decompress; plain formats must at least exist and
 //     be non-empty (spec §7.1, the mandatory minimum).
-//   - container-restore: a database dump is fed into a throwaway
-//     container of the catalog-declared image; stderr is filtered
-//     whitelist-style so only catalog-declared benign patterns pass,
-//     and the container is destroyed afterwards no matter what
-//     (spec §7.2, including all its normative MUSTs).
+//   - db-restore-drill (formerly container-restore, still accepted):
+//     a database dump is fed into a throwaway container of the
+//     catalog-declared image; stderr is filtered whitelist-style so
+//     only catalog-declared benign patterns pass, and the container is
+//     destroyed afterwards no matter what (spec §7.2).
+//   - restart-smoke: the service's container is running (and healthy,
+//     if it has a health check) and an optional HTTP/TCP probe from
+//     inside its own network succeeds (spec §7.4).
 //
-// The remaining spec §7 methods (read-back — the restic package
-// already provides the primitive; restart-smoke; exec-script — the
-// Phase-2 reserved hook) are reached here in later steps; For rejects
-// them with a plain-English error until implemented.
+// An entry may declare several methods; every one must pass. A method
+// with no registered factory ("read-back" and "exec-script" today) is
+// a hard error from For — never a silent pass.
 package verify
 
 import (
 	"context"
 	"fmt"
-	"github.com/springledev/ballast/internal/dockerhost"
+	"sort"
+	"strings"
 	"time"
+
+	"github.com/springledev/ballast/internal/dockerhost"
 
 	"github.com/springledev/ballast/internal/catalog"
 	"github.com/springledev/ballast/internal/runner"
@@ -75,7 +82,7 @@ type Result struct {
 // Checker verifies one backup. Implementations are constructed by For.
 type Checker interface {
 	// Method returns the catalog verification method this checker
-	// implements ("archive-integrity", "container-restore").
+	// implements ("archive-integrity", "db-restore-drill", ...).
 	Method() string
 
 	// Check inspects the run. It never panics and never blocks
@@ -114,38 +121,109 @@ type Options struct {
 	// Docker host (spec §17.2). The zero value is the local daemon
 	// with "docker" from $PATH; tests use dockerhost.NewLocal(stub).
 	Docker dockerhost.Docker
+
+	// HelperImage is the small image restart-smoke runs its HTTP/TCP
+	// probe in ("" = strategy.DefaultVolumeHelperImage, busybox wget
+	// and nc).
+	HelperImage string
 }
 
-// For returns the Checker implementing the entry's verify.method,
-// validating that the entry carries everything that method needs. The
-// entry must already be resolved (template substitution done, see
+// Built-in verification method names.
+const (
+	MethodArchiveIntegrity = "archive-integrity"
+	MethodDBRestoreDrill   = "db-restore-drill"
+	MethodRestartSmoke     = "restart-smoke"
+)
+
+// Factory builds the Checker for one method from a resolved catalog
+// entry, validating that the entry carries everything the method
+// needs.
+type Factory func(entry *catalog.Entry, opts Options) (Checker, error)
+
+// Registry maps catalog verification method names to their factories.
+// The zero value is empty; use DefaultRegistry for the built-ins.
+type Registry struct {
+	factories map[string]Factory
+}
+
+// Register adds (or replaces) the factory for method.
+func (r *Registry) Register(method string, f Factory) {
+	if r.factories == nil {
+		r.factories = make(map[string]Factory)
+	}
+	r.factories[method] = f
+}
+
+// Methods lists the registered method names, sorted.
+func (r *Registry) Methods() []string {
+	out := make([]string, 0, len(r.factories))
+	for m := range r.factories {
+		out = append(out, m)
+	}
+	sort.Strings(out)
+	return out
+}
+
+// For returns one Checker per method the entry declares
+// (catalog.Verify.MethodList), in catalog order. It fails if any
+// declared method is not registered or its factory rejects the entry:
+// a method that cannot run must fail the job, never be skipped.
+//
+// The entry must already be resolved (template substitution done, see
 // catalog.Entry.Resolve) — a still-templated image would restore into
 // the wrong container, which is exactly what verification exists to
 // catch.
-func For(entry *catalog.Entry, opts Options) (Checker, error) {
+func (r *Registry) For(entry *catalog.Entry, opts Options) ([]Checker, error) {
 	if entry == nil {
 		return nil, fmt.Errorf("catalog entry must not be nil")
 	}
-	switch entry.Verify.Method {
-	case "archive-integrity":
-		return ArchiveIntegrity{}, nil
-	case "container-restore":
-		if opts.Runner == nil {
-			return nil, fmt.Errorf("service %s: container-restore verification needs a command runner", entry.Service)
-		}
-		if entry.Verify.Image == "" {
-			return nil, fmt.Errorf("service %s: container-restore verification needs verify.image (the schema enforces this — was the entry built with catalog.Load?)", entry.Service)
-		}
-		return &ContainerRestore{
-			service: entry.Service,
-			image:   entry.Verify.Image,
-			filter:  entry.Verify.FilterStderr,
-			opts:    opts,
-		}, nil
-	default:
-		// "read-back", "restart-smoke", "exec-script" arrive in
-		// later §14 steps; fail loudly rather than silently skipping
-		// verification a catalog entry asked for.
-		return nil, fmt.Errorf("service %s: verification method %q is not implemented yet (implemented: archive-integrity, container-restore)", entry.Service, entry.Verify.Method)
+	methods := entry.Verify.MethodList()
+	if len(methods) == 0 {
+		return nil, fmt.Errorf("service %s: the catalog entry declares no verification method", entry.Service)
 	}
+	checkers := make([]Checker, 0, len(methods))
+	for _, m := range methods {
+		f, ok := r.factories[m]
+		if !ok {
+			return nil, fmt.Errorf("service %s: verification method %q is not available in this version of Ballast (available: %s)", entry.Service, m, strings.Join(r.Methods(), ", "))
+		}
+		c, err := f(entry, opts)
+		if err != nil {
+			return nil, err
+		}
+		checkers = append(checkers, c)
+	}
+	return checkers, nil
+}
+
+// DefaultRegistry returns a new Registry holding the built-in methods.
+func DefaultRegistry() *Registry {
+	r := &Registry{}
+	r.Register(MethodArchiveIntegrity, func(*catalog.Entry, Options) (Checker, error) {
+		return ArchiveIntegrity{}, nil
+	})
+	r.Register(MethodDBRestoreDrill, newDBRestoreDrill)
+	r.Register(MethodRestartSmoke, newRestartSmoke)
+	return r
+}
+
+// For is DefaultRegistry().For.
+func For(entry *catalog.Entry, opts Options) ([]Checker, error) {
+	return DefaultRegistry().For(entry, opts)
+}
+
+// newDBRestoreDrill is the db-restore-drill Factory.
+func newDBRestoreDrill(entry *catalog.Entry, opts Options) (Checker, error) {
+	if opts.Runner == nil {
+		return nil, fmt.Errorf("service %s: db-restore-drill verification needs a command runner", entry.Service)
+	}
+	if entry.Verify.Image == "" {
+		return nil, fmt.Errorf("service %s: db-restore-drill verification needs verify.image (the schema enforces this — was the entry built with catalog.Load?)", entry.Service)
+	}
+	return &ContainerRestore{
+		service: entry.Service,
+		image:   entry.Verify.Image,
+		filter:  entry.Verify.FilterStderr,
+		opts:    opts,
+	}, nil
 }

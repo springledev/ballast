@@ -28,7 +28,7 @@ backup:
       command: ["pg_dumpall", "-U", "postgres"]
       format: sql
 verify:
-  method: container-restore
+  method: db-restore-drill
   image: "{{ .Params.image }}"
   filterStderr:
     - "already exists" # benign during restore into a fresh cluster

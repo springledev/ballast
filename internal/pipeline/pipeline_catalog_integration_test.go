@@ -220,15 +220,15 @@ func TestPipelineImmichCatalogIntegration(t *testing.T) {
 	}
 	found := false
 	for _, res := range results {
-		if res.Method == "container-restore" {
+		if res.Method == "db-restore-drill" {
 			found = true
 			if !res.Passed {
-				t.Errorf("container-restore record not passed: %+v", res)
+				t.Errorf("db-restore-drill record not passed: %+v", res)
 			}
 		}
 	}
 	if !found {
-		t.Error("no container-restore verification record recorded")
+		t.Error("no db-restore-drill verification record recorded")
 	}
 
 	snaps, err := repo.Snapshots(ctx, restic.SnapshotFilter{})
@@ -294,7 +294,7 @@ func TestPipelineVaultwardenCatalogIntegration(t *testing.T) {
 			ContainerRequest: testcontainers.ContainerRequest{
 				Image: fixtureImage,
 				Name:  containerName,
-				Cmd:   []string{"sleep", "3600"},
+				Cmd:   []string{"sh", "-c", "mkdir -p /www && echo ok > /www/alive && exec httpd -f -p 80 -h /www"},
 			},
 			Started: true,
 		})
@@ -343,6 +343,18 @@ func TestPipelineVaultwardenCatalogIntegration(t *testing.T) {
 		}
 		if !found {
 			t.Error("no archive-integrity verification record recorded")
+		}
+		foundSmoke := false
+		for _, res := range results {
+			if res.Method == "restart-smoke" {
+				foundSmoke = true
+				if !res.Passed {
+					t.Errorf("restart-smoke record not passed: %+v", res)
+				}
+			}
+		}
+		if !foundSmoke {
+			t.Error("no restart-smoke verification record recorded")
 		}
 
 		if !dockerContainerRunning(t, containerName) {

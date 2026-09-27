@@ -47,6 +47,19 @@ func (e *Entry) DeepCopy() *Entry {
 		c.Backup.Exec = &ec
 	}
 	c.Verify.FilterStderr = append([]string(nil), e.Verify.FilterStderr...)
+	c.Verify.Methods = append([]string(nil), e.Verify.Methods...)
+	if sm := e.Verify.Smoke; sm != nil {
+		cs := *sm
+		if sm.HTTP != nil {
+			h := *sm.HTTP
+			cs.HTTP = &h
+		}
+		if sm.TCP != nil {
+			t := *sm.TCP
+			cs.TCP = &t
+		}
+		c.Verify.Smoke = &cs
+	}
 	return &c
 }
 
@@ -231,6 +244,20 @@ func (e *Entry) Resolve(ctx TemplateContext) error {
 			return fmt.Errorf("verify image: %w", err)
 		}
 		e.Verify.Image = v
+	}
+	if sm := e.Verify.Smoke; sm != nil {
+		c, err := substitute(sm.Container, ctx)
+		if err != nil {
+			return fmt.Errorf("verify smoke container: %w", err)
+		}
+		sm.Container = c
+		if sm.HTTP != nil && sm.HTTP.Path != "" {
+			p, err := substitute(sm.HTTP.Path, ctx)
+			if err != nil {
+				return fmt.Errorf("verify smoke http path: %w", err)
+			}
+			sm.HTTP.Path = p
+		}
 	}
 	return nil
 }

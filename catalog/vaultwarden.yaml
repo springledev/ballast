@@ -6,10 +6,11 @@
 # the data folder, and always starts the container again — even when
 # the backup fails or is cancelled.
 #
-# Verification: the archive is fully read back (tar index test) and
-# restic re-reads a sample of the snapshot. A failed restart fails the
-# run. The login smoke test from spec §5.1 needs the restart-smoke
-# verification method, which is not implemented yet.
+# Verification: the archive is fully read back (tar index test),
+# restic re-reads a sample of the snapshot, and a restart smoke test
+# waits for the container to come back and answer on /alive (the
+# health endpoint Vaultwarden serves on its internal port 80; change
+# smoke.http.port in a copy of this entry if you set ROCKET_PORT).
 apiVersion: ballast.dev/v1
 service: vaultwarden
 version: 1
@@ -35,7 +36,14 @@ backup:
   files:
     - path: "{{ .Params.data_dir }}"
 verify:
-  method: archive-integrity
+  methods:
+    - archive-integrity
+    - restart-smoke
   restartPolicy: always # stop-start restarts the container every run
+  smoke:
+    container: "{{ .Params.container }}"
+    http:
+      port: 80
+      path: /alive
 notifications:
   failureVerbosity: full

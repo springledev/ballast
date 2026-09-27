@@ -595,3 +595,140 @@ func TestDeepCopyDiscovery(t *testing.T) {
 		t.Errorf("deep copy not mutated correctly: %+v", deep.Discovery["database"])
 	}
 }
+
+// verifyEntryYAML returns a minimal files-strategy entry whose verify
+// block is verifyBlock (indented two spaces under "verify:").
+func verifyEntryYAML(verifyBlock string) string {
+	return `
+apiVersion: ballast.dev/v1
+service: demo
+version: 1
+parameters:
+  - name: container
+    required: true
+backup:
+  strategy: files
+  files:
+    - path: /srv/demo
+verify:
+` + verifyBlock
+}
+
+func TestLoadVerifyMethods(t *testing.T) {
+	t.Parallel()
+	smoke := "  smoke:\n    container: web\n"
+	cases := []struct {
+		name    string
+		verify  string
+		wantErr string // "" = accepted
+	}{
+		{name: "single method", verify: "  method: archive-integrity\n"},
+		{name: "methods list", verify: "  methods: [archive-integrity, restart-smoke]\n" + smoke},
+		{name: "legacy container-restore with image", verify: "  method: container-restore\n  image: postgres:16\n"},
+		{name: "db-restore-drill with image", verify: "  method: db-restore-drill\n  image: postgres:16\n"},
+		{name: "smoke with http probe", verify: "  method: restart-smoke\n  smoke:\n    container: web\n    timeout: 90s\n    http:\n      port: 80\n      path: /alive\n      expectStatus: 204\n"},
+		{name: "smoke with tcp probe", verify: "  method: restart-smoke\n  smoke:\n    container: web\n    tcp:\n      port: 5432\n"},
+		{name: "method and methods both", verify: "  method: archive-integrity\n  methods: [archive-integrity]\n", wantErr: "catalog validation"},
+		{name: "neither method nor methods", verify: "  restartPolicy: never\n", wantErr: "catalog validation"},
+		{name: "empty methods list", verify: "  methods: []\n", wantErr: "catalog validation"},
+		{name: "duplicate methods", verify: "  methods: [archive-integrity, archive-integrity]\n", wantErr: "catalog validation"},
+		{name: "unknown method", verify: "  method: vibes-check\n", wantErr: "catalog validation"},
+		{name: "unknown method in list", verify: "  methods: [archive-integrity, vibes-check]\n", wantErr: "catalog validation"},
+		{name: "db-restore-drill without image", verify: "  method: db-restore-drill\n", wantErr: "image"},
+		{name: "db-restore-drill in list without image", verify: "  methods: [archive-integrity, db-restore-drill]\n", wantErr: "image"},
+		{name: "container-restore without image", verify: "  method: container-restore\n", wantErr: "image"},
+		{name: "restart-smoke without smoke", verify: "  method: restart-smoke\n", wantErr: "smoke"},
+		{name: "restart-smoke in list without smoke", verify: "  methods: [archive-integrity, restart-smoke]\n", wantErr: "smoke"},
+		{name: "smoke without container", verify: "  method: restart-smoke\n  smoke:\n    timeout: 30s\n", wantErr: "container"},
+		{name: "smoke with http and tcp", verify: "  method: restart-smoke\n  smoke:\n    container: web\n    http: {port: 80}\n    tcp: {port: 80}\n", wantErr: "catalog validation"},
+		{name: "smoke port out of range", verify: "  method: restart-smoke\n  smoke:\n    container: web\n    tcp: {port: 70000}\n", wantErr: "catalog validation"},
+		{name: "smoke bad timeout", verify: "  method: restart-smoke\n  smoke:\n    container: web\n    timeout: soon\n", wantErr: "catalog validation"},
+		{name: "smoke path without slash", verify: "  method: restart-smoke\n  smoke:\n    container: web\n    http: {port: 80, path: alive}\n", wantErr: "catalog validation"},
+		{name: "smoke unknown key", verify: "  method: restart-smoke\n  smoke:\n    container: web\n    udp: {port: 53}\n", wantErr: "not allowed"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			_, err := Load([]byte(verifyEntryYAML(tc.verify)))
+			switch {
+			case tc.wantErr == "" && err != nil:
+				t.Fatalf("Load: unexpected error %v", err)
+			case tc.wantErr != "" && err == nil:
+				t.Fatalf("Load: accepted, want error containing %q", tc.wantErr)
+			case tc.wantErr != "" && !strings.Contains(err.Error(), tc.wantErr):
+				t.Fatalf("Load error = %v, want it to contain %q", err, tc.wantErr)
+			}
+		})
+	}
+}
+
+func TestVerifyMethodList(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name string
+		v    Verify
+		want []string
+	}{
+		{name: "empty", v: Verify{}, want: []string{}},
+		{name: "single", v: Verify{Method: "archive-integrity"}, want: []string{"archive-integrity"}},
+		{name: "list order kept", v: Verify{Methods: []string{"restart-smoke", "archive-integrity"}}, want: []string{"restart-smoke", "archive-integrity"}},
+		{name: "legacy alias", v: Verify{Method: "container-restore"}, want: []string{"db-restore-drill"}},
+		{name: "alias and new name dedupe", v: Verify{Methods: []string{"container-restore", "db-restore-drill", "archive-integrity"}}, want: []string{"db-restore-drill", "archive-integrity"}},
+		{name: "method first then methods", v: Verify{Method: "archive-integrity", Methods: []string{"restart-smoke", "archive-integrity"}}, want: []string{"archive-integrity", "restart-smoke"}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			got := tc.v.MethodList()
+			if strings.Join(got, ",") != strings.Join(tc.want, ",") {
+				t.Errorf("MethodList() = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestDeepCopyVerifySmoke(t *testing.T) {
+	t.Parallel()
+	orig := &Entry{Verify: Verify{
+		Methods: []string{"archive-integrity", "restart-smoke"},
+		Smoke: &Smoke{
+			Container: "web",
+			HTTP:      &SmokeHTTP{Port: 80, Path: "/alive"},
+			TCP:       &SmokeTCP{Port: 81},
+		},
+	}}
+	c := orig.DeepCopy()
+	c.Verify.Methods[0] = "changed"
+	c.Verify.Smoke.Container = "changed"
+	c.Verify.Smoke.HTTP.Path = "/changed"
+	c.Verify.Smoke.TCP.Port = 1
+	if orig.Verify.Methods[0] != "archive-integrity" || orig.Verify.Smoke.Container != "web" ||
+		orig.Verify.Smoke.HTTP.Path != "/alive" || orig.Verify.Smoke.TCP.Port != 81 {
+		t.Errorf("mutating the copy changed the original: %+v / %+v / %+v", orig.Verify, *orig.Verify.Smoke.HTTP, *orig.Verify.Smoke.TCP)
+	}
+}
+
+func TestResolveSmokeTemplates(t *testing.T) {
+	t.Parallel()
+	e, err := Load([]byte(verifyEntryYAML("  method: restart-smoke\n  smoke:\n    container: \"{{ .Params.container }}\"\n    http:\n      port: 80\n      path: \"/{{ .Params.container }}/alive\"\n")))
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if err := e.Resolve(TemplateContext{Params: map[string]string{"container": "vw"}}); err != nil {
+		t.Fatalf("Resolve: %v", err)
+	}
+	if e.Verify.Smoke.Container != "vw" {
+		t.Errorf("Smoke.Container = %q, want vw", e.Verify.Smoke.Container)
+	}
+	if e.Verify.Smoke.HTTP.Path != "/vw/alive" {
+		t.Errorf("Smoke.HTTP.Path = %q, want /vw/alive", e.Verify.Smoke.HTTP.Path)
+	}
+
+	bad, err := Load([]byte(verifyEntryYAML("  method: restart-smoke\n  smoke:\n    container: \"{{ .Params.nope }}\"\n")))
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if err := bad.Resolve(TemplateContext{Params: map[string]string{"container": "vw"}}); err == nil || !strings.Contains(err.Error(), "smoke container") {
+		t.Errorf("Resolve with unknown param = %v, want a smoke container error", err)
+	}
+}

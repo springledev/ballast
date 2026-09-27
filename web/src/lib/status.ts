@@ -74,6 +74,8 @@ export const checkLabels: Record<string, string> = {
   "restic-read-back": "Read files back out of the stored backup",
   "archive-integrity": "Checked the backup archive is complete and readable",
   "container-restore": "Restored the database into a temporary copy and checked it",
+  "db-restore-drill": "Restored the database into a temporary copy and checked it",
+  "restart-smoke": "Checked the service came back up after the backup",
 };
 
 export function describeCheck(method: string): string {
