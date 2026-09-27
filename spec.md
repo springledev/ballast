@@ -166,6 +166,8 @@
 
  Every strategy pairs with a **verification hook** (§7) and declares its artifact paths.
 
+ **Execution transports (v0.2 addition — see §17):** the `dump` strategy runs its command through a named transport: `docker-exec` (default; current v0.1 behavior), or `pct-exec` (Proxmox API `pct exec`, for bare-LXC guests with no Docker daemon). A catalog entry's `dumps[].transport` selects it; omitted defaults to `docker-exec`. `pct-exec` is read/dump-only — used for nothing but producing a backup artifact inside the guest (§17.4). This is separate from the `exec` strategy above, which remains the Phase-2 mobile escape hatch (§12) and is unaffected by transports.
+
 
 
  ---
@@ -331,6 +333,24 @@
  - `{{ .Params.* }}` / `{{ .Services.* }}` templating limited to string substitution; no arbitrary expressions.
 
  - Every catalog entry MUST define at least the mandatory-minimum verification (archive integrity).
+
+ **Discovery (v0.2 addition — see §17):** catalog entries MAY declare a `discovery` field per referenced container/guest, resolved at job-run time instead of hardcoding a container name:
+
+ ```yaml
+
+ discovery:
+
+   database:
+
+     type: docker-label
+
+     match: "com.docker.compose.service=db"
+
+     fallback: "{{ .Params.db_container }}"
+
+ ```
+
+ Resolved values are exposed to the entry as `{{ .Discovery.<name> }}`. This supersedes hardcoding (e.g. `immich.yaml`'s `db_container` parameter, noted as a deviation in §14 step 13) — §14 step 16 migrates bundled entries to this mechanism. Resolution failure MUST fail the job loudly; Ballast MUST NOT silently fall back past the entry's own declared `fallback`.
 
 
 
@@ -559,8 +579,58 @@
  13. Docs: quickstart (15-min wizard → verified backup) and catalog contribution guide, shipped together with the bundled Immich, Vaultwarden, and CouchDB catalog entries (§15) as its worked examples.
 
 
+ **v0.1 is complete as of step 13. Steps 14+ below are the v0.2 extension (§17: multi-host Docker, Proxmox, remote destinations) — design rationale and full detail in `PLAN-v0.2.md`; this list is the normative, session-by-session order `/implement` follows.**
 
- The secondary rclone tier is not part of v0.1; see §12.
+
+ 14. v0.1 parity — CLI commands: `ballast verify <service>|--all`, `ballast catalog validate|install <file>` (thin wrappers over existing engine/catalog logic, §9), plus a catalog data fix so the MySQL entry's `imagePattern` also matches `mariadb` images.
+
+
+ 15. v0.1 parity — secret references: a credential store (root-only files, `LoadCredential=`-compatible, §8) and `{{ .Secrets.<name> }}` catalog templating, so a password-protected DB can be dumped without a plaintext secret anywhere in config or DB. Blocks real-world DB backups until this lands — highest priority of the v0.2 extension.
+
+
+ 16. v0.1 parity — catalog discovery + transports: the `discovery` field (§6.1) and `pct-exec` transport (§4.2); migrate bundled catalog entries off hardcoded container-name parameters onto `{{ .Discovery.* }}`.
+
+
+ 17. Destination model refactor: backend-typed destinations (B2, any S3/R2, SFTP — restic backend strings generated from the credential store, §17.1) with credential forms and a connection-test button; migrate existing local-only config.
+
+
+ 18. DockerHost resources (§17.2): local-socket, remote-SSH, and remote-TLS Docker contexts; every Docker operation (inspect, exec, volume tar) takes a host parameter; per-host connection tests; UI host picker.
+
+
+ 19. Repo bootstrap + retention: `restic init` per destination, `forget --prune` per per-service retention policy (keep_daily/weekly/monthly), snapshot list in the UI.
+
+
+ 20. Docker volume backup: per-host volume picker, stop→tar→start and live-snapshot strategies, via `docker run --rm -v vol:/data alpine tar` so no host filesystem access is needed on remote hosts (§17.5).
+
+
+ 21. Verification method registry (§17.6): pluggable, catalog-referenced verification methods — `archive-integrity`, `db-restore-drill`, `restart-smoke` (container up + TCP/HTTP health check) — each enforced VERIFYING → SUCCESS per method, never green on an unimplemented or skipped method.
+
+
+ 22. Compose config snapshots: discover compose projects per Docker host via labels; snapshot `docker-compose.yml`/`.env`/labels, versioned; `.env` secrets redacted in the UI and never logged.
+
+
+ 23. Full-stack restore wizard v1: pick a date → restore compose config, volumes, and DB dumps for one project in dependency order.
+
+
+ 24. Proxmox: connection + inventory (§17.3) — API token setup guide, guest list, per-guest catalog-service attach (bare LXC → `pct-exec` transport, Docker guest → its DockerHost).
+
+
+ 25. Proxmox: vzdump orchestration — mode select, `UPID` polling, per-guest retention and dump pruning.
+
+
+ 26. Proxmox: verification drills — LXC config restore and in-guest DB restore, end-to-end, both layers verified independently (§7, §17.4).
+
+
+ 27. Freshness dashboard + per-tier notification routing upgrade: per-service, per-tier traffic lights; "last verified restore" age; secondary/remote-tier failures never mask primary-tier failures (§11).
+
+
+ 28. `ballast doctor` (Docker socket/context access per host, restic version, Proxmox API reachability and token perms, destination credentials, disk space for drills) and self-backup (Ballast's own catalog, config, and status DB).
+
+
+ 29. Docs & launch pass: 15-minute quickstart, Proxmox guide (incl. Ballast's own LXC/VM requirements, §17.7), Docker-host setup guide, migration page from v0.1.
+
+
+ The secondary rclone tier is not part of v0.1 or v0.2; see §12.
 
 
 
@@ -613,3 +683,121 @@
  | Arkive (Unraid) generalizing | Speed; differentiate on verification  general Docker  (Phase 2) mobile |
 
  | Name collisions | Checked: "Ballast" is clear in the self-hosted/backup space; verify Docker Hub `ballast` image name and domain (`ballast.sh` / `getballast.io` / `useballast.dev`) before public launch |
+
+
+
+ ---
+
+
+
+ ## 17. v0.2 extension: multi-host & Proxmox (normative)
+
+
+
+ **Terminology note:** §12 above calls the mobile/phone work "Phase 2." This v0.2 extension (multi-host Docker + Proxmox) is a *separate*, earlier release that ships before mobile; it does not change §12's scope or timeline, and mobile remains phone-code-free until its own phase regardless of what v0.2 number it ends up carrying. Full design rationale, suggested-additions list, and launch sequencing live in `PLAN-v0.2.md`; this section is the normative subset `/implement` and future spec changes must agree with.
+
+
+
+ **Goal:** back up Docker stacks across multiple Docker hosts, a Proxmox tier (VMs, bare LXCs, and Docker guests), and cloud destinations — all from the web UI — plus close the v0.1 parity holes in §14 steps 14–16.
+
+
+
+ **Deployment reality this section supports:** Ballast runs in its own unprivileged LXC (or small VM) and backs up services running bare-metal in LXCs, in Docker inside other LXCs, and in Docker inside VMs.
+
+
+
+ ### 17.1 Remote destinations
+
+
+
+ B2, any S3-compatible (incl. Cloudflare R2), and SFTP via restic backends, generated from the credential store as restic backend strings (R2 configured as S3-compatible). UI credential forms plus a connection-test button that validates credentials, not just reachability.
+
+
+
+ ### 17.2 Multiple Docker hosts
+
+
+
+ `DockerHost` resources: `local` (socket), `remote-ssh` (`ssh://user@host` — preferred for homelabs, no cert management), `remote-tls` (TCP 2376 with CA/client certs in the credential store). All Docker operations (inspect, exec, volume tar) run against a named host, never assume local.
+
+
+
+ ### 17.3 Proxmox tier
+
+
+
+ Proxmox via API, not SSH: an API token scoped to `VM.Backup` on `/vms/**`; `vzdump` triggered via its API endpoint and polled by `UPID`; in-guest commands via `pct exec` through the API, documented as read/dump-only.
+
+
+
+ ### 17.4 Guest-aware layering
+
+
+
+ Each Proxmox guest can attach catalog services. Bare LXC → `pct-exec` transport (§4.2). Docker guest → its `DockerHost` (§17.2). Flow: in-guest dump → restic the dump → then `vzdump` the whole guest. Verification (§7) drills both layers independently — an in-guest DB restore drill and a guest-config restore are separate, both-MUST-pass checks, per the isolation-of-failure principle (rule 3, `AGENTS.md`).
+
+
+
+ ### 17.5 Docker volume backup
+
+
+
+ Any named volume, per-service consistency strategy, via `docker run --rm -v vol:/data alpine tar` through the Docker API — identical on local and remote hosts, no host filesystem access required.
+
+
+
+ ### 17.6 Verification method registry
+
+
+
+ Verification methods become a pluggable, catalog-referenced registry: `archive-integrity`, `db-restore-drill` (the §7.2 throwaway-container restore, renamed for registry consistency), and the new `restart-smoke` (container up + TCP/HTTP health check returns 200) — closing the Vaultwarden login-smoke-test gap noted in §14 step 13. Every method is enforced VERIFYING → SUCCESS per §4.1; an unimplemented or skipped method is a hard failure, never a silent pass.
+
+
+
+ ### 17.7 Deployment notes (Ballast itself)
+
+
+
+ - **LXC (recommended for homelabs):** unprivileged, with `nesting=1,keyctl=1` if verification drills run inside it; on ZFS-backed storage use a dedicated docker dir or fuse-overlayfs. Local Docker stacks need the socket mounted; remote hosts need nothing mounted.
+
+ - **VM alternative:** cleaner isolation, ~2 GB RAM, no nesting caveats — the safer default for operators who'd rather not reason about Docker-in-LXC-in-LXC.
+
+ - **Trust posture:** Ballast executes *inside* other guests only via read/dump transports (`docker exec` for dumps, `pct exec` for dumps) — document this explicitly; it is the trust-sensitive edge of the product (rule 5, core design principles §3).
+
+
+
+ ### 17.8 Out of scope (still)
+
+
+
+ Kubernetes, multi-machine orchestration beyond one Proxmox host plus its Docker hosts, auto-discovery of arbitrary apps, and any rclone secondary-tier expansion beyond report-only (§12).
+
+
+
+ ### 17.9 Acceptance checklist (v0.2 "done")
+
+
+
+ - [ ] Beginner: install → B2 destination → Immich backup → verified restore drill, entirely in the UI
+
+ - [ ] Password-protected MySQL/MariaDB backs up with credentials from the store (§14 step 15)
+
+ - [ ] Catalog entries use discovered container names; no hardcoded defaults (§14 step 16)
+
+ - [ ] `ballast verify`, `catalog validate`, `catalog install` work as spec'd (§9, §14 step 14)
+
+ - [ ] Containers on a *second* Docker host (SSH or TLS context) can be backed up and verified
+
+ - [ ] Bare-LXC service: `pct exec` in-guest dump before `vzdump`, both layers verified
+
+ - [ ] Proxmox user: API token → vzdump + guest DB dumps → proven restore
+
+ - [ ] A whole compose project (config + volumes + DB) rebuilds from one date selection
+
+ - [ ] Secondary/remote-tier failures never mask primary-tier failures (rule 3, `AGENTS.md`)
+
+ - [ ] Secrets never in DB, logs, or API responses (tested, not assumed)
+
+ - [ ] `ballast doctor` catches the top 10 misconfiguration causes
+
+ - [ ] Docs: 15-minute quickstart, Proxmox guide (incl. Ballast's own LXC/VM requirements), Docker-host guide, migration page
