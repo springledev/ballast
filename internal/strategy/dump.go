@@ -99,14 +99,25 @@ func withDumpSecrets(r *runner.Runner, env []string, secretEnv map[string]string
 	return dumpEnv, &rr
 }
 
-// dumpCommand builds the command for one dump. With a container, the
-// dump runs via `docker exec`; every environment key (non-secret and
-// secret alike) is forwarded into the container as `-e KEY` so docker
-// resolves the value from its own environment — the value never
-// appears in argv.
+// dumpCommand builds the command for one dump. With no container, the
+// command runs directly. With a container and the default docker-exec
+// transport, it runs via `docker exec`: every environment key
+// (non-secret and secret alike) is forwarded into the container as
+// `-e KEY` so docker resolves the value from its own environment — the
+// value never appears in argv. The pct-exec transport runs via
+// Proxmox's `pct exec` for a bare-LXC guest with no Docker daemon
+// (spec §4.2); strategy.For already rejects a pct-exec dump that
+// declares SecretEnv, since pct exec has no equivalent argv-safe
+// forwarding mechanism, so env here is never secret when this branch
+// runs.
 func (s *Dump) dumpCommand(d catalog.Dump, env []string) runner.Command {
 	if d.Container == "" {
 		return runner.Command{Name: d.Command[0], Args: d.Command[1:], Env: env}
+	}
+	if d.Transport == "pct-exec" {
+		args := []string{"exec", d.Container, "--"}
+		args = append(args, d.Command...)
+		return runner.Command{Name: s.opts.pct(), Args: args}
 	}
 	args := []string{"exec"}
 	for _, e := range env {

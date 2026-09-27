@@ -353,3 +353,196 @@ func TestResolveRejectsUnsafeExpressions(t *testing.T) {
 		t.Fatalf("Resolve(unsafe expr) error = %v, want unsupported-template-expression refusal", err)
 	}
 }
+
+// TestDiscoveryFieldLoading checks that a catalog entry with a discovery
+// block round-trips through YAML parsing.
+func TestDiscoveryFieldLoading(t *testing.T) {
+	yaml := strings.Replace(validEntry,
+		"parameters:",
+		"discovery:\n  database:\n    type: docker-label\n    match: \"com.docker.compose.service=db\"\n    fallback: \"{{ .Params.db_container }}\"\nparameters:", 1)
+	entry, err := Load([]byte(yaml))
+	if err != nil {
+		t.Fatalf("Load(with discovery) error = %v, want nil", err)
+	}
+	if len(entry.Discovery) != 1 {
+		t.Fatalf("Discovery = %+v, want one entry", entry.Discovery)
+	}
+	if rule, ok := entry.Discovery["database"]; !ok {
+		t.Fatal("Discovery[database] not found")
+	} else {
+		if rule.Type != "docker-label" {
+			t.Errorf("Type = %q, want docker-label", rule.Type)
+		}
+		if rule.Match != "com.docker.compose.service=db" {
+			t.Errorf("Match = %q, want com.docker.compose.service=db", rule.Match)
+		}
+		if rule.Fallback != "{{ .Params.db_container }}" {
+			t.Errorf("Fallback = %q, want {{ .Params.db_container }}", rule.Fallback)
+		}
+	}
+}
+
+// TestResolveTemplateWithDiscovery checks that ResolveTemplate substitutes
+// {{ .Discovery.* }} placeholders.
+func TestResolveTemplateWithDiscovery(t *testing.T) {
+	tests := []struct {
+		name    string
+		tmpl    string
+		ctx     TemplateContext
+		want    string
+		wantErr string
+	}{
+		{
+			name: "resolves discovery value",
+			tmpl: "prefix-{{ .Discovery.db }}-suffix",
+			ctx: TemplateContext{
+				Discovery: map[string]string{"db": "mydb-container"},
+			},
+			want: "prefix-mydb-container-suffix",
+		},
+		{
+			name: "empty string discovery value",
+			tmpl: "{{ .Discovery.empty }}",
+			ctx: TemplateContext{
+				Discovery: map[string]string{"empty": ""},
+			},
+			want: "",
+		},
+		{
+			name:    "unknown discovery name errors",
+			tmpl:    "{{ .Discovery.unknown }}",
+			ctx:     TemplateContext{Discovery: map[string]string{}},
+			wantErr: `unknown discovery value "unknown"`,
+		},
+		{
+			name: "mixed params and discovery",
+			tmpl: "{{ .Params.x }}-{{ .Discovery.y }}",
+			ctx: TemplateContext{
+				Params:    map[string]string{"x": "param-val"},
+				Discovery: map[string]string{"y": "disc-val"},
+			},
+			want: "param-val-disc-val",
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := ResolveTemplate(tc.tmpl, tc.ctx)
+			if tc.wantErr != "" {
+				if err == nil || !strings.Contains(err.Error(), tc.wantErr) {
+					t.Errorf("ResolveTemplate() error = %v, want containing %q", err, tc.wantErr)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("ResolveTemplate() error = %v, want nil", err)
+			}
+			if got != tc.want {
+				t.Errorf("ResolveTemplate() = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
+// TestResolveWithDiscovery checks that Entry.Resolve substitutes
+// {{ .Discovery.* }} in dump containers and other template fields.
+func TestResolveWithDiscovery(t *testing.T) {
+	yaml := strings.Replace(validEntry,
+		"parameters:",
+		"discovery:\n  database:\n    type: docker-label\n    match: \"com.docker.compose.service=db\"\nparameters:", 1)
+	yaml = strings.Replace(yaml,
+		`container: "{{ .Services.database }}"`,
+		`container: "{{ .Discovery.database }}"`, 1)
+	entry, err := Load([]byte(yaml))
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	deep := entry.DeepCopy()
+	ctx := TemplateContext{
+		Params:    map[string]string{"library_dir": "/srv/immich/library"},
+		Services:  map[string]string{},
+		Discovery: map[string]string{"database": "immich-db-resolved"},
+	}
+	if err := deep.Resolve(ctx); err != nil {
+		t.Fatalf("Resolve() error = %v, want nil", err)
+	}
+	if got := deep.Backup.Dumps[0].Container; got != "immich-db-resolved" {
+		t.Errorf("dump container = %q, want immich-db-resolved", got)
+	}
+}
+
+// TestResolveWithMissingDiscovery checks that resolving a missing discovery
+// value is a clear error.
+func TestResolveWithMissingDiscovery(t *testing.T) {
+	yaml := strings.Replace(validEntry,
+		`container: "{{ .Services.database }}"`,
+		`container: "{{ .Discovery.database }}"`, 1)
+	entry, err := Load([]byte(yaml))
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	err = entry.Resolve(TemplateContext{
+		Params:    map[string]string{"library_dir": "/x"},
+		Services:  map[string]string{},
+		Discovery: map[string]string{}, // database discovery not provided
+	})
+	if err == nil || !strings.Contains(err.Error(), `unknown discovery value "database"`) {
+		t.Fatalf("Resolve(missing discovery) error = %v, want unknown discovery error", err)
+	}
+}
+
+// TestParamsWithDefaults checks that ParamsWithDefaults returns params
+// merged with catalog parameter defaults.
+func TestParamsWithDefaults(t *testing.T) {
+	entry, err := Load([]byte(validEntry))
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	entry.Parameters[0].Default = "/srv/default-library"
+	tests := []struct {
+		name   string
+		params map[string]string
+		want   string
+	}{
+		{name: "omitted takes default", params: map[string]string{}, want: "/srv/default-library"},
+		{name: "nil params takes default", params: nil, want: "/srv/default-library"},
+		{name: "supplied value wins", params: map[string]string{"library_dir": "/mnt/photos"}, want: "/mnt/photos"},
+		{name: "empty value wins", params: map[string]string{"library_dir": ""}, want: ""},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			result := entry.ParamsWithDefaults(tc.params)
+			if got := result["library_dir"]; got != tc.want {
+				t.Errorf("ParamsWithDefaults() = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
+// TestDeepCopyDiscovery checks that DeepCopy deep-copies the Discovery map
+// so mutating the copy does not affect the original.
+func TestDeepCopyDiscovery(t *testing.T) {
+	yaml := strings.Replace(validEntry,
+		"parameters:",
+		"discovery:\n  database:\n    type: docker-label\n    match: \"com.docker.compose.service=db\"\n  cache:\n    type: docker-label\n    match: \"service=redis\"\nparameters:", 1)
+	entry, err := Load([]byte(yaml))
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	deep := entry.DeepCopy()
+
+	// Mutate the copy's discovery map.
+	deep.Discovery["database"] = DiscoveryRule{Type: "modified"}
+	deep.Discovery["new-key"] = DiscoveryRule{Type: "new"}
+
+	// Original must be unchanged.
+	if orig, ok := entry.Discovery["database"]; !ok || orig.Type != "docker-label" {
+		t.Errorf("original Discovery[database] was mutated: %+v", orig)
+	}
+	if _, ok := entry.Discovery["new-key"]; ok {
+		t.Errorf("original Discovery gained new-key: %+v", entry.Discovery)
+	}
+	// And the deep copy's modifications must be present.
+	if deep.Discovery["database"].Type != "modified" {
+		t.Errorf("deep copy not mutated correctly: %+v", deep.Discovery["database"])
+	}
+}

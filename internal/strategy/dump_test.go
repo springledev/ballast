@@ -341,3 +341,132 @@ func TestDumpDuplicateArtifactName(t *testing.T) {
 		t.Errorf("error = %q, want it to explain the artifact file collision", err)
 	}
 }
+
+// pctStub is a fake `pct` CLI for pct-exec (Proxmox container exec).
+// It appends every invocation's argv to $STUB_LOG and echoes the command
+// output on success.
+const pctStub = `#!/bin/sh
+printf '%s\n' "$*" >> "$STUB_LOG"
+case "$1" in
+  exec)
+    # pct exec <vmid> -- <command...>
+    # Simulate successful execution with a dump
+    printf 'CREATE TABLE stub(id int);\n'
+    ;;
+  *)
+    echo "pct stub: unsupported command $1" >&2
+    exit 1
+    ;;
+esac
+exit 0
+`
+
+// newPctStub installs the pct stub in a temp directory and returns its
+// path plus the path to the log file it records invocations in.
+func newPctStub(t *testing.T) (bin, logPath string) {
+	t.Helper()
+	dir := t.TempDir()
+	logPath = filepath.Join(dir, "pct.log")
+	bin = writeStub(t, dir, "pct-stub", pctStub)
+	return bin, logPath
+}
+
+// TestDumpPctExec tests the pct-exec transport: the dump command is
+// invoked via `pct exec <vmid> -- <command>` instead of `docker exec`.
+func TestDumpPctExec(t *testing.T) {
+	pctBin, logPath := newPctStub(t)
+	entry := &catalog.Entry{
+		Service: "postgres-guest",
+		Backup: catalog.Backup{
+			Strategy: "dump",
+			Dumps: []catalog.Dump{{
+				Name:      "database",
+				Container: "100",
+				Transport: "pct-exec",
+				Command:   []string{"pg_dumpall", "-U", "postgres"},
+				Format:    "sql",
+			}},
+		},
+	}
+	s, err := For(entry, Options{Runner: stubRunner(logPath), PctBin: pctBin})
+	if err != nil {
+		t.Fatalf("For: %v", err)
+	}
+
+	workDir := filepath.Join(t.TempDir(), "run")
+	res, err := s.Backup(context.Background(), Request{WorkDir: workDir})
+	if err != nil {
+		t.Fatalf("Backup: %v", err)
+	}
+
+	if len(res.Artifacts) != 1 {
+		t.Fatalf("Artifacts = %v, want exactly one", res.Artifacts)
+	}
+	a := res.Artifacts[0]
+	if a.Name != "database" || a.Format != "sql" {
+		t.Errorf("Artifact = %+v, want Name=database Format=sql", a)
+	}
+	if filepath.Base(a.Path) != "database.sql" {
+		t.Errorf("artifact file = %s, want database.sql", a.Path)
+	}
+	content, err := os.ReadFile(a.Path)
+	if err != nil {
+		t.Fatalf("reading artifact: %v", err)
+	}
+	if string(content) != "CREATE TABLE stub(id int);\n" {
+		t.Errorf("artifact content = %q, want the stub dump", content)
+	}
+
+	// Verify the pct invocation: pct exec 100 -- pg_dumpall -U postgres
+	log := readStubLog(t, logPath)
+	want := "exec 100 -- pg_dumpall -U postgres"
+	if len(log) != 1 || log[0] != want {
+		t.Errorf("pct invocations = %v, want [%q]", log, want)
+	}
+}
+
+// TestDumpPctExecNoEnv checks that pct-exec dumps do not forward
+// environment variables like docker-exec does (pct exec has no -e flag).
+func TestDumpPctExecNoEnv(t *testing.T) {
+	pctBin, logPath := newPctStub(t)
+	entry := &catalog.Entry{
+		Service: "svc",
+		Backup: catalog.Backup{
+			Strategy: "dump",
+			Dumps: []catalog.Dump{{
+				Name:      "database",
+				Container: "101",
+				Transport: "pct-exec",
+				Command:   []string{"pg_dumpall"},
+			}},
+		},
+	}
+	s, err := For(entry, Options{Runner: stubRunner(logPath), PctBin: pctBin})
+	if err != nil {
+		t.Fatalf("For: %v", err)
+	}
+
+	_, err = s.Backup(context.Background(), Request{
+		WorkDir: t.TempDir(),
+		Env:     []string{"MYVAR=myvalue"},
+	})
+	if err != nil {
+		t.Fatalf("Backup: %v", err)
+	}
+
+	// Verify that pct exec does not include -e MYVAR or the value
+	log := readStubLog(t, logPath)
+	if len(log) != 1 {
+		t.Fatalf("pct invocations = %v, want exactly one", log)
+	}
+	if strings.Contains(log[0], "-e") {
+		t.Errorf("pct exec invocation = %q, must not include -e flags (pct exec does not support them)", log[0])
+	}
+	if strings.Contains(log[0], "myvalue") {
+		t.Errorf("pct exec invocation leaked env value: %q", log[0])
+	}
+	want := "exec 101 -- pg_dumpall"
+	if log[0] != want {
+		t.Errorf("pct invocations = %q, want %q", log[0], want)
+	}
+}

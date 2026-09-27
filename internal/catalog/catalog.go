@@ -13,15 +13,19 @@ package catalog
 
 // Entry is a validated service catalog definition.
 type Entry struct {
-	APIVersion    string        `yaml:"apiVersion" json:"apiVersion"`
-	Service       string        `yaml:"service" json:"service"`
-	Version       int           `yaml:"version" json:"version"`
-	Display       Display       `yaml:"display,omitempty" json:"display,omitempty"`
-	Detect        Detect        `yaml:"detect,omitempty" json:"detect,omitempty"`
-	Parameters    []Parameter   `yaml:"parameters,omitempty" json:"parameters,omitempty"`
-	Backup        Backup        `yaml:"backup" json:"backup"`
-	Verify        Verify        `yaml:"verify" json:"verify"`
-	Notifications Notifications `yaml:"notifications,omitempty" json:"notifications,omitempty"`
+	APIVersion string  `yaml:"apiVersion" json:"apiVersion"`
+	Service    string  `yaml:"service" json:"service"`
+	Version    int     `yaml:"version" json:"version"`
+	Display    Display `yaml:"display,omitempty" json:"display,omitempty"`
+	Detect     Detect  `yaml:"detect,omitempty" json:"detect,omitempty"`
+	// Discovery declares, per referenced container/guest, how to find
+	// it at job-run time instead of hardcoding a name (spec §6.1). Keys
+	// become {{ .Discovery.<name> }} placeholders.
+	Discovery     map[string]DiscoveryRule `yaml:"discovery,omitempty" json:"discovery,omitempty"`
+	Parameters    []Parameter              `yaml:"parameters,omitempty" json:"parameters,omitempty"`
+	Backup        Backup                   `yaml:"backup" json:"backup"`
+	Verify        Verify                   `yaml:"verify" json:"verify"`
+	Notifications Notifications            `yaml:"notifications,omitempty" json:"notifications,omitempty"`
 }
 
 // Display holds user-facing names shown in the CLI and web UI.
@@ -39,6 +43,19 @@ type Detect struct {
 type DockerDetect struct {
 	ImagePattern string            `yaml:"imagePattern,omitempty" json:"imagePattern,omitempty"`
 	OrEnv        map[string]string `yaml:"orEnv,omitempty" json:"orEnv,omitempty"`
+}
+
+// DiscoveryRule resolves one {{ .Discovery.<name> }} value at job-run
+// time (spec §6.1). Today the only supported type is "docker-label":
+// match is a "label=value" filter passed to `docker ps --filter`;
+// exactly one running container must match. Resolution failure MUST
+// fail the job loudly — fallback, a plain template string (typically
+// {{ .Params.* }}), is used only when discovery finds no match, never
+// silently beyond that.
+type DiscoveryRule struct {
+	Type     string `yaml:"type" json:"type"`
+	Match    string `yaml:"match" json:"match"`
+	Fallback string `yaml:"fallback,omitempty" json:"fallback,omitempty"`
 }
 
 // Parameter is a user-supplied value (e.g. "library_dir") referenced in
@@ -62,8 +79,15 @@ type Backup struct {
 // Dump is one dump command run inside a container (typically docker exec)
 // producing an artifact (e.g. pg_dumpall to stdout).
 type Dump struct {
-	Name      string   `yaml:"name" json:"name"`
-	Container string   `yaml:"container,omitempty" json:"container,omitempty"`
+	Name      string `yaml:"name" json:"name"`
+	Container string `yaml:"container,omitempty" json:"container,omitempty"`
+	// Transport selects how Container is reached (spec §4.2):
+	// "docker-exec" (default) runs the command via `docker exec`;
+	// "pct-exec" runs it via Proxmox's `pct exec` for bare-LXC guests
+	// with no Docker daemon. pct-exec is read/dump-only and does not
+	// support SecretEnv (no argv-safe forwarding mechanism exists for
+	// it, unlike docker exec -e KEY).
+	Transport string   `yaml:"transport,omitempty" json:"transport,omitempty"`
 	Command   []string `yaml:"command" json:"command"`
 	Format    string   `yaml:"format,omitempty" json:"format,omitempty"`
 	// SecretEnv is extra KEY: "{{ .Secrets.NAME }}" environment for the

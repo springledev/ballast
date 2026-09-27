@@ -212,3 +212,196 @@ func TestSuggest_MariaDBDetection(t *testing.T) {
 		})
 	}
 }
+
+// TestResolveDiscovery tests the discovery resolution mechanism with
+// docker-label rules for error conditions and edge cases.
+func TestResolveDiscovery(t *testing.T) {
+	dir := t.TempDir()
+	// Stub docker that returns empty (no containers match the filter)
+	emptyStub := `#!/bin/sh
+if [ "$1" = "ps" ]; then
+  exit 0
+fi
+exit 1
+`
+	path := filepath.Join(dir, "docker")
+	if err := os.WriteFile(path, []byte(emptyStub), 0o755); err != nil {
+		t.Fatalf("writing docker stub: %v", err)
+	}
+	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	r := &runner.Runner{}
+
+	tests := []struct {
+		name      string
+		discovery map[string]catalog.DiscoveryRule
+		params    map[string]string
+		want      map[string]string
+		wantErr   string
+	}{
+		{
+			name:      "empty discovery returns nil",
+			discovery: map[string]catalog.DiscoveryRule{},
+			params:    map[string]string{},
+			want:      nil,
+		},
+		{
+			name:      "nil discovery returns nil",
+			discovery: nil,
+			params:    map[string]string{},
+			want:      nil,
+		},
+		{
+			name: "no match with fallback resolves to fallback",
+			discovery: map[string]catalog.DiscoveryRule{
+				"database": {
+					Type:     "docker-label",
+					Match:    "nomatch=ever",
+					Fallback: "{{ .Params.db_container }}",
+				},
+			},
+			params: map[string]string{"db_container": "fallback-db"},
+			want:   map[string]string{"database": "fallback-db"},
+		},
+		{
+			name: "no match without fallback errors",
+			discovery: map[string]catalog.DiscoveryRule{
+				"database": {
+					Type:  "docker-label",
+					Match: "nomatch=ever",
+				},
+			},
+			params:  map[string]string{},
+			wantErr: "no running container matched",
+		},
+		{
+			name: "fallback that resolves to empty errors",
+			discovery: map[string]catalog.DiscoveryRule{
+				"database": {
+					Type:     "docker-label",
+					Match:    "nomatch=ever",
+					Fallback: "{{ .Params.empty }}",
+				},
+			},
+			params:  map[string]string{"empty": ""},
+			wantErr: "resolved to an empty value",
+		},
+		{
+			name: "unsupported discovery type errors",
+			discovery: map[string]catalog.DiscoveryRule{
+				"database": {
+					Type:  "unsupported-type",
+					Match: "anything",
+				},
+			},
+			params:  map[string]string{},
+			wantErr: "unsupported type",
+		},
+		{
+			name: "empty match field errors",
+			discovery: map[string]catalog.DiscoveryRule{
+				"database": {
+					Type:  "docker-label",
+					Match: "",
+				},
+			},
+			params:  map[string]string{},
+			wantErr: "match must not be empty",
+		},
+		{
+			name: "fallback with unresolvable param errors",
+			discovery: map[string]catalog.DiscoveryRule{
+				"database": {
+					Type:     "docker-label",
+					Match:    "nomatch=ever",
+					Fallback: "{{ .Params.missing }}",
+				},
+			},
+			params:  map[string]string{},
+			wantErr: `unknown parameter "missing"`,
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := ResolveDiscovery(context.Background(), r, "", tc.discovery, tc.params)
+			if tc.wantErr != "" {
+				if err == nil || !strings.Contains(err.Error(), tc.wantErr) {
+					t.Errorf("ResolveDiscovery() error = %v, want containing %q", err, tc.wantErr)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("ResolveDiscovery() error = %v, want nil", err)
+			}
+			if len(got) != len(tc.want) {
+				t.Fatalf("ResolveDiscovery() = %+v, want %+v", got, tc.want)
+			}
+			for k, v := range tc.want {
+				if got[k] != v {
+					t.Errorf("ResolveDiscovery()[%s] = %q, want %q", k, got[k], v)
+				}
+			}
+		})
+	}
+}
+
+// TestResolveDiscovery_DockerLabelMatch tests a successful docker-label
+// match by stubbing the docker ps output with a specific label match.
+func TestResolveDiscovery_DockerLabelMatch(t *testing.T) {
+	dir := t.TempDir()
+	// Stub docker that echoes back the filter argument and returns a container name
+	labelStub := `#!/bin/sh
+if [ "$1" = "ps" ] && [ "$3" = "label=service=database" ]; then
+  printf 'resolved-database-container\n'
+  exit 0
+fi
+exit 1
+`
+	path := filepath.Join(dir, "docker")
+	if err := os.WriteFile(path, []byte(labelStub), 0o755); err != nil {
+		t.Fatalf("writing docker stub: %v", err)
+	}
+	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	got, err := ResolveDiscovery(context.Background(), &runner.Runner{}, "", map[string]catalog.DiscoveryRule{
+		"database": {
+			Type:  "docker-label",
+			Match: "service=database",
+		},
+	}, map[string]string{})
+	if err != nil {
+		t.Fatalf("ResolveDiscovery() error = %v", err)
+	}
+	if got["database"] != "resolved-database-container" {
+		t.Errorf("ResolveDiscovery() database = %q, want resolved-database-container", got["database"])
+	}
+}
+
+// TestResolveDiscovery_AmbiguousMatch tests that multiple matching containers
+// is an error.
+func TestResolveDiscovery_AmbiguousMatch(t *testing.T) {
+	dir := t.TempDir()
+	// Stub docker that returns multiple containers for one label
+	labelStub := `#!/bin/sh
+if [ "$1" = "ps" ]; then
+  printf 'container-1\n'
+  printf 'container-2\n'
+  exit 0
+fi
+exit 1
+`
+	path := filepath.Join(dir, "docker")
+	if err := os.WriteFile(path, []byte(labelStub), 0o755); err != nil {
+		t.Fatalf("writing docker stub: %v", err)
+	}
+	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	_, err := ResolveDiscovery(context.Background(), &runner.Runner{}, "", map[string]catalog.DiscoveryRule{
+		"database": {
+			Type:  "docker-label",
+			Match: "service=ambiguous",
+		},
+	}, map[string]string{})
+	if err == nil || !strings.Contains(err.Error(), "matched 2 running containers") {
+		t.Errorf("ResolveDiscovery(ambiguous) error = %v, want ambiguity error", err)
+	}
+}

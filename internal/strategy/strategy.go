@@ -105,6 +105,16 @@ type Options struct {
 	// DockerBin is the docker CLI to invoke; empty means "docker"
 	// resolved against $PATH. Tests point it at a stub.
 	DockerBin string
+
+	// PctBin is the Proxmox `pct` CLI a pct-exec transport dump
+	// invokes; empty means "pct" resolved against $PATH. Tests point
+	// it at a stub. Ballast shells out to the guest-local `pct` binary
+	// directly (it assumes Ballast itself runs on the Proxmox host, or
+	// in a guest with `pct` available) rather than the Proxmox API —
+	// the API-mediated path is step 24's Proxmox connection (spec
+	// §17.3); this is a self-contained interim implementation so the
+	// transport exists and is testable ahead of that.
+	PctBin string
 }
 
 // docker returns the configured docker binary name.
@@ -113,6 +123,14 @@ func (o Options) docker() string {
 		return o.DockerBin
 	}
 	return "docker"
+}
+
+// pct returns the configured Proxmox pct binary name.
+func (o Options) pct() string {
+	if o.PctBin != "" {
+		return o.PctBin
+	}
+	return "pct"
 }
 
 // env combines the request's non-secret and secret environment into
@@ -182,6 +200,17 @@ func For(entry *catalog.Entry, opts Options) (Strategy, error) {
 			}
 			if d.Format != "" && d.Format != pathBase(d.Format) {
 				return nil, fmt.Errorf("service %s: dump %q format %q must not contain a path separator", entry.Service, d.Name, d.Format)
+			}
+			if d.Transport != "" && d.Transport != "docker-exec" && d.Transport != "pct-exec" {
+				return nil, fmt.Errorf("service %s: dump %q has unknown transport %q (want docker-exec or pct-exec)", entry.Service, d.Name, d.Transport)
+			}
+			if d.Transport == "pct-exec" {
+				if d.Container == "" {
+					return nil, fmt.Errorf("service %s: dump %q: pct-exec transport needs container (the guest's VMID)", entry.Service, d.Name)
+				}
+				if len(d.SecretEnv) != 0 {
+					return nil, fmt.Errorf("service %s: dump %q: pct-exec transport does not support secretEnv (no argv-safe way to forward it into a bare LXC guest)", entry.Service, d.Name)
+				}
 			}
 		}
 		return &Dump{entry: entry, opts: opts}, nil

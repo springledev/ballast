@@ -58,6 +58,91 @@ func ListRunning(ctx context.Context, r *runner.Runner) ([]Container, error) {
 	return out, nil
 }
 
+// ResolveDiscovery resolves every catalog.DiscoveryRule in discovery to
+// its {{ .Discovery.<name> }} value (spec §6.1), for a caller (the
+// pipeline) to feed into catalog.TemplateContext.Discovery before
+// calling Entry.Resolve. params must already carry the entry's
+// defaulted parameter values (catalog.Entry.ParamsWithDefaults) so a
+// fallback referencing {{ .Params.* }} sees the same values Resolve
+// itself would use.
+//
+// Today the only supported rule type is "docker-label": match is a
+// "label=value" filter passed to `docker ps --filter`. Exactly one
+// running container must match; zero matches fall back to the rule's
+// declared fallback template (resolved against params only), and more
+// than one match is ambiguous. Both are hard errors — resolution
+// failure MUST fail the job loudly, and Ballast MUST NOT silently fall
+// back past the entry's own declared fallback (spec §6.1).
+func ResolveDiscovery(ctx context.Context, r *runner.Runner, dockerBin string, discovery map[string]catalog.DiscoveryRule, params map[string]string) (map[string]string, error) {
+	if len(discovery) == 0 {
+		return nil, nil
+	}
+	if dockerBin == "" {
+		dockerBin = "docker"
+	}
+	names := make([]string, 0, len(discovery))
+	for name := range discovery {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+
+	out := make(map[string]string, len(discovery))
+	for _, name := range names {
+		rule := discovery[name]
+		if rule.Type != "docker-label" {
+			return nil, fmt.Errorf("discovery %q: unsupported type %q (only docker-label is supported)", name, rule.Type)
+		}
+		if rule.Match == "" {
+			return nil, fmt.Errorf("discovery %q: match must not be empty", name)
+		}
+		matches, err := matchByLabel(ctx, r, dockerBin, rule.Match)
+		if err != nil {
+			return nil, fmt.Errorf("discovery %q: %w", name, err)
+		}
+		switch len(matches) {
+		case 1:
+			out[name] = matches[0]
+		case 0:
+			if rule.Fallback == "" {
+				return nil, fmt.Errorf("discovery %q: no running container matched label %q, and no fallback is declared", name, rule.Match)
+			}
+			v, err := catalog.ResolveTemplate(rule.Fallback, catalog.TemplateContext{Params: params})
+			if err != nil {
+				return nil, fmt.Errorf("discovery %q: fallback: %w", name, err)
+			}
+			if v == "" {
+				return nil, fmt.Errorf("discovery %q: no running container matched label %q, and the fallback resolved to an empty value", name, rule.Match)
+			}
+			out[name] = v
+		default:
+			return nil, fmt.Errorf("discovery %q: label %q matched %d running containers (%s); it must match exactly one", name, rule.Match, len(matches), strings.Join(matches, ", "))
+		}
+	}
+	return out, nil
+}
+
+// matchByLabel lists the names of running containers whose labels
+// match a "label=value" `docker ps --filter` expression.
+func matchByLabel(ctx context.Context, r *runner.Runner, dockerBin, match string) ([]string, error) {
+	res, err := r.Run(ctx, nil, nil, runner.Command{
+		Name: dockerBin,
+		Args: []string{"ps", "--filter", "label=" + match, "--format", "{{.Names}}"},
+	})
+	if err != nil {
+		if errors.Is(err, exec.ErrNotFound) {
+			return nil, fmt.Errorf("docker is not installed, or not on $PATH: %w", err)
+		}
+		return nil, fmt.Errorf("listing containers matching label %q: %w", match, err)
+	}
+	var out []string
+	for _, line := range strings.Split(strings.TrimRight(string(res.Stdout), "\n"), "\n") {
+		if line != "" {
+			out = append(out, line)
+		}
+	}
+	return out, nil
+}
+
 // Suggestion pairs a catalog entry with the running container(s)
 // whose image matched its detect.docker.imagePattern.
 type Suggestion struct {

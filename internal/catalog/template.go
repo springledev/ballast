@@ -7,10 +7,14 @@ import (
 )
 
 // TemplateContext carries the values replacements are drawn from.
-// Params fills {{ .Params.NAME }}; Services fills {{ .Services.NAME }}.
+// Params fills {{ .Params.NAME }}; Services fills {{ .Services.NAME }};
+// Discovery fills {{ .Discovery.NAME }} with values already resolved
+// at job-run time (spec §6.1) by the caller — Resolve itself never
+// talks to Docker/Proxmox.
 type TemplateContext struct {
-	Params   map[string]string
-	Services map[string]string
+	Params    map[string]string
+	Services  map[string]string
+	Discovery map[string]string
 }
 
 // placeholderRE matches a whole template placeholder token. Only a strictly
@@ -22,6 +26,7 @@ var placeholderRE = regexp.MustCompile(`\{\{\s*([^}]+?)\s*\}\}`)
 // future engine) can Resolve modifications against a base entry.
 func (e *Entry) DeepCopy() *Entry {
 	c := *e
+	c.Discovery = copyDiscoveryMap(e.Discovery)
 	c.Parameters = append([]Parameter(nil), e.Parameters...)
 	c.Backup.Dumps = make([]Dump, len(e.Backup.Dumps))
 	for i, d := range e.Backup.Dumps {
@@ -56,24 +61,41 @@ func copyStringMap(m map[string]string) map[string]string {
 	return out
 }
 
+// copyDiscoveryMap returns a copy of m, or nil for a nil/empty m.
+func copyDiscoveryMap(m map[string]DiscoveryRule) map[string]DiscoveryRule {
+	if len(m) == 0 {
+		return nil
+	}
+	out := make(map[string]DiscoveryRule, len(m))
+	for k, v := range m {
+		out[k] = v
+	}
+	return out
+}
+
 // lookup resolves one placeholder expression to its value. The expression
 // grammar is intentionally minimal: `.Params.name` or `.Services.name` and
 // nothing else. Any other expression is a validation error.
 func lookup(expr string, ctx TemplateContext) (string, error) {
 	parts := strings.SplitN(expr, ".", 3)
 	// ".Params.name" → ["", "Params", "name"]
-	if len(parts) != 3 || parts[0] != "" || (parts[1] != "Params" && parts[1] != "Services") || parts[2] == "" {
-		return "", fmt.Errorf("unsupported template expression %q: only {{ .Params.NAME }} and {{ .Services.NAME }} are allowed", expr)
+	if len(parts) != 3 || parts[0] != "" || (parts[1] != "Params" && parts[1] != "Services" && parts[1] != "Discovery") || parts[2] == "" {
+		return "", fmt.Errorf("unsupported template expression %q: only {{ .Params.NAME }}, {{ .Services.NAME }} and {{ .Discovery.NAME }} are allowed", expr)
 	}
-	table, name := ctx.Params, parts[2]
-	if parts[1] == "Services" {
-		table, name = ctx.Services, parts[2]
-		if v, ok := table[name]; ok {
+	name := parts[2]
+	switch parts[1] {
+	case "Services":
+		if v, ok := ctx.Services[name]; ok {
 			return v, nil
 		}
 		return "", fmt.Errorf("template references unknown detected service %q", name)
+	case "Discovery":
+		if v, ok := ctx.Discovery[name]; ok {
+			return v, nil
+		}
+		return "", fmt.Errorf("template references unknown discovery value %q", name)
 	}
-	if v, ok := table[name]; ok {
+	if v, ok := ctx.Params[name]; ok {
 		return v, nil
 	}
 	return "", fmt.Errorf("template references unknown parameter %q", name)
@@ -97,6 +119,27 @@ func substitute(s string, ctx TemplateContext) (string, error) {
 		return "", firstErr
 	}
 	return out, nil
+}
+
+// ResolveTemplate substitutes {{ .Params.* }} / {{ .Services.* }} /
+// {{ .Discovery.* }} placeholders in s against ctx. It is exported for
+// callers outside this package that resolve a template string in
+// isolation — namely a discovery rule's fallback (spec §6.1), which is
+// evaluated by internal/detect before Entry.Resolve runs, since a
+// resolved discovery value is itself an input to Resolve.
+func ResolveTemplate(s string, ctx TemplateContext) (string, error) {
+	return substitute(s, ctx)
+}
+
+// ParamsWithDefaults returns params plus the catalog default of every
+// declared parameter absent from it (see withDefaults). It is exported
+// so a caller that needs resolved parameter values before calling
+// Resolve — namely discovery fallback resolution (spec §6.1), which
+// must run first since its output feeds Resolve's own
+// TemplateContext.Discovery — sees the same defaulted values Resolve
+// itself would use.
+func (e *Entry) ParamsWithDefaults(params map[string]string) map[string]string {
+	return e.withDefaults(params)
 }
 
 // withDefaults returns params plus the catalog default of every declared

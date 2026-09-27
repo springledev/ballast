@@ -610,7 +610,11 @@ func (o *Ops) PutService(ctx context.Context, s inventory.Service) error {
 	if !ok {
 		return fmt.Errorf("service %s: %w: catalog entry %q not found", s.Name, ErrValidation, s.CatalogEntry)
 	}
-	if err := entry.Resolve(catalog.TemplateContext{Params: s.Params, Services: s.Containers}); err != nil {
+	discovered, err := detect.ResolveDiscovery(ctx, o.Runner, "", entry.Discovery, entry.ParamsWithDefaults(s.Params))
+	if err != nil {
+		return fmt.Errorf("service %s: %w: %w", s.Name, ErrValidation, err)
+	}
+	if err := entry.Resolve(catalog.TemplateContext{Params: s.Params, Services: s.Containers, Discovery: discovered}); err != nil {
 		return fmt.Errorf("service %s: %w: %w", s.Name, ErrValidation, err)
 	}
 	if _, err := inventory.GetDestination(o.DB, s.Destination); err != nil {

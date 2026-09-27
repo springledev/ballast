@@ -14,11 +14,14 @@
 # a restore there would fail for the wrong reason (spec §7.2). Ballast
 # warns when the running database container's image differs.
 #
-# Spec deviation (deliberate): the spec §6.1 example names the
-# database container {{ .Services.database }}. Nothing in the wizard or
-# web UI can fill a detected-container role yet, so this entry asks
-# for it as an ordinary parameter with the official docker-compose
-# default instead — the same approach the generic postgres entry uses.
+# Spec deviation, now resolved (§14 step 16): earlier versions of this
+# entry asked for the database container as an ordinary parameter with
+# a hardcoded default ("immich_postgres"), since nothing could fill a
+# detected-container role yet. It now uses the discovery mechanism of
+# spec §6.1: the database container is found by its docker-compose
+# service label at job-run time, falling back to the db_container
+# parameter (still asked, still defaulted, for a stack that isn't run
+# through docker-compose) only when that label match finds nothing.
 apiVersion: ballast.dev/v1
 service: immich
 version: 1
@@ -30,6 +33,11 @@ detect:
     imagePattern: "ghcr.io/immich-app/immich-server"
     orEnv:
       IMMICH_VERSION: "*"
+discovery:
+  database:
+    type: docker-label
+    match: "com.docker.compose.service=database"
+    fallback: "{{ .Params.db_container }}"
 parameters:
   - name: library_dir
     required: true
@@ -37,7 +45,7 @@ parameters:
   - name: db_container
     required: true
     default: "immich_postgres"
-    prompt: "Name of Immich's database container"
+    prompt: "Name of Immich's database container (used only when it can't be auto-detected by its docker-compose service label)"
   - name: db_user
     required: true
     default: "postgres"
@@ -50,7 +58,7 @@ backup:
   strategy: dump
   dumps:
     - name: database
-      container: "{{ .Params.db_container }}"
+      container: "{{ .Discovery.database }}"
       # No --clean: restoring into the fresh throwaway cluster must not
       # try to drop the role it is connected as. The only expected
       # error is "role already exists", filtered below.

@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/springledev/ballast/internal/catalog"
+	"github.com/springledev/ballast/internal/detect"
 	"github.com/springledev/ballast/internal/inventory"
 	"github.com/springledev/ballast/internal/restic"
 	"github.com/springledev/ballast/internal/strategy"
@@ -71,7 +72,11 @@ func (o *Ops) VerifyService(ctx context.Context, service string) (VerifyReport, 
 	if !ok {
 		return rep, fmt.Errorf("service %s: catalog entry %q is not loaded", service, svc.CatalogEntry)
 	}
-	if err := entry.Resolve(catalog.TemplateContext{Params: svc.Params, Services: svc.Containers}); err != nil {
+	discovered, err := detect.ResolveDiscovery(ctx, o.Runner, "", entry.Discovery, entry.ParamsWithDefaults(svc.Params))
+	if err != nil {
+		return rep, fmt.Errorf("service %s: %w", service, err)
+	}
+	if err := entry.Resolve(catalog.TemplateContext{Params: svc.Params, Services: svc.Containers, Discovery: discovered}); err != nil {
 		return rep, fmt.Errorf("service %s: resolving catalog entry %q: %w", service, svc.CatalogEntry, err)
 	}
 	repo, err := o.repoFor(dest)

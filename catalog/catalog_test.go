@@ -31,12 +31,15 @@ func resolveWithDummyValues(t *testing.T, path string) *ballastcatalog.Entry {
 	if err != nil {
 		t.Fatalf("loading entry: %v", err)
 	}
-	ctx := ballastcatalog.TemplateContext{Params: map[string]string{}, Services: map[string]string{}}
+	ctx := ballastcatalog.TemplateContext{Params: map[string]string{}, Services: map[string]string{}, Discovery: map[string]string{}}
 	for _, m := range refRE.FindAllStringSubmatch(string(raw), -1) {
 		table, name := m[1], m[2]
-		if table == "Params" {
+		switch table {
+		case "Params":
 			ctx.Params[name] = "test-" + name
-		} else {
+		case "Discovery":
+			ctx.Discovery[name] = "test-" + name
+		default:
 			ctx.Services[name] = "test-" + name
 		}
 	}
@@ -47,8 +50,8 @@ func resolveWithDummyValues(t *testing.T, path string) *ballastcatalog.Entry {
 }
 
 // refRE finds template references ({{ .Params.NAME }} /
-// {{ .Services.NAME }}) in raw catalog YAML.
-var refRE = regexp.MustCompile(`\{\{\s*\.(Params|Services)\.([A-Za-z0-9_]+)\s*\}\}`)
+// {{ .Services.NAME }} / {{ .Discovery.NAME }}) in raw catalog YAML.
+var refRE = regexp.MustCompile(`\{\{\s*\.(Params|Services|Discovery)\.([A-Za-z0-9_]+)\s*\}\}`)
 
 // bundledEntries lists every YAML catalog entry in this directory.
 func bundledEntries(t *testing.T) []string {
@@ -103,17 +106,21 @@ func TestBundledEntriesTemplatesRoundTrip(t *testing.T) {
 				declared[p.Name] = true
 			}
 			ctx := ballastcatalog.TemplateContext{
-				Params:   map[string]string{},
-				Services: map[string]string{},
+				Params:    map[string]string{},
+				Services:  map[string]string{},
+				Discovery: map[string]string{},
 			}
 			for _, m := range refRE.FindAllStringSubmatch(string(raw), -1) {
 				table, name := m[1], m[2]
-				if table == "Params" {
+				switch table {
+				case "Params":
 					if !declared[name] {
 						t.Errorf("template references parameter %q, which is not declared in parameters:", name)
 					}
 					ctx.Params[name] = "test-" + name
-				} else {
+				case "Discovery":
+					ctx.Discovery[name] = "test-" + name
+				default:
 					ctx.Services[name] = "test-" + name
 				}
 			}

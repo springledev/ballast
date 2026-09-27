@@ -17,6 +17,7 @@ import (
 	"strings"
 
 	"github.com/springledev/ballast/internal/catalog"
+	"github.com/springledev/ballast/internal/detect"
 	"github.com/springledev/ballast/internal/engine"
 	"github.com/springledev/ballast/internal/inventory"
 	"github.com/springledev/ballast/internal/restic"
@@ -60,9 +61,10 @@ type Pipeline struct {
 	// to Runner.Redact and scheduler.Coordinator.Redact.
 	Redact *secret.Set
 
-	// ResticBin and DockerBin override the restic/docker binaries;
-	// empty resolves against $PATH. Tests point these at stubs.
-	ResticBin, DockerBin string
+	// ResticBin, DockerBin and PctBin override the restic/docker/pct
+	// binaries; empty resolves against $PATH. Tests point these at
+	// stubs.
+	ResticBin, DockerBin, PctBin string
 }
 
 // Run backs up service: PREPARING → DUMPING → UPLOADING → VERIFYING →
@@ -90,7 +92,11 @@ func (p *Pipeline) Run(ctx context.Context, service string) (engine.State, error
 	if !ok {
 		return "", fmt.Errorf("service %s: catalog entry %q is not loaded", service, svc.CatalogEntry)
 	}
-	if err := entry.Resolve(catalog.TemplateContext{Params: svc.Params, Services: svc.Containers}); err != nil {
+	discovered, err := detect.ResolveDiscovery(ctx, p.Runner, p.DockerBin, entry.Discovery, entry.ParamsWithDefaults(svc.Params))
+	if err != nil {
+		return "", fmt.Errorf("service %s: %w", service, err)
+	}
+	if err := entry.Resolve(catalog.TemplateContext{Params: svc.Params, Services: svc.Containers, Discovery: discovered}); err != nil {
 		return "", fmt.Errorf("service %s: resolving catalog entry %q: %w", service, svc.CatalogEntry, err)
 	}
 	secrets, err := p.resolveSecrets(svc)
@@ -140,7 +146,7 @@ func (p *Pipeline) Run(ctx context.Context, service string) (engine.State, error
 	if err := m.Transition(engine.PREPARING, "preparing"); err != nil {
 		return fail(err)
 	}
-	strat, err := strategy.For(entry, strategy.Options{Runner: p.Runner, DockerBin: p.DockerBin})
+	strat, err := strategy.For(entry, strategy.Options{Runner: p.Runner, DockerBin: p.DockerBin, PctBin: p.PctBin})
 	if err != nil {
 		return fail(err)
 	}

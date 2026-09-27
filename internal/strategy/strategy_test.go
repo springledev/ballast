@@ -263,3 +263,109 @@ func TestDockerBinaryDefault(t *testing.T) {
 		t.Errorf("overridden docker binary = %q, want %q", got, "/stub/docker")
 	}
 }
+
+// TestPctBinaryDefault checks the pct CLI name defaults to "pct" and
+// honours the override.
+func TestPctBinaryDefault(t *testing.T) {
+	if got := (Options{}).pct(); got != "pct" {
+		t.Errorf("default pct binary = %q, want %q", got, "pct")
+	}
+	if got := (Options{PctBin: "/stub/pct"}).pct(); got != "/stub/pct" {
+		t.Errorf("overridden pct binary = %q, want %q", got, "/stub/pct")
+	}
+}
+
+// TestForValidationPctExec tests the pct-exec transport validation in For.
+func TestForValidationPctExec(t *testing.T) {
+	r := &runner.Runner{}
+	tests := []struct {
+		name    string
+		entry   *catalog.Entry
+		opts    Options
+		wantErr string
+	}{
+		{
+			name: "pct-exec without container errors",
+			entry: entryFor("dump", func(e *catalog.Entry) {
+				e.Backup.Dumps = []catalog.Dump{{
+					Name:      "database",
+					Transport: "pct-exec",
+					Command:   []string{"pg_dumpall"},
+				}}
+			}),
+			opts:    Options{Runner: r},
+			wantErr: "pct-exec transport needs container",
+		},
+		{
+			name: "pct-exec with container succeeds",
+			entry: entryFor("dump", func(e *catalog.Entry) {
+				e.Backup.Dumps = []catalog.Dump{{
+					Name:      "database",
+					Container: "100",
+					Transport: "pct-exec",
+					Command:   []string{"pg_dumpall"},
+				}}
+			}),
+			opts: Options{Runner: r},
+		},
+		{
+			name: "pct-exec with secretEnv errors",
+			entry: entryFor("dump", func(e *catalog.Entry) {
+				e.Backup.Dumps = []catalog.Dump{{
+					Name:      "database",
+					Container: "100",
+					Transport: "pct-exec",
+					Command:   []string{"pg_dumpall"},
+					SecretEnv: map[string]string{"PGPASSWORD": "secret"},
+				}}
+			}),
+			opts:    Options{Runner: r},
+			wantErr: "pct-exec transport does not support secretEnv",
+		},
+		{
+			name: "docker-exec with secretEnv succeeds",
+			entry: entryFor("dump", func(e *catalog.Entry) {
+				e.Backup.Dumps = []catalog.Dump{{
+					Name:      "database",
+					Container: "mydb",
+					Transport: "docker-exec",
+					Command:   []string{"mysqldump"},
+					SecretEnv: map[string]string{"MYSQL_PWD": "secret"},
+				}}
+			}),
+			opts: Options{Runner: r},
+		},
+		{
+			name: "default (no transport) with secretEnv succeeds",
+			entry: entryFor("dump", func(e *catalog.Entry) {
+				e.Backup.Dumps = []catalog.Dump{{
+					Name:      "database",
+					Container: "mydb",
+					Command:   []string{"mysqldump"},
+					SecretEnv: map[string]string{"MYSQL_PWD": "secret"},
+				}}
+			}),
+			opts: Options{Runner: r},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			s, err := For(tt.entry, tt.opts)
+			if tt.wantErr == "" {
+				if err != nil {
+					t.Fatalf("For() = error %v, want nil", err)
+				}
+				if s == nil {
+					t.Fatal("For() = nil strategy, want implementation")
+				}
+				return
+			}
+			if err == nil {
+				t.Fatalf("For() = nil error, want error containing %q", tt.wantErr)
+			}
+			if !strings.Contains(err.Error(), tt.wantErr) {
+				t.Errorf("For() error = %q, want substring %q", err, tt.wantErr)
+			}
+		})
+	}
+}
