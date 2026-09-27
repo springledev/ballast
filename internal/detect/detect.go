@@ -3,8 +3,9 @@
 // (spec §5.3.6: "detected Docker services → pick one (Immich
 // suggested)"). It shells out to `docker` (AGENTS.md rule 4: wrap,
 // don't reimplement) and never inspects container internals beyond
-// name and image, which is all catalog.DockerDetect.ImagePattern
-// needs to match against.
+// name and image. Suggestions are made by matching container images
+// against catalog entries' detect.docker.imagePattern using
+// case-insensitive regular expressions.
 package detect
 
 import (
@@ -12,6 +13,7 @@ import (
 	"errors"
 	"fmt"
 	"os/exec"
+	"regexp"
 	"sort"
 	"strings"
 
@@ -64,13 +66,13 @@ type Suggestion struct {
 }
 
 // Suggest matches every entry with a detect.docker rule against
-// containers, by plain case-insensitive substring matching on the
-// image name (spec's own bundled examples — "postgres", "mysql", and
-// the worked "ghcr.io/immich-app/immich-server" — are all substrings
-// of the real image reference, not globs, so no glob engine is
-// needed here). Entries with no detect.docker rule (e.g. the generic
-// "folder" entry) are never suggested — they are always a manual
-// pick, which is correct: nothing about a folder is auto-detectable.
+// containers, by case-insensitive regular expression matching on the
+// image name. Patterns are compiled with the (?i) flag for case
+// insensitivity. If a pattern fails to compile as a regex, it is
+// treated as a non-match. Entries with no detect.docker rule (e.g. the
+// generic "folder" entry) are never suggested — they are always a
+// manual pick, which is correct: nothing about a folder is
+// auto-detectable.
 //
 // Suggestions are ordered most specific first — by the length of the
 // matching imagePattern, ties by service name — so an app-specific
@@ -84,16 +86,20 @@ func Suggest(entries []*catalog.Entry, containers []Container) []Suggestion {
 		if e.Detect.Docker == nil || e.Detect.Docker.ImagePattern == "" {
 			continue
 		}
-		pattern := strings.ToLower(e.Detect.Docker.ImagePattern)
+		re, err := regexp.Compile("(?i)" + e.Detect.Docker.ImagePattern)
+		if err != nil {
+			// Pattern fails to compile as regex: skip this entry (treat as no match)
+			continue
+		}
 		var matches []Container
 		for _, c := range containers {
-			if strings.Contains(strings.ToLower(c.Image), pattern) {
+			if re.MatchString(c.Image) {
 				matches = append(matches, c)
 			}
 		}
 		if len(matches) > 0 {
 			out = append(out, Suggestion{Service: e.Service, Containers: matches})
-			patternLen[e.Service] = len(pattern)
+			patternLen[e.Service] = len(e.Detect.Docker.ImagePattern)
 		}
 	}
 	sort.SliceStable(out, func(i, j int) bool {

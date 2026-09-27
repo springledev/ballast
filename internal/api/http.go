@@ -35,6 +35,7 @@ func NewHandler(ops *Ops, apiToken string) http.Handler {
 	protected.HandleFunc("GET /api/v1/catalog", h.catalog)
 	protected.HandleFunc("GET /api/v1/detect", h.detect)
 	protected.HandleFunc("GET /api/v1/preflight", h.preflight)
+	protected.HandleFunc("POST /api/v1/verify", h.verifyAll)
 
 	protected.HandleFunc("GET /api/v1/services", h.listServices)
 	protected.HandleFunc("POST /api/v1/services", h.createService)
@@ -43,6 +44,7 @@ func NewHandler(ops *Ops, apiToken string) http.Handler {
 	protected.HandleFunc("DELETE /api/v1/services/{name}", h.deleteService)
 	protected.HandleFunc("POST /api/v1/services/{name}/backup", h.startBackup)
 	protected.HandleFunc("GET /api/v1/services/{name}/snapshots", h.snapshots)
+	protected.HandleFunc("POST /api/v1/services/{name}/verify", h.verifyService)
 	protected.HandleFunc("POST /api/v1/services/{name}/restore", h.restore)
 	protected.HandleFunc("GET /api/v1/services/{name}/schedule", h.getSchedule)
 	protected.HandleFunc("PUT /api/v1/services/{name}/schedule", h.putSchedule)
@@ -241,6 +243,28 @@ func (h *handler) restore(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]bool{"restored": true})
+}
+
+func (h *handler) verifyService(w http.ResponseWriter, r *http.Request) {
+	rep, err := h.ops.VerifyService(r.Context(), pathName(r))
+	if err != nil {
+		h.writeErr(w, err, http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, http.StatusOK, rep)
+}
+
+// verifyAll always returns 200 with one report per configured service
+// (each carrying its own light/error) unless VerifyAllServices could
+// not even list the configured services; a service that came back
+// red or amber is not itself an API-level failure.
+func (h *handler) verifyAll(w http.ResponseWriter, r *http.Request) {
+	reports, err := h.ops.VerifyAllServices(r.Context())
+	if err != nil && reports == nil {
+		h.writeErr(w, err, http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, http.StatusOK, reports)
 }
 
 // --- schedules -------------------------------------------------------

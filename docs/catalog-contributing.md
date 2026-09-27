@@ -32,7 +32,7 @@ display:                     # optional
 
 detect:                      # optional: how the wizard suggests this entry
   docker:
-    imagePattern: "myorg/myservice"   # substring/pattern to match a running container's image
+    imagePattern: "myorg/myservice"   # regular expression (case-insensitive) to match a container image
     orEnv:
       MY_SERVICE_VERSION: "*"          # or: match if this env var is set on a container
 

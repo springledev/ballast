@@ -383,7 +383,7 @@ func init() {
 	registerDestinationCommands(rootCmd)
 	registerScheduleCommands(rootCmd)
 	registerNotifyCommands(rootCmd)
-	rootCmd.AddCommand(backupCmd, statusCmd, snapshotsCmd, restoreCmd, tokenCmd, catalogCmd, wizardCmd)
+	rootCmd.AddCommand(backupCmd, statusCmd, snapshotsCmd, restoreCmd, tokenCmd, catalogCmd, wizardCmd, verifyCmd)
 }
 
 // shutdownContext returns a context cancelled by the first SIGINT or

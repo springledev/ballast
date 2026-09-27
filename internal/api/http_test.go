@@ -262,6 +262,26 @@ func TestHTTPGolden(t *testing.T) {
 			},
 		},
 		{
+			name:    "verify_service",
+			arrange: withService,
+			req: func(h *harness) *http.Request {
+				return httptest.NewRequest(http.MethodPost, "/api/v1/services/svc/verify", nil)
+			},
+		},
+		{
+			name: "verify_service_not_found",
+			req: func(h *harness) *http.Request {
+				return httptest.NewRequest(http.MethodPost, "/api/v1/services/nope/verify", nil)
+			},
+		},
+		{
+			name:    "verify_all",
+			arrange: withService,
+			req: func(h *harness) *http.Request {
+				return httptest.NewRequest(http.MethodPost, "/api/v1/verify", nil)
+			},
+		},
+		{
 			name:    "restore",
 			arrange: withService,
 			req: func(h *harness) *http.Request {

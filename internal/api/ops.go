@@ -73,6 +73,16 @@ type Ops struct {
 	// requiring the credential file to already exist.
 	CredentialsDir string
 
+	// WorkRoot is the parent of each service's stable per-run work
+	// directory (<WorkRoot>/<service>), the same value given to
+	// pipeline.Pipeline. VerifyService uses it to tell a run's own
+	// backup artifacts (dump/archive files, always written under here)
+	// apart from a files/folder backup's raw source paths, which can
+	// be arbitrarily large and are never re-downloaded just to
+	// re-verify a snapshot. Empty disables VerifyService's declared
+	// checker (no artifacts are ever matched) but not its read-back.
+	WorkRoot string
+
 	// Redact holds secret strings that must never reach a returned
 	// error's text (spec rule 2), the last line of defence before an
 	// error becomes an API response body or CLI output. A repository

@@ -11,7 +11,7 @@ display:
   description: Any MySQL or MariaDB database server running in a Docker container
 detect:
   docker:
-    imagePattern: "mysql"
+    imagePattern: "mysql|mariadb"
 parameters:
   - name: container
     required: true

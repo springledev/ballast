@@ -5,6 +5,7 @@ import (
 	"embed"
 	"fmt"
 	"os"
+	"regexp"
 	"sync"
 
 	"github.com/santhosh-tekuri/jsonschema/v6"
@@ -91,6 +92,11 @@ func Load(data []byte) (*Entry, error) {
 	entry := &Entry{}
 	if err := yaml.Unmarshal(norm, entry); err != nil {
 		return nil, fmt.Errorf("parsing validated catalog into types: %w", err)
+	}
+	if entry.Detect.Docker != nil && entry.Detect.Docker.ImagePattern != "" {
+		if _, err := regexp.Compile("(?i)" + entry.Detect.Docker.ImagePattern); err != nil {
+			return nil, fmt.Errorf("detect.docker.imagePattern %q is not a valid regular expression: %w", entry.Detect.Docker.ImagePattern, err)
+		}
 	}
 	return entry, nil
 }

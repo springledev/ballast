@@ -1,0 +1,22 @@
+{
+  "status": 200,
+  "body": [
+    {
+      "checks": [
+        {
+          "detail": "read 1 sample file(s) back from snapshot 11111111 to confirm the backup is restorable",
+          "method": "restic-read-back",
+          "passed": true
+        },
+        {
+          "detail": "No archive files were produced (files are uploaded directly); integrity was proven by reading the files back from the backup.",
+          "method": "archive-integrity",
+          "passed": true
+        }
+      ],
+      "light": "green",
+      "service": "svc",
+      "snapshot_id": "11111111"
+    }
+  ]
+}

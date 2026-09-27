@@ -70,7 +70,7 @@ func TestListRunning_DockerMissing(t *testing.T) {
 func TestSuggest(t *testing.T) {
 	entries := []*catalog.Entry{
 		{Service: "postgres", Detect: catalog.Detect{Docker: &catalog.DockerDetect{ImagePattern: "postgres"}}},
-		{Service: "mysql", Detect: catalog.Detect{Docker: &catalog.DockerDetect{ImagePattern: "mysql"}}},
+		{Service: "mysql", Detect: catalog.Detect{Docker: &catalog.DockerDetect{ImagePattern: "mysql|mariadb"}}},
 		{Service: "folder"}, // no detect rule: never suggested
 	}
 	containers := []Container{
@@ -83,11 +83,12 @@ func TestSuggest(t *testing.T) {
 	if len(got) != 2 {
 		t.Fatalf("Suggest() = %+v, want 2 suggestions", got)
 	}
-	if got[0].Service != "postgres" || len(got[0].Containers) != 1 || got[0].Containers[0].Name != "immich_postgres" {
-		t.Errorf("postgres suggestion = %+v, want immich_postgres matched", got[0])
+	// mysql|mariadb pattern (13 chars) is longer than postgres (8 chars), so mysql comes first
+	if got[0].Service != "mysql" || len(got[0].Containers) != 1 || got[0].Containers[0].Name != "mysql-db" {
+		t.Errorf("mysql suggestion = %+v, want mysql-db matched", got[0])
 	}
-	if got[1].Service != "mysql" || len(got[1].Containers) != 1 || got[1].Containers[0].Name != "mysql-db" {
-		t.Errorf("mysql suggestion = %+v, want mysql-db matched", got[1])
+	if got[1].Service != "postgres" || len(got[1].Containers) != 1 || got[1].Containers[0].Name != "immich_postgres" {
+		t.Errorf("postgres suggestion = %+v, want immich_postgres matched", got[1])
 	}
 }
 
@@ -145,5 +146,69 @@ func TestSuggest_NoMatches(t *testing.T) {
 	got := Suggest(entries, []Container{{Name: "unrelated", Image: "nginx:latest"}})
 	if len(got) != 0 {
 		t.Errorf("Suggest() = %+v, want no suggestions", got)
+	}
+}
+
+func TestSuggest_MariaDBDetection(t *testing.T) {
+	// Test that regex patterns work: mysql|mariadb should match both MySQL and MariaDB images
+	entries := []*catalog.Entry{
+		{Service: "mysql", Detect: catalog.Detect{Docker: &catalog.DockerDetect{ImagePattern: "mysql|mariadb"}}},
+		{Service: "postgres", Detect: catalog.Detect{Docker: &catalog.DockerDetect{ImagePattern: "postgres"}}},
+	}
+	tests := []struct {
+		name       string
+		containers []Container
+		want       []string // service names
+	}{
+		{
+			name: "MySQL image matches mysql|mariadb pattern",
+			containers: []Container{
+				{Name: "mysql-db", Image: "mysql:8"},
+			},
+			want: []string{"mysql"},
+		},
+		{
+			name: "MariaDB image matches mysql|mariadb pattern",
+			containers: []Container{
+				{Name: "mariadb-db", Image: "mariadb:11"},
+			},
+			want: []string{"mysql"},
+		},
+		{
+			name: "Both MySQL and MariaDB images matched by same pattern",
+			containers: []Container{
+				{Name: "mysql-db", Image: "mysql:8"},
+				{Name: "mariadb-db", Image: "mariadb:11"},
+			},
+			want: []string{"mysql"},
+		},
+		{
+			name: "mariadb image matched by mysql|mariadb, postgres image by postgres pattern",
+			containers: []Container{
+				{Name: "mariadb-db", Image: "mariadb:11"},
+				{Name: "postgres-db", Image: "postgres:16"},
+			},
+			want: []string{"mysql", "postgres"},
+		},
+		{
+			name: "single-word patterns still work like before",
+			containers: []Container{
+				{Name: "postgres-db", Image: "ghcr.io/immich-app/postgres:14"},
+			},
+			want: []string{"postgres"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := Suggest(entries, tt.containers)
+			var names []string
+			for _, s := range got {
+				names = append(names, s.Service)
+			}
+			if strings.Join(names, ",") != strings.Join(tt.want, ",") {
+				t.Errorf("Suggest() order = %v, want %v", names, tt.want)
+			}
+		})
 	}
 }

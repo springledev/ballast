@@ -119,6 +119,11 @@ func TestLoadRejections(t *testing.T) {
 				"strategy: dump\n", 1),
 			wantErr: "catalog validation",
 		},
+		{
+			name:    "imagePattern is not a valid regular expression",
+			yaml:    strings.Replace(validEntry, `imagePattern: "ghcr.io/immich-app/immich-server"`, `imagePattern: "immich-server("`, 1),
+			wantErr: "not a valid regular expression",
+		},
 	}
 	for _, tc := range cases {
 		tc := tc
