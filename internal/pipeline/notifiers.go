@@ -7,13 +7,19 @@ import (
 	"sort"
 
 	"github.com/springledev/ballast/internal/notify"
+	"github.com/springledev/ballast/internal/runner"
+	"github.com/springledev/ballast/internal/secret"
 )
 
-// BuildNotifier constructs a notify.Notifier wired to every service's
-// configured channels, read from root-only credential files (spec
-// rule 2: never the database, never ballast.yaml).
+// BuildNotifier constructs a notify.Notifier that finds each
+// service's channels in root-only credential files (spec rule 2:
+// never the database, never ballast.yaml), read fresh every time a
+// notification is sent. A service added after Ballast started — from
+// the web UI while `ballast serve` is running, say — or a credential
+// file written later is therefore picked up without a restart; a
+// failure for it is never silently dropped.
 //
-// For each service, a channel is registered from the first file that
+// For each service, a channel is used from the first file that
 // exists, in this order:
 //
 //	ntfy topic:  ballast-ntfy-topic.<service>   then ballast-ntfy-topic
@@ -24,39 +30,70 @@ import (
 // permissions, a directory where a file is expected, ...) is loud,
 // matching how every other credential file is treated.
 //
-// The loaded secret values are returned too, so the caller can add
-// them to every Runner/Coordinator/Pipeline Redact list built during
-// wiring: the same secret list must reach all three (spec rule 2).
-func BuildNotifier(credDir string, services []string) (*notify.Notifier, []string, error) {
-	n := notify.NewNotifier()
-	var secrets []string
-
+// Each file is looked up in every dir of credDirs in turn (see
+// runner.FindCredentialDir): the operator's $CREDENTIALS_DIRECTORY
+// first, then the folder where Ballast saves secrets it created
+// itself, such as an ntfy link typed into the wizard.
+//
+// The channels of every service in services are loaded once up front,
+// so their secrets are redacted from the very first log line. A
+// service whose credential file is broken is returned as one problem
+// per service for the caller to report, never a startup failure: one
+// bad file must not stop every other service's backups (spec §3
+// principle 3). Sending for that service keeps failing loudly until
+// the file is fixed. Every loaded value — now or at send time — is
+// added to secrets, the Set shared with every Runner/Coordinator/
+// Pipeline, so it is redacted everywhere from the moment Ballast
+// first reads it.
+func BuildNotifier(credDirs []string, services []string, secrets *secret.Set) (*notify.Notifier, []error) {
+	load := func(svc string) ([]notify.Channel, error) {
+		return loadChannels(credDirs, svc, secrets)
+	}
+	var problems []error
 	for _, svc := range uniqueSorted(services) {
-		topic, err := firstCredential(credDir, "ballast-ntfy-topic."+svc, "ballast-ntfy-topic")
-		if err != nil {
-			return nil, nil, fmt.Errorf("loading ntfy channel for %s: %w", svc, err)
-		}
-		if topic != "" {
-			n.RegisterChannel(svc, notify.NewNtfyChannel(topic))
-			secrets = append(secrets, topic)
-		}
-
-		url, err := firstCredential(credDir, "ballast-webhook-url."+svc, "ballast-webhook-url")
-		if err != nil {
-			return nil, nil, fmt.Errorf("loading webhook channel for %s: %w", svc, err)
-		}
-		if url != "" {
-			n.RegisterChannel(svc, notify.NewWebhookChannel(url))
-			secrets = append(secrets, url)
+		if _, err := load(svc); err != nil {
+			problems = append(problems, err)
 		}
 	}
-	return n, secrets, nil
+	n := notify.NewNotifier()
+	n.Resolve = load
+	return n, problems
+}
+
+// loadChannels reads svc's ntfy/webhook credential files (per-service
+// first, then the global fallback) and records every value in secrets.
+func loadChannels(credDirs []string, svc string, secrets *secret.Set) ([]notify.Channel, error) {
+	var chs []notify.Channel
+	topic, err := firstCredential(credDirs, "ballast-ntfy-topic."+svc, "ballast-ntfy-topic")
+	if err != nil {
+		return nil, fmt.Errorf("loading ntfy channel for %s: %w", svc, err)
+	}
+	if topic != "" {
+		secrets.Add(topic)
+		chs = append(chs, notify.NewNtfyChannel(topic))
+	}
+
+	url, err := firstCredential(credDirs, "ballast-webhook-url."+svc, "ballast-webhook-url")
+	if err != nil {
+		return nil, fmt.Errorf("loading webhook channel for %s: %w", svc, err)
+	}
+	if url != "" {
+		secrets.Add(url)
+		chs = append(chs, notify.NewWebhookChannel(url))
+	}
+	return chs, nil
 }
 
 // firstCredential returns the value of the first of names that exists
-// as a credential file in dir, or "" when none of them exist.
-func firstCredential(dir string, names ...string) (string, error) {
+// as a credential file in any of dirs, or "" when none of them exist.
+// Names are tried in order, so a per-service file in any dir wins
+// over a global one.
+func firstCredential(dirs []string, names ...string) (string, error) {
 	for _, name := range names {
+		dir := runner.FindCredentialDir(name, dirs...)
+		if dir == "" {
+			return "", fmt.Errorf("no credential directory configured")
+		}
 		v, err := notify.LoadCredentialValue(dir, name)
 		if err == nil {
 			return v, nil

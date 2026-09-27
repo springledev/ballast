@@ -25,7 +25,9 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -41,6 +43,14 @@ const (
 	PinnedVersion = "0.17.3"
 	PinnedSeries  = "0.17"
 )
+
+// MinimumVersion is the oldest restic release Ballast can set up a
+// new destination with: restic 0.17.0 is the first to report "no
+// repository here yet" with its own exit status (10). Older releases
+// exit 1 for that and for every other failure alike, so Ballast could
+// not tell "needs creating" from "something is wrong" and would
+// either never create the repository or risk hiding a real problem.
+const MinimumVersion = "0.17.0"
 
 // restic exit statuses beyond 0/1 (from `restic help`, EXIT STATUS).
 // Encoded here so failures can be explained in plain English to
@@ -205,6 +215,9 @@ func (r *Repository) run(ctx context.Context, args ...string) (runner.Result, er
 // causes (spec §10: beginners must not need to know what "exit 12"
 // means) while keeping the original error in the chain.
 func (r *Repository) explain(op string, err error) error {
+	if errors.Is(err, exec.ErrNotFound) {
+		return fmt.Errorf("%s: restic is not installed, or not on $PATH — install it from https://restic.readthedocs.io/en/stable/020_installation.html and try again: %w", op, err)
+	}
 	var ee *runner.ExitError
 	if !errors.As(err, &ee) {
 		return fmt.Errorf("%s for repository %s: %w", op, r.Location, err)
@@ -219,6 +232,28 @@ func (r *Repository) explain(op string, err error) error {
 	default:
 		return fmt.Errorf("%s for repository %s: %w", op, r.Location, err)
 	}
+}
+
+// IsRepoMissing reports whether err is restic's own "repository does
+// not exist yet" signal (exit code 10) — the same code every read
+// operation returns until Init has been run once at this location.
+// Callers use this to make Init idempotent: check with a cheap read
+// like Snapshots first, and only call Init when this reports true.
+// Checking restic's own signal this way is more reliable than restic
+// init's own generic "config file already exists" failure text (not
+// part of the documented exit-status convention, spec §8's own
+// caution against parsing anything but pinned, documented output).
+func IsRepoMissing(err error) bool {
+	var ee *runner.ExitError
+	return errors.As(err, &ee) && ee.Code == exitRepoMissing
+}
+
+// IsWrongPassword reports whether err is restic's "wrong password"
+// signal (exit code 12): a repository exists at this location, but
+// the password file does not open it.
+func IsWrongPassword(err error) bool {
+	var ee *runner.ExitError
+	return errors.As(err, &ee) && ee.Code == exitWrongPassword
 }
 
 // Init creates a new empty repository at the configured location.
@@ -569,6 +604,37 @@ type Version struct {
 // output series (PinnedSeries).
 func (v Version) Compatible() bool {
 	return strings.HasPrefix(v.Number, PinnedSeries+".") || v.Number == PinnedSeries
+}
+
+// TooOld reports whether the binary predates MinimumVersion. An
+// unparseable number is not reported as too old: Warning already
+// flags anything outside the tested series.
+func (v Version) TooOld() bool {
+	have, ok := majorMinor(v.Number)
+	min, _ := majorMinor(MinimumVersion)
+	if !ok {
+		return false
+	}
+	return have[0] < min[0] || (have[0] == min[0] && have[1] < min[1])
+}
+
+// majorMinor parses the leading "MAJOR.MINOR" of a version number.
+func majorMinor(num string) ([2]int, bool) {
+	parts := strings.SplitN(num, ".", 3)
+	if len(parts) < 2 {
+		return [2]int{}, false
+	}
+	major, err1 := strconv.Atoi(parts[0])
+	minor, err2 := strconv.Atoi(parts[1])
+	if err1 != nil || err2 != nil {
+		return [2]int{}, false
+	}
+	return [2]int{major, minor}, true
+}
+
+// TooOldError is the plain-English explanation for a TooOld binary.
+func (v Version) TooOldError() error {
+	return fmt.Errorf("restic %s is too old: Ballast needs restic %s or newer (%s recommended) — install a newer version from https://restic.readthedocs.io/en/stable/020_installation.html", v.Number, MinimumVersion, PinnedVersion)
 }
 
 // Warning returns a non-empty plain-English warning when the binary

@@ -1,0 +1,9 @@
+{
+  "status": 200,
+  "body": {
+    "docker_error": "internal wiring error: no command runner configured",
+    "docker_installed": false,
+    "restic_error": "internal wiring error: no command runner configured",
+    "restic_installed": false
+  }
+}

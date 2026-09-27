@@ -1,0 +1,6 @@
+{
+  "status": 500,
+  "body": {
+    "error": "service detection is not configured (internal wiring error)"
+  }
+}

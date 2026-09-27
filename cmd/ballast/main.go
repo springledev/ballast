@@ -27,6 +27,7 @@ import (
 	"github.com/springledev/ballast/internal/api"
 	"github.com/springledev/ballast/internal/config"
 	"github.com/springledev/ballast/internal/notify"
+	execrunner "github.com/springledev/ballast/internal/runner"
 	"github.com/springledev/ballast/internal/scheduler"
 	"github.com/springledev/ballast/internal/store"
 	"github.com/springledev/ballast/web"
@@ -72,7 +73,7 @@ var serveCmd = &cobra.Command{
 		}
 		defer a.Close()
 		if a.apiToken == "" {
-			tokenPath := filepath.Join(cfg.CredentialsDir, apiTokenCredential)
+			tokenPath := filepath.Join(execrunner.FindCredentialDir(apiTokenCredential, cfg.CredentialDirs()...), apiTokenCredential)
 			return fmt.Errorf("refusing to start: no API token configured; put one in %s (under systemd: LoadCredential=%s:<path>)", tokenPath, apiTokenCredential)
 		}
 
@@ -333,7 +334,7 @@ var (
 
 var triggerCmd = &cobra.Command{
 	Use:   "trigger <service>",
-	Short: "Run one backup job via its external trigger token (reserved for Phase-2 mobile/udev triggers)",
+	Short: "Run one backup using a trigger token (for scripts and automations that should only be able to start a backup)",
 	Long: `Run one backup job now, authenticated by that service's trigger token.
 
 The token is read from, in order:
@@ -351,7 +352,7 @@ then gives up without starting a second run.`,
 		if err != nil {
 			return err
 		}
-		token, err := resolveTriggerToken(args[0], triggerToken, triggerTokenFile, cfg.CredentialsDir, cmd.ErrOrStderr())
+		token, err := resolveTriggerToken(args[0], triggerToken, triggerTokenFile, execrunner.FindCredentialDir(triggerTokenCredentialPrefix+args[0], cfg.CredentialDirs()...), cmd.ErrOrStderr())
 		if err != nil {
 			return fmt.Errorf("triggering %s: %w", args[0], err)
 		}
@@ -381,7 +382,8 @@ func init() {
 	registerServiceCommands(rootCmd)
 	registerDestinationCommands(rootCmd)
 	registerScheduleCommands(rootCmd)
-	rootCmd.AddCommand(backupCmd, statusCmd, snapshotsCmd, restoreCmd, tokenCmd, catalogCmd)
+	registerNotifyCommands(rootCmd)
+	rootCmd.AddCommand(backupCmd, statusCmd, snapshotsCmd, restoreCmd, tokenCmd, catalogCmd, wizardCmd)
 }
 
 // shutdownContext returns a context cancelled by the first SIGINT or

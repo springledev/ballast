@@ -12,6 +12,8 @@ import (
 	"syscall"
 	"testing"
 	"time"
+
+	"github.com/springledev/ballast/internal/secret"
 )
 
 // TestHelperProcess is not a test: it is the fake external command the
@@ -477,7 +479,7 @@ func TestBaseEnvOverride(t *testing.T) {
 // reach logs or error messages. A secret printed to stderr must be
 // scrubbed from both the Result and the error text.
 func TestRedaction(t *testing.T) {
-	r := &Runner{Redact: []string{"s3cr3t-token"}}
+	r := &Runner{Redact: secret.NewSet("s3cr3t-token")}
 	res, err := r.Run(context.Background(), nil, nil, helperCommand("fail", "1", "password is s3cr3t-token ok"))
 	if err == nil {
 		t.Fatal("Run must fail")

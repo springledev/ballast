@@ -16,6 +16,38 @@ jobs:
           # Single source of truth for the Go version (spec: Go 1.25).
           go-version-file: go.mod
 
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+
+      - name: Web UI test
+        run: npm ci && npm test
+        working-directory: web
+
+      - name: Web UI build
+        # Built here, not by the Go toolchain (spec §10: "built at
+        # release time and embedded via go:embed" — go:embed only
+        # reads whatever is already in web/dist, it does not invoke
+        # npm). This keeps web/dist in the repo in sync with the
+        # frontend source that produced it.
+        run: npm run build
+        working-directory: web
+
+      - name: Web UI build is committed
+        # The build above overwrites web/dist, so without this a stale
+        # committed dist would pass CI yet ship in every release binary.
+        # --porcelain (not diff) also catches new and removed hashed
+        # asset files. The Vite build is deterministic, so any change
+        # here means someone forgot `make web`.
+        run: |
+          if [ -n "$(git status --porcelain -- web/dist)" ]; then
+            echo "web/dist is out of date with web/src. Run 'make web' and commit the result:"
+            git status --porcelain -- web/dist
+            exit 1
+          fi
+
       - name: Vet
         run: go vet ./...
 

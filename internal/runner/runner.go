@@ -33,6 +33,8 @@ import (
 	"strings"
 	"syscall"
 	"time"
+
+	"github.com/springledev/ballast/internal/secret"
 )
 
 // defaultStderrCap is the default number of stderr bytes retained per
@@ -47,10 +49,11 @@ type Runner struct {
 	// own Env entries override duplicate keys. Nil uses os.Environ().
 	BaseEnv []string
 
-	// Redact lists secret strings (passwords, keys) that must never
+	// Redact holds secret strings (passwords, keys) that must never
 	// reach logs or error messages: every occurrence in captured
-	// stderr is replaced with "[redacted]" before it can leak.
-	Redact []string
+	// stderr is replaced with "[redacted]" before it can leak. Nil
+	// redacts nothing.
+	Redact *secret.Set
 
 	// StderrCap bounds how many bytes of stderr are retained per
 	// command (the tail is kept). Zero uses a 64 KiB default.
@@ -371,12 +374,7 @@ func (r *Runner) baseEnv() []string {
 
 // redact scrubs every configured secret from s.
 func (r *Runner) redact(s string) string {
-	for _, secret := range r.Redact {
-		if secret != "" {
-			s = strings.ReplaceAll(s, secret, "[redacted]")
-		}
-	}
-	return s
+	return r.Redact.Redact(s)
 }
 
 // mergeEnv combines base and extra environment entries with

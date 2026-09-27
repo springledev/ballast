@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/springledev/ballast/internal/engine"
+	secretpkg "github.com/springledev/ballast/internal/secret"
 )
 
 // spyRunner stands in for the real backup pipeline (spec §12: test
@@ -864,7 +865,7 @@ func TestCoordinatorRedactsSecrets(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			f := newFixture(t)
 			f.schedule(t, "immich", "0 3 * * *")
-			f.c.Redact = []string{"", secret} // an empty entry must not blank everything
+			f.c.Redact = secretpkg.NewSet("", secret) // an empty entry must not blank everything
 			f.runner.err = leak
 			if tt.interrupted {
 				f.leaveUnfinishedRun(t, "immich")
@@ -896,7 +897,7 @@ func TestCoordinatorRedactsSecrets(t *testing.T) {
 }
 
 func TestCoordinatorRedactErr(t *testing.T) {
-	c := &Coordinator{Redact: []string{"s3cret"}}
+	c := &Coordinator{Redact: secretpkg.NewSet("s3cret")}
 	if c.redactErr(nil) != nil {
 		t.Error("redactErr(nil) must be nil")
 	}

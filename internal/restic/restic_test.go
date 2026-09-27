@@ -625,6 +625,66 @@ func TestReadBackSamplesOneFilePerPathSet(t *testing.T) {
 	}
 }
 
+// TestExitSignals: the exit-10 ("no repository yet") and exit-12
+// ("wrong password") signals are recognized through the
+// explain()-wrapped, plain-English error a real caller actually sees
+// (not just the raw *runner.ExitError), and never for each other or
+// an unrelated failure.
+func TestExitSignals(t *testing.T) {
+	tests := []struct {
+		code            string
+		wantMissing     bool
+		wantWrongPasswd bool
+	}{
+		{code: "10", wantMissing: true},
+		{code: "12", wantWrongPasswd: true},
+		{code: "1"},
+	}
+	for _, tt := range tests {
+		t.Run("exit "+tt.code, func(t *testing.T) {
+			s := newResticStub(t)
+			repo := s.withEnv(t, s.openStub(t), "STUB_FAIL_CMD=snapshots", "STUB_FAIL_CODE="+tt.code)
+			_, err := repo.Snapshots(context.Background(), SnapshotFilter{})
+			if err == nil {
+				t.Fatal("Snapshots = nil error, want the simulated failure")
+			}
+			if got := IsRepoMissing(err); got != tt.wantMissing {
+				t.Errorf("IsRepoMissing(%v) = %v, want %v", err, got, tt.wantMissing)
+			}
+			if got := IsWrongPassword(err); got != tt.wantWrongPasswd {
+				t.Errorf("IsWrongPassword(%v) = %v, want %v", err, got, tt.wantWrongPasswd)
+			}
+		})
+	}
+}
+
+// TestVersionTooOld: releases before MinimumVersion cannot signal
+// "no repository yet" distinctly, so they are refused for setup.
+func TestVersionTooOld(t *testing.T) {
+	tests := []struct {
+		number string
+		want   bool
+	}{
+		{"0.16.5", true},
+		{"0.9.6", true},
+		{"0.17.0", false},
+		{"0.17.3", false},
+		{"0.18.1", false},
+		{"1.0.0", false},
+		{"garbage", false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.number, func(t *testing.T) {
+			if got := (Version{Number: tt.number}).TooOld(); got != tt.want {
+				t.Errorf("Version{%q}.TooOld() = %v, want %v", tt.number, got, tt.want)
+			}
+		})
+	}
+	if msg := (Version{Number: "0.16.5"}).TooOldError().Error(); !strings.Contains(msg, MinimumVersion) {
+		t.Errorf("TooOldError = %q, want it to name the minimum version", msg)
+	}
+}
+
 // TestExitCodeTranslation: restic's documented exit statuses become
 // plain-English causes (spec §10 beginner requirement) while the
 // original error stays in the chain.
@@ -655,6 +715,32 @@ func TestExitCodeTranslation(t *testing.T) {
 				t.Errorf("error = %v, want the runner.ExitError preserved in the chain", err)
 			}
 		})
+	}
+}
+
+// TestExplainMissingBinary: when restic itself is not installed (or
+// not on $PATH), the error must say so in plain English (spec §10
+// beginner requirement) instead of surfacing a raw "executable file
+// not found" — this is what a brand-new install hits before ever
+// having a real repository to name.
+func TestExplainMissingBinary(t *testing.T) {
+	// exec.Command resolves an unqualified name (like "restic") via
+	// the REAL process environment's $PATH at LookPath time, not via
+	// Runner.BaseEnv (BaseEnv only reaches the child once already
+	// started) — t.Setenv on the process's actual PATH is the only way
+	// to hermetically simulate "not installed", regardless of whether
+	// this machine happens to have a real restic binary somewhere.
+	t.Setenv("PATH", t.TempDir())
+	repo, err := Open("/srv/backups", Options{Runner: &runner.Runner{}})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	_, err = repo.Snapshots(context.Background(), SnapshotFilter{})
+	if err == nil {
+		t.Fatal("Snapshots = nil error, want a missing-binary failure")
+	}
+	if !strings.Contains(err.Error(), "restic is not installed") {
+		t.Errorf("error = %q, want it to say restic is not installed", err)
 	}
 }
 

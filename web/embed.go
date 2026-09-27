@@ -1,10 +1,11 @@
-// Package web hosts the Vue frontend sources built at release time.
+// Package web hosts the Vue frontend sources (spec §10, §14 step 12)
+// built at release time.
 //
 // The built assets live in web/dist and are embedded into the single
-// static binary with go:embed, so end users never need Node installed.
-// At this scaffolding step (§14 step 1) dist contains a stub page that
-// the `ballast serve` command exposes; later steps replace it with the
-// real UI and the REST API it talks to.
+// static binary with go:embed, so end users never need Node installed
+// (`make web` or CI builds dist from ../web/src; go:embed only reads
+// whatever is already there). `ballast serve` mounts Handler at "/"
+// alongside the REST API the same UI talks to via /api/v1.
 package web
 
 import (

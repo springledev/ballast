@@ -8,7 +8,9 @@ package api
 
 import (
 	"context"
+	"crypto/rand"
 	"database/sql"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"os"
@@ -19,11 +21,14 @@ import (
 	"time"
 
 	"github.com/springledev/ballast/internal/catalog"
+	"github.com/springledev/ballast/internal/detect"
 	"github.com/springledev/ballast/internal/engine"
 	"github.com/springledev/ballast/internal/inventory"
 	"github.com/springledev/ballast/internal/notify"
 	"github.com/springledev/ballast/internal/restic"
+	"github.com/springledev/ballast/internal/runner"
 	"github.com/springledev/ballast/internal/scheduler"
+	"github.com/springledev/ballast/internal/secret"
 )
 
 // Ops is the shared operations layer. Every exported method wraps its
@@ -41,10 +46,38 @@ type Ops struct {
 	// same Runner/CredDir/ResticBin the pipeline uses. Built by wiring.
 	Repo func(dest inventory.Destination) (*restic.Repository, error)
 
-	// Redact lists secret strings that must never reach a returned
+	// Runner runs `docker ps` for DetectServices and `restic version`
+	// for CheckPreflight (the first-run wizard's service suggestions
+	// and tool checks, spec §5.3.6). Nil disables both with a clear
+	// error rather than a nil-pointer panic — they are always
+	// best-effort conveniences, never required (a service can still be
+	// added manually, and Init will still fail loudly on its own if a
+	// tool is missing).
+	Runner *runner.Runner
+
+	// ResticBin overrides the restic binary CheckPreflight probes
+	// (tests only); empty resolves "restic" against $PATH, matching
+	// every other restic invocation in production.
+	ResticBin string
+
+	// CredentialSearchDirs lists every directory a credential file may
+	// already be in (config.Config.CredentialDirs). ensureLocalPassword
+	// never generates a password that exists in any of them. Nil
+	// checks CredentialsDir only.
+	CredentialSearchDirs []string
+
+	// CredentialsDir is where PutDestination's ensureLocalPassword
+	// writes a freshly generated repository password for a brand-new
+	// local-disk destination (spec §5.3.6). Empty disables
+	// auto-generation: PutDestination then behaves exactly as before,
+	// requiring the credential file to already exist.
+	CredentialsDir string
+
+	// Redact holds secret strings that must never reach a returned
 	// error's text (spec rule 2), the last line of defence before an
-	// error becomes an API response body or CLI output.
-	Redact []string
+	// error becomes an API response body or CLI output. A repository
+	// password PutDestination generates is added to it immediately.
+	Redact *secret.Set
 
 	// Ctx, when set, is the context StartBackup's background run uses
 	// instead of the ctx passed to StartBackup itself. This matters
@@ -59,8 +92,81 @@ type Ops struct {
 	// falls back to the ctx StartBackup was called with.
 	Ctx context.Context
 
+	// DestinationLocks, when set, extends PutDestination's per-name
+	// serialization across processes (a `ballast destination add` or
+	// `ballast wizard` running while `ballast serve` handles a web UI
+	// request for the same new destination). Wiring uses a
+	// scheduler.FileLocker in its own directory, so a destination and
+	// a service with the same name never share a lock. Nil serializes
+	// within this process only.
+	DestinationLocks scheduler.Locker
+
 	runs sync.WaitGroup
+
+	// destMu guards destLocks, the lazily-built set of per-destination
+	// locks PutDestination serializes on (see lockDestination). Ops is
+	// constructed as a struct literal all over the codebase (wiring,
+	// tests), so the zero value of both must work with no
+	// initialization step.
+	destMu    sync.Mutex
+	destLocks map[string]*sync.Mutex
 }
+
+// lockDestination serializes every PutDestination call for
+// destination name, so two concurrent calls for the *same* new
+// destination (e.g. a GUI double-click, an API retry racing the
+// original request, or the CLI and the web UI at once) can never
+// interleave their "does it already exist" check, restic init and
+// failure cleanup. Without this, two callers could both generate a
+// repository password, both see the destination as new, and the
+// second's cleanup could delete the row or password file the first
+// one just finished setting up. It returns an unlock func to defer.
+//
+// Within this process an in-memory mutex does the work; across
+// processes, DestinationLocks (when set) is polled until it is free
+// or ctx ends — a setup in another process can take as long as a
+// restic init, so this waits rather than failing straight away.
+//
+// In-memory locks are created lazily, one per distinct name, and
+// never removed; for the small, operator-sized set of destinations
+// Ballast targets that's a trivial amount of memory, not a leak worth
+// guarding against.
+func (o *Ops) lockDestination(ctx context.Context, name string) (func(), error) {
+	o.destMu.Lock()
+	l, ok := o.destLocks[name]
+	if !ok {
+		l = &sync.Mutex{}
+		if o.destLocks == nil {
+			o.destLocks = make(map[string]*sync.Mutex)
+		}
+		o.destLocks[name] = l
+	}
+	o.destMu.Unlock()
+	l.Lock()
+	if o.DestinationLocks == nil {
+		return l.Unlock, nil
+	}
+	for {
+		release, ok, err := o.DestinationLocks.TryLock(name)
+		if err != nil {
+			l.Unlock()
+			return nil, fmt.Errorf("destination %s: %w", name, err)
+		}
+		if ok {
+			return func() { release(); l.Unlock() }, nil
+		}
+		select {
+		case <-ctx.Done():
+			l.Unlock()
+			return nil, fmt.Errorf("destination %s: waiting for another Ballast command to finish setting it up: %w", name, ctx.Err())
+		case <-time.After(destinationLockPoll):
+		}
+	}
+}
+
+// destinationLockPoll is how often lockDestination retries a
+// destination lock another process holds.
+const destinationLockPoll = 100 * time.Millisecond
 
 // repoFor builds a restic.Repository for dest, or a clear
 // configuration error if wiring never set Repo.
@@ -73,12 +179,7 @@ func (o *Ops) repoFor(dest inventory.Destination) (*restic.Repository, error) {
 
 // redact scrubs every configured secret from s.
 func (o *Ops) redact(s string) string {
-	for _, secret := range o.Redact {
-		if secret != "" {
-			s = strings.ReplaceAll(s, secret, "[redacted]")
-		}
-	}
-	return s
+	return o.Redact.Redact(s)
 }
 
 // redactErr returns err with any secret removed from its text, while
@@ -529,7 +630,24 @@ func (o *Ops) ListDestinations(ctx context.Context) ([]inventory.Destination, er
 // PutDestination configures a destination. When init is true, it also
 // initializes the restic repository at d.Location (`ballast
 // destination add --init`, or first-time API setup).
-func (o *Ops) PutDestination(ctx context.Context, d inventory.Destination, init bool) error {
+//
+// A failed init leaves nothing half-made behind: a destination that
+// did not exist before is removed again, and a repository password
+// generated for it is deleted — otherwise a retry would silently
+// reuse a password that never opened anything.
+func (o *Ops) PutDestination(ctx context.Context, d inventory.Destination, init bool) (err error) {
+	unlock, err := o.lockDestination(ctx, d.Name)
+	if err != nil {
+		return err
+	}
+	defer unlock()
+
+	_, getErr := inventory.GetDestination(o.DB, d.Name)
+	if getErr != nil && !errors.Is(getErr, inventory.ErrNotFound) {
+		return wrapf("destination "+d.Name, getErr)
+	}
+	isNew := getErr != nil
+
 	if err := inventory.PutDestination(o.DB, d); err != nil {
 		return fmt.Errorf("%w: %w", ErrValidation, wrapf("destination "+d.Name, err))
 	}
@@ -540,14 +658,179 @@ func (o *Ops) PutDestination(ctx context.Context, d inventory.Destination, init 
 	if err != nil {
 		return wrapf("destination "+d.Name, err)
 	}
+	generated, err := o.ensureLocalPassword(got)
+	if err != nil {
+		return wrapf("destination "+d.Name, err)
+	}
+	// otherRepo is set when a repository that the generated password
+	// never opened was already there: that password protects nothing
+	// and must go, so a retry asks for the real one again.
+	otherRepo := false
+	defer func() {
+		if err == nil {
+			return
+		}
+		var cleanup []error
+		if generated != "" {
+			if !otherRepo && o.repoMayHoldData(got) {
+				err = fmt.Errorf("%w (the password file %s was kept because a repository may already have been created with it)", err, generated)
+			} else if rmErr := os.Remove(generated); rmErr != nil && !os.IsNotExist(rmErr) {
+				cleanup = append(cleanup, fmt.Errorf("removing the unused password file %s: %w", generated, rmErr))
+			}
+		}
+		if isNew {
+			if delErr := inventory.DeleteDestination(o.DB, d.Name); delErr != nil {
+				cleanup = append(cleanup, fmt.Errorf("removing the half-created destination: %w", delErr))
+			}
+		}
+		if len(cleanup) > 0 {
+			err = errors.Join(append([]error{err}, cleanup...)...)
+		}
+		err = o.redactErr(err)
+	}()
+
 	repo, err := o.repoFor(got)
 	if err != nil {
 		return wrapf("destination "+d.Name, err)
 	}
-	if err := repo.Init(ctx); err != nil {
-		return o.redactErr(fmt.Errorf("destination %s: initializing the backup repository: %w", d.Name, err))
+	if err := ensureRepoInitialized(ctx, repo); err != nil {
+		if generated != "" && restic.IsWrongPassword(err) {
+			otherRepo = true
+			return o.redactErr(fmt.Errorf(
+				"destination %s: there is already a backup repository in %s, but Ballast does not have its password. "+
+					"Put that repository's original password in %s and try again, or choose an empty folder for a new repository: %w",
+				d.Name, got.Location, generated, err))
+		}
+		return o.redactErr(fmt.Errorf("destination %s: setting up the backup repository: %w", d.Name, err))
 	}
 	return nil
+}
+
+// ensureLocalPassword generates and saves a repository password for a
+// brand-new local-disk destination when its credential file does not
+// exist yet, so neither the CLI wizard nor the GUI wizard/Destinations
+// page ever asks a first-time user to invent or paste a secret for
+// the common case (spec §5.3.6, spec rule 2: it is written straight
+// to a root-only 0600 file, never the DB, and added to Redact at
+// once). An existing file is never touched — this only fills a
+// genuine gap. It returns the path of the file it wrote, or "" when
+// it wrote nothing.
+//
+// It only applies to local filesystem destinations (an absolute
+// path): a remote backend (s3:, b2:, sftp:, ...) is inherently an
+// advanced setup that already requires provider-specific credentials
+// the operator must supply themselves, so a missing file there stays
+// exactly the loud, actionable error it was before.
+func (o *Ops) ensureLocalPassword(d inventory.Destination) (string, error) {
+	if !filepath.IsAbs(d.Location) || o.CredentialsDir == "" || d.PasswordCredential == "" {
+		return "", nil
+	}
+	// A password the operator already provided in any credential
+	// directory (e.g. via LoadCredential=) is used as is, never
+	// shadowed by a second, generated one.
+	for _, dir := range o.CredentialSearchDirs {
+		if _, err := os.Lstat(filepath.Join(dir, d.PasswordCredential)); err == nil {
+			return "", nil
+		}
+	}
+	if err := os.MkdirAll(o.CredentialsDir, 0o700); err != nil {
+		return "", fmt.Errorf("creating credential directory %s: %w", o.CredentialsDir, err)
+	}
+	path := filepath.Join(o.CredentialsDir, d.PasswordCredential)
+
+	// Create the file atomically rather than checking os.Stat first
+	// and writing second: a Stat-then-Write has a window in which
+	// another writer could create the file in between, and this call
+	// would then overwrite it with a different password, orphaning
+	// whatever restic init the first writer already ran with the
+	// original one. PutDestination's per-name lock covers Ballast's
+	// own callers (DestinationLocks spans processes), but not an Ops
+	// without DestinationLocks or an operator writing the file by hand
+	// at that moment. O_EXCL makes "the file already exists" a creation
+	// error instead of silent data loss.
+	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+	if err != nil {
+		if os.IsExist(err) {
+			return "", nil // someone else already created it; never touch it
+		}
+		return "", fmt.Errorf("creating repository password file %s: %w", path, err)
+	}
+	raw := make([]byte, 32)
+	if _, err := rand.Read(raw); err != nil {
+		f.Close()
+		os.Remove(path)
+		return "", fmt.Errorf("generating repository password: %w", err)
+	}
+	pw := hex.EncodeToString(raw)
+	o.Redact.Add(pw)
+	if _, err := f.WriteString(pw + "\n"); err != nil {
+		f.Close()
+		os.Remove(path)
+		return "", fmt.Errorf("saving repository password to %s: %w", path, err)
+	}
+	if err := f.Close(); err != nil {
+		os.Remove(path)
+		return "", fmt.Errorf("saving repository password to %s: %w", path, err)
+	}
+	return path, nil
+}
+
+// ensureRepoInitialized creates repo only if it does not already
+// exist, probed with a harmless read (Snapshots) rather than calling
+// Init unconditionally: restic init on an already-initialized repo
+// fails, so this is what makes it safe to add/re-add a destination
+// through the GUI or CLI more than once, and safe for the GUI to
+// always initialize new destinations by default (spec §10: a
+// beginner should never need to know restic has a separate "init"
+// step, or that skipping it silently leaves every later backup
+// failing with a raw "repository does not exist" error).
+//
+// This relies on restic's "no repository yet" exit status, which
+// only exists from restic.MinimumVersion on. Older releases report an
+// empty folder as a generic failure, so when the probe fails for any
+// other reason the version is checked and a too-old restic is named
+// as the cause instead of the misleading raw error.
+func ensureRepoInitialized(ctx context.Context, repo *restic.Repository) error {
+	_, err := repo.Snapshots(ctx, restic.SnapshotFilter{Latest: 1})
+	switch {
+	case err == nil:
+		return nil
+	case restic.IsRepoMissing(err):
+		return repo.Init(ctx)
+	case restic.IsWrongPassword(err):
+		return err
+	}
+	if v, verr := repo.Version(ctx); verr == nil && v.TooOld() {
+		return fmt.Errorf("%w (%w)", v.TooOldError(), err)
+	}
+	return err
+}
+
+// repoMayHoldData re-probes dest's repository, on a fresh,
+// independent context, to decide whether a password PutDestination
+// just generated might be the only copy of a repository's key that
+// now actually exists — e.g. restic init wrote the repository's key
+// file and was then killed (or ctx was canceled) before it returned
+// success. ctx itself cannot be reused for this: by the time
+// PutDestination's failure cleanup runs, it may already be canceled,
+// which would make every probe fail and look exactly like "repository
+// missing".
+//
+// Any outcome other than restic's own "no repository here yet" signal
+// — success, wrong-password, anything else — is treated as "may hold
+// data", so cleanup keeps the password file rather than deleting it
+// out from under a repository that could depend on it. If repo
+// cannot even be built, Init could never have run, so it's safe to
+// say no and let cleanup remove the file as before.
+func (o *Ops) repoMayHoldData(dest inventory.Destination) bool {
+	repo, err := o.repoFor(dest)
+	if err != nil {
+		return false
+	}
+	probeCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	_, err = repo.Snapshots(probeCtx, restic.SnapshotFilter{Latest: 1})
+	return !restic.IsRepoMissing(err)
 }
 
 // DeleteDestination removes a configured destination (ErrInUse if a
@@ -617,6 +900,41 @@ func (o *Ops) SetScheduleEnabled(ctx context.Context, service string, enabled bo
 	return nil
 }
 
+// --- Notification settings -----------------------------------------------
+
+// GetNotificationSettings returns service's notification settings
+// (spec §10 "Settings (notifications)"), defaulting to the same
+// values notify.SweepFreshness itself falls back to when a service
+// has never been configured. An unknown service is ErrNotFound, not a
+// set of made-up defaults.
+func (o *Ops) GetNotificationSettings(ctx context.Context, service string) (notify.Settings, error) {
+	if _, err := inventory.GetService(o.DB, service); err != nil {
+		return notify.Settings{}, wrapf("service "+service, err)
+	}
+	s, err := notify.GetSettings(o.DB, service)
+	if err != nil {
+		return notify.Settings{}, wrapf("service "+service, err)
+	}
+	return s, nil
+}
+
+// SetNotificationSettings updates service's notification settings.
+// Only a value the caller got wrong is ErrValidation (400); an
+// unknown service is ErrNotFound (404) and a storage failure stays a
+// plain error (500).
+func (o *Ops) SetNotificationSettings(ctx context.Context, service string, s notify.Settings) error {
+	if _, err := inventory.GetService(o.DB, service); err != nil {
+		return wrapf("service "+service, err)
+	}
+	if err := notify.SetSettings(o.DB, service, s); err != nil {
+		if errors.Is(err, notify.ErrInvalidSettings) {
+			return fmt.Errorf("%w: %w", ErrValidation, err)
+		}
+		return err
+	}
+	return nil
+}
+
 // --- Trigger tokens ----------------------------------------------------
 
 // GenerateTriggerToken issues a new external-trigger token for
@@ -659,6 +977,87 @@ func (o *Ops) ListCatalog() []CatalogSummary {
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Service < out[j].Service })
 	return out
+}
+
+// DetectResult is what DetectServices found: every running container,
+// and the catalog entries some of them look like.
+type DetectResult struct {
+	Containers  []detect.Container  `json:"containers"`
+	Suggestions []detect.Suggestion `json:"suggestions"`
+}
+
+// DetectServices lists running Docker containers and suggests which
+// catalog entries match them (spec §5.3.6: "detected Docker services
+// → pick one (Immich suggested)"). It never errors just because no
+// containers matched — an empty Suggestions slice is a normal
+// outcome — but does error if Docker itself could not be reached, so
+// the wizard can say so rather than silently show nothing.
+func (o *Ops) DetectServices(ctx context.Context) (DetectResult, error) {
+	if o.Runner == nil {
+		return DetectResult{}, fmt.Errorf("service detection is not configured (internal wiring error)")
+	}
+	containers, err := detect.ListRunning(ctx, o.Runner)
+	if err != nil {
+		return DetectResult{}, err
+	}
+	return DetectResult{Containers: containers, Suggestions: detect.Suggest(o.Catalog.List(), containers)}, nil
+}
+
+// PreflightResult reports whether the external tools Ballast wraps
+// (spec rule 4: restic, Docker — never reimplemented) are actually
+// usable, so the wizard can say so clearly up front instead of
+// failing with a raw exec error after five questions' worth of typing
+// (this is exactly the gap that let a missing restic binary and a
+// missing repository password file both surface as confusing errors
+// deep into the wizard flow).
+//
+// ResticError is set whenever restic cannot be used — not installed,
+// or installed but older than restic.MinimumVersion (ResticInstalled
+// is then still true, so the message can say "update" not "install").
+type PreflightResult struct {
+	ResticInstalled bool   `json:"restic_installed"`
+	ResticVersion   string `json:"restic_version,omitempty"`
+	ResticWarning   string `json:"restic_warning,omitempty"`
+	ResticError     string `json:"restic_error,omitempty"`
+	DockerInstalled bool   `json:"docker_installed"`
+	DockerError     string `json:"docker_error,omitempty"`
+}
+
+// CheckPreflight probes restic and Docker. Docker is optional (only
+// the "files"/"dump" strategies against Docker containers need it —
+// the bundled "folder" entry needs no Docker at all), so a Docker
+// failure is reported but never treated as fatal by callers; restic
+// is required for every strategy, since it is the only way a backup
+// ever leaves the machine.
+func (o *Ops) CheckPreflight(ctx context.Context) PreflightResult {
+	var res PreflightResult
+	if o.Runner == nil {
+		res.ResticError = "internal wiring error: no command runner configured"
+		res.DockerError = res.ResticError
+		return res
+	}
+
+	probe, err := restic.Open("ballast-preflight-check", restic.Options{Runner: o.Runner, ResticBin: o.ResticBin})
+	if err != nil {
+		res.ResticError = o.redact(err.Error())
+	} else if v, verr := probe.Version(ctx); verr != nil {
+		res.ResticError = o.redact(verr.Error())
+	} else {
+		res.ResticInstalled = true
+		res.ResticVersion = v.Number
+		if v.TooOld() {
+			res.ResticError = v.TooOldError().Error()
+		} else {
+			res.ResticWarning = v.Warning()
+		}
+	}
+
+	if _, err := detect.ListRunning(ctx, o.Runner); err != nil {
+		res.DockerError = o.redact(err.Error())
+	} else {
+		res.DockerInstalled = true
+	}
+	return res
 }
 
 // ErrValidation marks an error as caused by bad caller input (spec

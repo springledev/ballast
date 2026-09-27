@@ -353,6 +353,80 @@ func TestNotifier_UnregisteredService(t *testing.T) {
 	}
 }
 
+// TestNotifier_Resolve: a service with no channel registered up front
+// (e.g. one added from the web UI after `ballast serve` started) is
+// looked up at send time, and a lookup failure or empty result is
+// reported, never treated as delivered.
+func TestNotifier_Resolve(t *testing.T) {
+	lookupErr := errors.New("credential file unreadable")
+	tests := []struct {
+		name      string
+		resolve   func(string) ([]Channel, error)
+		wantSent  int
+		wantErrIs error
+	}{
+		{
+			name:     "resolved channel receives the event",
+			resolve:  nil, // filled in below: needs the shared sent slice
+			wantSent: 1,
+		},
+		{
+			name:      "lookup error is returned",
+			resolve:   func(string) ([]Channel, error) { return nil, lookupErr },
+			wantErrIs: lookupErr,
+		},
+		{
+			name:      "no channels found is still ErrNoChannels",
+			resolve:   func(string) ([]Channel, error) { return nil, nil },
+			wantErrIs: ErrNoChannels,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var sent []Event
+			n := NewNotifier()
+			n.Resolve = tt.resolve
+			if n.Resolve == nil {
+				n.Resolve = func(svc string) ([]Channel, error) {
+					if svc != "added-later" {
+						t.Errorf("Resolve(%q), want added-later", svc)
+					}
+					return []Channel{&mockChannel{events: &sent}}, nil
+				}
+			}
+			err := n.Send(context.Background(), Event{Service: "added-later", Type: EventJobFailure, Timestamp: time.Now().UTC()})
+			if tt.wantErrIs != nil {
+				if !errors.Is(err, tt.wantErrIs) {
+					t.Errorf("Send() error = %v, want %v", err, tt.wantErrIs)
+				}
+			} else if err != nil {
+				t.Errorf("Send() error = %v", err)
+			}
+			if len(sent) != tt.wantSent {
+				t.Errorf("sent %d events, want %d", len(sent), tt.wantSent)
+			}
+		})
+	}
+}
+
+// TestNotifier_RegisteredChannelsSkipResolve: up-front registration
+// wins; Resolve is only a fallback.
+func TestNotifier_RegisteredChannelsSkipResolve(t *testing.T) {
+	var sent []Event
+	n := NewNotifier()
+	n.RegisterChannel("svc", &mockChannel{events: &sent})
+	n.Resolve = func(string) ([]Channel, error) {
+		t.Error("Resolve called for a service with registered channels")
+		return nil, nil
+	}
+	if err := n.Send(context.Background(), Event{Service: "svc", Type: EventJobFailure, Timestamp: time.Now().UTC()}); err != nil {
+		t.Fatalf("Send() error = %v", err)
+	}
+	if len(sent) != 1 {
+		t.Errorf("sent %d events, want 1", len(sent))
+	}
+}
+
 func TestFormatJobFailure(t *testing.T) {
 	event := FormatJobFailure("immich", "456", "database locked")
 

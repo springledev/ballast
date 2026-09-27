@@ -1,0 +1,9 @@
+{
+  "status": 200,
+  "body": {
+    "enabled": false,
+    "heartbeat_enabled": true,
+    "max_age_hours": 72,
+    "service": "svc"
+  }
+}

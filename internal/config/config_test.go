@@ -127,6 +127,47 @@ func TestLoadCredentialsDirectoryEnvWins(t *testing.T) {
 	}
 }
 
+// TestLoadWritableCredentialsDir: secrets Ballast creates itself must
+// never go to $CREDENTIALS_DIRECTORY (read-only, rebuilt on every
+// systemd start), and must land in the same place whether Ballast runs
+// under systemd or interactively (spec §8).
+func TestLoadWritableCredentialsDir(t *testing.T) {
+	tests := []struct {
+		name     string
+		credsEnv string
+		wantDirs func(conf string) []string
+	}{
+		{
+			name:     "interactive",
+			wantDirs: func(conf string) []string { return []string{filepath.Join(conf, "credentials")} },
+		},
+		{
+			name:     "systemd",
+			credsEnv: "/run/credentials/ballast.service",
+			wantDirs: func(conf string) []string {
+				return []string{"/run/credentials/ballast.service", filepath.Join(conf, "credentials")}
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			conf := filepath.Join(t.TempDir(), "conf")
+			env := map[string]string{"BALLAST_CONFIG_DIR": conf, "CREDENTIALS_DIRECTORY": tt.credsEnv}
+			cfg, err := Load(getenv(env), home(t))
+			if err != nil {
+				t.Fatalf("Load: %v", err)
+			}
+			if want := filepath.Join(conf, "credentials"); cfg.WritableCredentialsDir != want {
+				t.Errorf("WritableCredentialsDir = %q, want %q", cfg.WritableCredentialsDir, want)
+			}
+			got, want := cfg.CredentialDirs(), tt.wantDirs(conf)
+			if strings.Join(got, "|") != strings.Join(want, "|") {
+				t.Errorf("CredentialDirs() = %v, want %v", got, want)
+			}
+		})
+	}
+}
+
 func TestLoadBadConfigFile(t *testing.T) {
 	tmp := t.TempDir()
 	confDir := filepath.Join(tmp, "conf")

@@ -89,6 +89,21 @@ func TestPutGetListDeleteDestination(t *testing.T) {
 	if _, err := GetDestination(db, "local"); !errors.Is(err, ErrNotFound) {
 		t.Errorf("GetDestination after delete = %v, want ErrNotFound", err)
 	}
+
+	// ListDestinations is a JSON API response body (spec §9): it must
+	// come back as a non-nil empty slice, not nil, or it marshals as
+	// `null` instead of `[]` and breaks a caller that assumes an array
+	// (the web UI's Destinations/Services pages did exactly this).
+	list, err = ListDestinations(db)
+	if err != nil {
+		t.Fatalf("ListDestinations after delete: %v", err)
+	}
+	if list == nil {
+		t.Error("ListDestinations() = nil, want a non-nil empty slice")
+	}
+	if len(list) != 0 {
+		t.Errorf("ListDestinations() = %+v, want empty", list)
+	}
 }
 
 func TestGetDestinationNotFound(t *testing.T) {
@@ -181,6 +196,19 @@ func TestPutGetListDeleteService(t *testing.T) {
 	}
 	if _, err := GetService(db, "immich"); !errors.Is(err, ErrNotFound) {
 		t.Errorf("GetService after delete = %v, want ErrNotFound", err)
+	}
+
+	// See the matching ListDestinations assertion: a JSON API response
+	// body must never be a nil slice.
+	list, err = ListServices(db)
+	if err != nil {
+		t.Fatalf("ListServices after delete: %v", err)
+	}
+	if list == nil {
+		t.Error("ListServices() = nil, want a non-nil empty slice")
+	}
+	if len(list) != 0 {
+		t.Errorf("ListServices() = %+v, want empty", list)
 	}
 }
 

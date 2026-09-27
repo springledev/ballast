@@ -7,6 +7,7 @@ import (
 	"net/http"
 
 	"github.com/springledev/ballast/internal/inventory"
+	"github.com/springledev/ballast/internal/notify"
 	"github.com/springledev/ballast/internal/scheduler"
 )
 
@@ -32,6 +33,8 @@ func NewHandler(ops *Ops, apiToken string) http.Handler {
 
 	protected.HandleFunc("GET /api/v1/status", h.status)
 	protected.HandleFunc("GET /api/v1/catalog", h.catalog)
+	protected.HandleFunc("GET /api/v1/detect", h.detect)
+	protected.HandleFunc("GET /api/v1/preflight", h.preflight)
 
 	protected.HandleFunc("GET /api/v1/services", h.listServices)
 	protected.HandleFunc("POST /api/v1/services", h.createService)
@@ -45,6 +48,8 @@ func NewHandler(ops *Ops, apiToken string) http.Handler {
 	protected.HandleFunc("PUT /api/v1/services/{name}/schedule", h.putSchedule)
 	protected.HandleFunc("PUT /api/v1/services/{name}/schedule/enabled", h.putScheduleEnabled)
 	protected.HandleFunc("POST /api/v1/services/{name}/trigger-token", h.generateTriggerToken)
+	protected.HandleFunc("GET /api/v1/services/{name}/notifications", h.getNotificationSettings)
+	protected.HandleFunc("PUT /api/v1/services/{name}/notifications", h.putNotificationSettings)
 
 	protected.HandleFunc("GET /api/v1/destinations", h.listDestinations)
 	protected.HandleFunc("POST /api/v1/destinations", h.createDestination)
@@ -118,6 +123,24 @@ func (h *handler) status(w http.ResponseWriter, r *http.Request) {
 
 func (h *handler) catalog(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, h.ops.ListCatalog())
+}
+
+func (h *handler) detect(w http.ResponseWriter, r *http.Request) {
+	res, err := h.ops.DetectServices(r.Context())
+	if err != nil {
+		h.writeErr(w, err, http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, http.StatusOK, res)
+}
+
+// preflight never itself fails the request (spec: a best-effort tool
+// check, not a hard gate) — CheckPreflight always returns a result,
+// with any failure recorded per-tool inside it instead of as an HTTP
+// error, so the wizard can render "restic: not found" without special
+// casing a 500.
+func (h *handler) preflight(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, http.StatusOK, h.ops.CheckPreflight(r.Context()))
 }
 
 // --- services --------------------------------------------------------
@@ -264,6 +287,48 @@ func (h *handler) putScheduleEnabled(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]bool{"enabled": body.Enabled})
+}
+
+// --- notification settings -----------------------------------------------
+
+func (h *handler) getNotificationSettings(w http.ResponseWriter, r *http.Request) {
+	s, err := h.ops.GetNotificationSettings(r.Context(), pathName(r))
+	if err != nil {
+		h.writeErr(w, err, http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, http.StatusOK, s)
+}
+
+// notificationSettingsBody is a full replacement of a service's
+// notification settings. Enabled is required: a client that forgets
+// it must get a 400, not silently switch off the alerts that tell the
+// user a backup has gone missing.
+type notificationSettingsBody struct {
+	Enabled          *bool `json:"enabled"`
+	MaxAgeHours      *int  `json:"max_age_hours"`
+	HeartbeatEnabled bool  `json:"heartbeat_enabled"`
+}
+
+func (h *handler) putNotificationSettings(w http.ResponseWriter, r *http.Request) {
+	var body notificationSettingsBody
+	if err := decodeJSON(r, &body); err != nil {
+		h.writeErr(w, err, http.StatusBadRequest)
+		return
+	}
+	if body.Enabled == nil {
+		writeErrorMsg(w, http.StatusBadRequest, `"enabled" is required (true or false)`)
+		return
+	}
+	name := pathName(r)
+	s := notify.Settings{
+		Service: name, Enabled: *body.Enabled, MaxAgeHours: body.MaxAgeHours, HeartbeatEnabled: body.HeartbeatEnabled,
+	}
+	if err := h.ops.SetNotificationSettings(r.Context(), name, s); err != nil {
+		h.writeErr(w, err, http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, http.StatusOK, s)
 }
 
 // --- trigger tokens & trigger --------------------------------------------

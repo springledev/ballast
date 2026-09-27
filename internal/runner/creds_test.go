@@ -217,3 +217,36 @@ func TestCheckCredentialFile(t *testing.T) {
 		})
 	}
 }
+
+func TestFindCredentialDir(t *testing.T) {
+	systemd, own := t.TempDir(), t.TempDir()
+	write := func(dir, name string) {
+		t.Helper()
+		if err := os.WriteFile(filepath.Join(dir, name), []byte("x"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write(systemd, "both")
+	write(own, "both")
+	write(own, "own-only")
+
+	tests := []struct {
+		name string
+		file string
+		dirs []string
+		want string
+	}{
+		{"operator-provided wins", "both", []string{systemd, own}, systemd},
+		{"falls back to Ballast's own", "own-only", []string{systemd, own}, own},
+		{"missing names first dir", "missing", []string{systemd, own}, systemd},
+		{"empty dirs skipped", "missing", []string{"", own}, own},
+		{"no dirs", "missing", nil, ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := FindCredentialDir(tt.file, tt.dirs...); got != tt.want {
+				t.Errorf("FindCredentialDir(%q, %v) = %q, want %q", tt.file, tt.dirs, got, tt.want)
+			}
+		})
+	}
+}

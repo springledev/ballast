@@ -67,6 +67,8 @@ func resetCLIFlags() {
 
 	destLocation, destPasswordCredential, destInit = "", "", false
 	destKeepDaily, destKeepWeekly, destKeepMonthly = 7, 4, 6
+
+	notifyEnabled, notifyMaxAgeHours, notifyHeartbeat = true, 0, false
 }
 
 // withStubRestic prepends a directory holding a fake "restic"

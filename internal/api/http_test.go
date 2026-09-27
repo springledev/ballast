@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/springledev/ballast/internal/inventory"
+	"github.com/springledev/ballast/internal/notify"
 )
 
 // -update regenerates every golden file from the handler's current
@@ -180,6 +181,22 @@ func TestHTTPGolden(t *testing.T) {
 			req:  func(h *harness) *http.Request { return httptest.NewRequest(http.MethodGet, "/api/v1/catalog", nil) },
 		},
 		{
+			name: "detect_not_configured",
+			req:  func(h *harness) *http.Request { return httptest.NewRequest(http.MethodGet, "/api/v1/detect", nil) },
+		},
+		{
+			name:    "detect_ok",
+			arrange: func(t *testing.T, h *harness) { h.withStubDocker(t) },
+			req:     func(h *harness) *http.Request { return httptest.NewRequest(http.MethodGet, "/api/v1/detect", nil) },
+		},
+		{
+			// preflight never itself 500s (see handler.preflight): with
+			// no Runner configured it still returns 200, explaining why
+			// in both tool fields.
+			name: "preflight_no_runner",
+			req:  func(h *harness) *http.Request { return httptest.NewRequest(http.MethodGet, "/api/v1/preflight", nil) },
+		},
+		{
 			name: "services_list_empty",
 			req:  func(h *harness) *http.Request { return httptest.NewRequest(http.MethodGet, "/api/v1/services", nil) },
 		},
@@ -339,6 +356,76 @@ func TestHTTPGolden(t *testing.T) {
 				return httptest.NewRequest(http.MethodPost, "/api/v1/services/svc/trigger", nil)
 			},
 			triggerAuth: "use-harness-token",
+		},
+		{
+			name:    "notifications_get_default",
+			arrange: withService,
+			req: func(h *harness) *http.Request {
+				return httptest.NewRequest(http.MethodGet, "/api/v1/services/svc/notifications", nil)
+			},
+		},
+		{
+			name:    "notifications_put",
+			arrange: withService,
+			req: func(h *harness) *http.Request {
+				body := map[string]any{"enabled": false, "max_age_hours": 72, "heartbeat_enabled": true}
+				r := httptest.NewRequest(http.MethodPut, "/api/v1/services/svc/notifications", jsonBody(t, body))
+				r.Header.Set("Content-Type", "application/json")
+				return r
+			},
+		},
+		{
+			// Leaving out "enabled" must be a 400, never a silent
+			// switch-off of missing-backup alerts.
+			name:    "notifications_put_missing_enabled",
+			arrange: withService,
+			req: func(h *harness) *http.Request {
+				body := map[string]any{"heartbeat_enabled": true}
+				r := httptest.NewRequest(http.MethodPut, "/api/v1/services/svc/notifications", jsonBody(t, body))
+				r.Header.Set("Content-Type", "application/json")
+				return r
+			},
+		},
+		{
+			name:    "notifications_put_invalid_max_age",
+			arrange: withService,
+			req: func(h *harness) *http.Request {
+				body := map[string]any{"enabled": true, "max_age_hours": 0}
+				r := httptest.NewRequest(http.MethodPut, "/api/v1/services/svc/notifications", jsonBody(t, body))
+				r.Header.Set("Content-Type", "application/json")
+				return r
+			},
+		},
+		{
+			name: "notifications_put_unknown_service",
+			req: func(h *harness) *http.Request {
+				body := map[string]any{"enabled": true}
+				r := httptest.NewRequest(http.MethodPut, "/api/v1/services/nope/notifications", jsonBody(t, body))
+				r.Header.Set("Content-Type", "application/json")
+				return r
+			},
+		},
+		{
+			name: "notifications_get_unknown_service",
+			req: func(h *harness) *http.Request {
+				return httptest.NewRequest(http.MethodGet, "/api/v1/services/nope/notifications", nil)
+			},
+		},
+		{
+			name: "notifications_get_after_put",
+			arrange: func(t *testing.T, h *harness) {
+				withService(t, h)
+				maxAge := 72
+				err := h.ops.SetNotificationSettings(context.Background(), "svc", notify.Settings{
+					Enabled: false, MaxAgeHours: &maxAge, HeartbeatEnabled: true,
+				})
+				if err != nil {
+					t.Fatalf("SetNotificationSettings: %v", err)
+				}
+			},
+			req: func(h *harness) *http.Request {
+				return httptest.NewRequest(http.MethodGet, "/api/v1/services/svc/notifications", nil)
+			},
 		},
 		{
 			name: "destinations_list_empty",

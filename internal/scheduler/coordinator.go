@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/springledev/ballast/internal/engine"
+	"github.com/springledev/ballast/internal/secret"
 )
 
 // ErrAlreadyRunning reports that a service's run lock is held by a
@@ -108,9 +109,9 @@ type Coordinator struct {
 	// (spec rule 2). Run errors are logged and returned verbatim, so
 	// this is the last line of defence should a Runner wrap unredacted
 	// restic or docker stderr into its error: every occurrence is
-	// replaced with "[redacted]". Empty strings are ignored. Errors stay
-	// matchable with errors.Is and errors.As; only their text changes.
-	Redact []string
+	// replaced with "[redacted]". Errors stay matchable with errors.Is
+	// and errors.As; only their text changes. Nil redacts nothing.
+	Redact *secret.Set
 
 	logMu sync.Mutex
 }
@@ -470,12 +471,7 @@ func (c *Coordinator) logf(service, format string, args ...any) {
 
 // redact replaces every occurrence of each Redact secret in s.
 func (c *Coordinator) redact(s string) string {
-	for _, secret := range c.Redact {
-		if secret != "" {
-			s = strings.ReplaceAll(s, secret, "[redacted]")
-		}
-	}
-	return s
+	return c.Redact.Redact(s)
 }
 
 // redactErr returns err with any Redact secret removed from its text.

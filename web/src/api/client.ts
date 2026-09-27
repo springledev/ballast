@@ -1,0 +1,157 @@
+import { apiToken, clearApiToken } from "./auth";
+import type {
+  ApiErrorBody,
+  CatalogSummary,
+  Destination,
+  DetectResult,
+  NotificationSettings,
+  PreflightResult,
+  ScheduledJob,
+  Service,
+  ServiceStatus,
+  Snapshot,
+} from "./types";
+
+// ApiError carries the HTTP status so callers can special-case 401
+// (bad/missing token -> prompt again) vs. other failures, without
+// parsing the message text.
+export class ApiError extends Error {
+  constructor(
+    public status: number,
+    message: string,
+  ) {
+    super(message);
+    this.name = "ApiError";
+  }
+}
+
+async function request<T>(method: string, path: string, body?: unknown): Promise<T> {
+  const headers: Record<string, string> = {};
+  if (apiToken.value) {
+    headers.Authorization = `Bearer ${apiToken.value}`;
+  }
+  if (body !== undefined) {
+    headers["Content-Type"] = "application/json";
+  }
+  const res = await fetch(path, {
+    method,
+    headers,
+    body: body !== undefined ? JSON.stringify(body) : undefined,
+  });
+
+  if (res.status === 204) {
+    return undefined as T;
+  }
+
+  const text = await res.text();
+  let data: unknown = undefined;
+  if (text) {
+    try {
+      data = JSON.parse(text);
+    } catch {
+      // Non-JSON body (shouldn't happen from this API); fall through
+      // with data left undefined so the raw text still surfaces below.
+    }
+  }
+
+  if (!res.ok) {
+    const message =
+      (data as ApiErrorBody | undefined)?.error || text || `${method} ${path} failed with ${res.status}`;
+    if (res.status === 401) {
+      // The token was rejected (missing, wrong, or revoked server-
+      // side): drop it so the app falls back to the connect screen
+      // instead of silently failing every call from here on.
+      clearApiToken();
+    }
+    throw new ApiError(res.status, message);
+  }
+  return data as T;
+}
+
+const base = "/api/v1";
+
+export const api = {
+  // --- status & catalog ---
+  status(service?: string, withVerify?: boolean): Promise<ServiceStatus[]> {
+    const params = new URLSearchParams();
+    if (service) params.set("service", service);
+    if (withVerify) params.set("verify", "1");
+    const qs = params.toString();
+    return request("GET", `${base}/status${qs ? `?${qs}` : ""}`);
+  },
+  catalog(): Promise<CatalogSummary[]> {
+    return request("GET", `${base}/catalog`);
+  },
+  detect(): Promise<DetectResult> {
+    return request("GET", `${base}/detect`);
+  },
+  preflight(): Promise<PreflightResult> {
+    return request("GET", `${base}/preflight`);
+  },
+
+  // --- services ---
+  listServices(): Promise<Service[]> {
+    return request("GET", `${base}/services`);
+  },
+  getService(name: string): Promise<Service> {
+    return request("GET", `${base}/services/${encodeURIComponent(name)}`);
+  },
+  createService(s: Service): Promise<Service> {
+    return request("POST", `${base}/services`, s);
+  },
+  updateService(name: string, s: Service): Promise<Service> {
+    return request("PUT", `${base}/services/${encodeURIComponent(name)}`, s);
+  },
+  deleteService(name: string): Promise<void> {
+    return request("DELETE", `${base}/services/${encodeURIComponent(name)}`);
+  },
+
+  // --- backups, snapshots, restore ---
+  startBackup(name: string): Promise<{ started: boolean; previous_run_interrupted: boolean }> {
+    return request("POST", `${base}/services/${encodeURIComponent(name)}/backup`);
+  },
+  snapshots(name: string): Promise<Snapshot[]> {
+    return request("GET", `${base}/services/${encodeURIComponent(name)}/snapshots`);
+  },
+  restore(name: string, req: { snapshot?: string; paths?: string[]; to: string }): Promise<{ restored: boolean }> {
+    return request("POST", `${base}/services/${encodeURIComponent(name)}/restore`, req);
+  },
+
+  // --- schedules ---
+  getSchedule(name: string): Promise<ScheduledJob> {
+    return request("GET", `${base}/services/${encodeURIComponent(name)}/schedule`);
+  },
+  setSchedule(name: string, cron: string): Promise<ScheduledJob> {
+    return request("PUT", `${base}/services/${encodeURIComponent(name)}/schedule`, { cron });
+  },
+  setScheduleEnabled(name: string, enabled: boolean): Promise<{ enabled: boolean }> {
+    return request("PUT", `${base}/services/${encodeURIComponent(name)}/schedule/enabled`, { enabled });
+  },
+
+  // --- trigger tokens ---
+  generateTriggerToken(name: string): Promise<{ token: string }> {
+    return request("POST", `${base}/services/${encodeURIComponent(name)}/trigger-token`);
+  },
+
+  // --- notification settings ---
+  getNotificationSettings(name: string): Promise<NotificationSettings> {
+    return request("GET", `${base}/services/${encodeURIComponent(name)}/notifications`);
+  },
+  setNotificationSettings(name: string, s: Omit<NotificationSettings, "service">): Promise<NotificationSettings> {
+    return request("PUT", `${base}/services/${encodeURIComponent(name)}/notifications`, s);
+  },
+
+  // --- destinations ---
+  listDestinations(): Promise<Destination[]> {
+    return request("GET", `${base}/destinations`);
+  },
+  createDestination(d: Destination, init: boolean): Promise<Destination> {
+    return request("POST", `${base}/destinations`, { ...d, init });
+  },
+  deleteDestination(name: string): Promise<void> {
+    return request("DELETE", `${base}/destinations/${encodeURIComponent(name)}`);
+  },
+  testDestination(name: string): Promise<{ ok: boolean }> {
+    return request("POST", `${base}/destinations/${encodeURIComponent(name)}/test`);
+  },
+};

@@ -15,9 +15,11 @@ import (
 	"github.com/springledev/ballast/internal/catalog"
 	"github.com/springledev/ballast/internal/engine"
 	"github.com/springledev/ballast/internal/inventory"
+	"github.com/springledev/ballast/internal/notify"
 	"github.com/springledev/ballast/internal/restic"
 	"github.com/springledev/ballast/internal/runner"
 	"github.com/springledev/ballast/internal/scheduler"
+	secretpkg "github.com/springledev/ballast/internal/secret"
 	"github.com/springledev/ballast/internal/store"
 )
 
@@ -29,7 +31,36 @@ printf '%s\n' "$*" >> "$STUB_LOG"
 cmd="$1"
 if [ -n "$STUB_FAIL_CMD" ] && [ "$cmd" = "$STUB_FAIL_CMD" ]; then
   echo "stub: simulated restic $cmd failure" >&2
-  exit 1
+  exit "${STUB_FAIL_CODE:-1}"
+fi
+# STUB_FAIL_CMD2/STUB_FAIL_CODE2 is a second, independent fail rule
+# (some tests need two different commands to fail differently, e.g.
+# "snapshots" reporting the repo missing while "init" itself fails).
+if [ -n "$STUB_FAIL_CMD2" ] && [ "$cmd" = "$STUB_FAIL_CMD2" ]; then
+  echo "stub: simulated restic $cmd failure (2)" >&2
+  exit "${STUB_FAIL_CODE2:-1}"
+fi
+# STUB_SNAPSHOTS_MISSING_COUNT makes the first N "snapshots" calls
+# report "no repository here yet" (exit 10) and every call after that
+# succeed normally, so a test can tell an initial probe from a later
+# re-probe apart without a second binary.
+if [ "$cmd" = "snapshots" ] && [ -n "$STUB_SNAPSHOTS_MISSING_COUNT" ]; then
+  count_file="$STUB_LOG.snapshots_count"
+  n=0
+  [ -f "$count_file" ] && n=$(cat "$count_file")
+  n=$((n + 1))
+  echo "$n" > "$count_file"
+  if [ "$n" -le "$STUB_SNAPSHOTS_MISSING_COUNT" ]; then
+    echo "stub: simulated missing repository (snapshots call $n)" >&2
+    exit 10
+  fi
+fi
+# STUB_INIT_PASSWORD_LOG records the password an "init" call was given
+# (read via RESTIC_PASSWORD_FILE, exactly as restic itself would), so
+# a test can confirm which generated password a successful init
+# actually used.
+if [ "$cmd" = "init" ] && [ -n "$STUB_INIT_PASSWORD_LOG" ] && [ -n "$RESTIC_PASSWORD_FILE" ]; then
+  cat "$RESTIC_PASSWORD_FILE" >> "$STUB_INIT_PASSWORD_LOG"
 fi
 case "$cmd" in
   init) exit 0 ;;
@@ -46,6 +77,7 @@ case "$cmd" in
   dump) printf 'sample-content' ;;
   restore) exit 0 ;;
   forget) printf '[]' ;;
+  version) printf 'restic %s compiled with go1.22 on linux/amd64\n' "${STUB_VERSION:-0.17.3}" ;;
   *) echo "unknown stub restic command: $cmd" >&2; exit 2 ;;
 esac
 exit 0
@@ -59,6 +91,21 @@ func writeResticStub(t *testing.T) string {
 		t.Fatalf("writing restic stub: %v", err)
 	}
 	return path
+}
+
+// resticInvocations returns the restic argv lines the stub recorded
+// for this harness, one call per line (see the Repo closure's
+// STUB_LOG wiring in newHarness).
+func (h *harness) resticInvocations(t *testing.T) []string {
+	t.Helper()
+	data, err := os.ReadFile(filepath.Join(h.credDir, "restic.log"))
+	if os.IsNotExist(err) {
+		return nil
+	}
+	if err != nil {
+		t.Fatalf("reading restic invocation log: %v", err)
+	}
+	return strings.Split(strings.TrimRight(string(data), "\n"), "\n")
 }
 
 // spyRunner is a stub scheduler.Runner recording every service run.
@@ -144,8 +191,29 @@ func newHarness(t *testing.T) *harness {
 				ResticBin:    resticBin,
 			})
 		},
+		CredentialsDir: credDir,
 	}
 	return &harness{t: t, ops: ops, runner: r, resticBin: resticBin, credDir: credDir, locks: locks}
+}
+
+// dockerPsStub is a fake `docker ps` answering with one fixed running
+// container, so DetectServices tests are hermetic (no Docker daemon
+// needed).
+const dockerPsStub = "#!/bin/sh\n" +
+	`if [ "$1" = "ps" ]; then printf 'immich_postgres\tghcr.io/immich-app/postgres:14\n'; fi` + "\n" +
+	"exit 0\n"
+
+// withStubDocker points h.ops.Runner at a fake `docker` binary on
+// $PATH, for DetectServices golden cases.
+func (h *harness) withStubDocker(t *testing.T) {
+	t.Helper()
+	dir := t.TempDir()
+	path := filepath.Join(dir, "docker")
+	if err := os.WriteFile(path, []byte(dockerPsStub), 0o755); err != nil {
+		t.Fatalf("writing docker stub: %v", err)
+	}
+	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	h.ops.Runner = &runner.Runner{}
 }
 
 // holdRunLock simulates a live run of service, so a Start/Backup call
@@ -255,6 +323,446 @@ func TestOpsDestinationCRUDAndInit(t *testing.T) {
 	}
 }
 
+// TestOpsPutDestinationInitIsIdempotent is the regression test for a
+// real bug: a destination created without checking "init" (or a GUI
+// resubmission of one that already exists) must never leave the
+// repository un-initialized only to fail every later backup with a
+// raw "repository does not exist" error, and re-running init on an
+// already-initialized repository must not itself become a new error.
+func TestOpsPutDestinationInitIsIdempotent(t *testing.T) {
+	h := newHarness(t)
+	if err := os.WriteFile(filepath.Join(h.credDir, "ballast-restic-password.local"), []byte("pw\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	dest := inventory.Destination{Name: "local", Location: "/stub-repo", PasswordCredential: "ballast-restic-password.local", KeepDaily: 7}
+
+	// First init: the repo does not exist yet (simulated exit 10 on
+	// the probing Snapshots call) — Init must actually run.
+	t.Setenv("STUB_FAIL_CMD", "snapshots")
+	t.Setenv("STUB_FAIL_CODE", "10")
+	if err := h.ops.PutDestination(context.Background(), dest, true); err != nil {
+		t.Fatalf("PutDestination (first init): %v", err)
+	}
+	inv := h.resticInvocations(t)
+	if !containsPrefix(inv, "init") {
+		t.Errorf("invocations = %v, want an init call when the repository did not exist", inv)
+	}
+
+	// Second init: the repo now "exists" (stub's snapshots succeeds by
+	// default) — Init must be skipped, not attempted a second time.
+	t.Setenv("STUB_FAIL_CMD", "")
+	t.Setenv("STUB_FAIL_CODE", "")
+	if err := h.ops.PutDestination(context.Background(), dest, true); err != nil {
+		t.Fatalf("PutDestination (second init): %v", err)
+	}
+	inv2 := h.resticInvocations(t)[len(inv):]
+	if containsPrefix(inv2, "init") {
+		t.Errorf("invocations after second init = %v, want no init call (repository already exists)", inv2)
+	}
+}
+
+func containsPrefix(lines []string, prefix string) bool {
+	for _, l := range lines {
+		if strings.HasPrefix(l, prefix) {
+			return true
+		}
+	}
+	return false
+}
+
+// TestOpsPutDestinationGeneratesLocalPassword: a brand-new local-disk
+// destination with no pre-existing credential file gets one generated
+// automatically (spec §5.3.6: never ask a beginner to invent or paste
+// a secret for the common local-folder case) — and a second Init call
+// against the same destination must not clobber it.
+func TestOpsPutDestinationGeneratesLocalPassword(t *testing.T) {
+	h := newHarness(t)
+	credPath := filepath.Join(h.credDir, "ballast-restic-password.local")
+	if _, err := os.Stat(credPath); !os.IsNotExist(err) {
+		t.Fatalf("credential file already exists before the test: %v", err)
+	}
+
+	dest := inventory.Destination{Name: "local", Location: "/stub-repo", KeepDaily: 7}
+	if err := h.ops.PutDestination(context.Background(), dest, true /* init */); err != nil {
+		t.Fatalf("PutDestination with init: %v", err)
+	}
+
+	first, err := os.ReadFile(credPath)
+	if err != nil {
+		t.Fatalf("reading generated credential: %v", err)
+	}
+	if len(strings.TrimSpace(string(first))) == 0 {
+		t.Fatal("generated repository password is empty")
+	}
+
+	if err := h.ops.PutDestination(context.Background(), dest, true /* init */); err != nil {
+		t.Fatalf("PutDestination (second init): %v", err)
+	}
+	second, err := os.ReadFile(credPath)
+	if err != nil {
+		t.Fatalf("reading credential after second init: %v", err)
+	}
+	if string(first) != string(second) {
+		t.Error("a second init overwrote the already-generated repository password")
+	}
+}
+
+// TestOpsPutDestinationNeverGeneratesForRemoteBackend: a non-local
+// destination (a restic backend URL, e.g. s3:...) must still require
+// its own pre-existing credential file — auto-generating a password
+// there would create a fresh, wrong-password repository instead of
+// using the operator's real provider credentials.
+func TestOpsPutDestinationNeverGeneratesForRemoteBackend(t *testing.T) {
+	h := newHarness(t)
+	dest := inventory.Destination{Name: "remote", Location: "s3:https://example.com/bucket", PasswordCredential: "ballast-restic-password.remote"}
+	err := h.ops.PutDestination(context.Background(), dest, true /* init */)
+	if err == nil {
+		t.Fatal("PutDestination for a remote backend with no credential file: want an error")
+	}
+	if _, statErr := os.Stat(filepath.Join(h.credDir, "ballast-restic-password.remote")); !os.IsNotExist(statErr) {
+		t.Error("a credential file was created for a remote backend; it must not be")
+	}
+}
+
+// TestOpsPutDestinationGeneratedPasswordIsPrivateAndRedacted: the
+// generated password file is owner-only (spec rule 2) and the password
+// is redacted from Ops errors from the moment it exists.
+func TestOpsPutDestinationGeneratedPasswordIsPrivateAndRedacted(t *testing.T) {
+	h := newHarness(t)
+	h.ops.Redact = secretpkg.NewSet()
+	t.Setenv("STUB_FAIL_CMD", "snapshots")
+	t.Setenv("STUB_FAIL_CODE", "10")
+	dest := inventory.Destination{Name: "local", Location: "/stub-repo", KeepDaily: 7}
+	if err := h.ops.PutDestination(context.Background(), dest, true); err != nil {
+		t.Fatalf("PutDestination: %v", err)
+	}
+
+	path := filepath.Join(h.credDir, "ballast-restic-password.local")
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatalf("stat generated password: %v", err)
+	}
+	if perm := info.Mode().Perm(); perm != 0o600 {
+		t.Errorf("generated password file mode = %o, want 600", perm)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pw := strings.TrimSpace(string(data))
+	if got := h.ops.redact("leaked " + pw); strings.Contains(got, pw) {
+		t.Errorf("redact(%q) = %q, want the generated password redacted", "leaked "+pw, got)
+	}
+}
+
+// TestOpsPutDestinationInitFailureCleansUp: when setting up the
+// repository fails, nothing half-made is left behind — a new
+// destination is removed again, so a retry never silently reuses a
+// destination row from a setup that never finished. An existing
+// destination is kept.
+//
+// A generated password file's fate depends on whether a repository
+// might now actually exist at the location (review finding B): the
+// first three cases below all have a persistent, ambiguous restic
+// failure (wrong password, or a plain unexplained error) that reads
+// exactly the same on cleanup's re-probe as it did on the first
+// attempt, so nothing here can tell "definitely no repository" from
+// "maybe one now exists" — cleanup must keep the file. Only the last
+// case, where the probe can positively confirm the repository is
+// still missing, gets the file removed.
+func TestOpsPutDestinationInitFailureCleansUp(t *testing.T) {
+	tests := []struct {
+		name                  string
+		existing              bool   // destination row already configured before the call
+		failCode              string // restic exit code for every "snapshots" call
+		failCmd2, failCode2   string // a second, independent fail rule (e.g. "init" itself failing)
+		snapshotsMissingCount string // STUB_SNAPSHOTS_MISSING_COUNT: first N snapshots calls report "missing"
+		wantErrText           string
+		wantKept              bool // generated password file must still exist afterward
+		wantRowAfter          bool
+	}{
+		{
+			// The generated password never opened that repository, so
+			// it protects nothing: removed, so a retry asks again.
+			name:        "wrong password: a repository already exists here",
+			failCode:    "12",
+			wantErrText: "Ballast does not have its password",
+			wantKept:    false,
+		},
+		{
+			name:        "unexplained failure on a new destination",
+			failCode:    "1",
+			wantErrText: "setting up the backup repository",
+			wantKept:    true,
+		},
+		{
+			name:         "unexplained failure on an existing destination keeps the row too",
+			existing:     true,
+			failCode:     "1",
+			wantErrText:  "setting up the backup repository",
+			wantKept:     true,
+			wantRowAfter: true,
+		},
+		{
+			name:                  "repository confirmed still missing after a failed init",
+			snapshotsMissingCount: "99", // every snapshots call, before and after, reports "missing"
+			failCmd2:              "init",
+			failCode2:             "1", // init itself fails (simulates being killed mid-run)
+			wantErrText:           "setting up the backup repository",
+			wantKept:              false,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			h := newHarness(t)
+			dest := inventory.Destination{Name: "local", Location: "/stub-repo", KeepDaily: 7}
+			if tt.existing {
+				if err := inventory.PutDestination(h.ops.DB, dest); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if tt.failCode != "" {
+				t.Setenv("STUB_FAIL_CMD", "snapshots")
+				t.Setenv("STUB_FAIL_CODE", tt.failCode)
+			}
+			if tt.failCmd2 != "" {
+				t.Setenv("STUB_FAIL_CMD2", tt.failCmd2)
+				t.Setenv("STUB_FAIL_CODE2", tt.failCode2)
+			}
+			if tt.snapshotsMissingCount != "" {
+				t.Setenv("STUB_SNAPSHOTS_MISSING_COUNT", tt.snapshotsMissingCount)
+			}
+
+			err := h.ops.PutDestination(context.Background(), dest, true)
+			if err == nil {
+				t.Fatal("PutDestination = nil, want the setup failure")
+			}
+			if !strings.Contains(err.Error(), tt.wantErrText) {
+				t.Errorf("error = %q, want it to contain %q", err, tt.wantErrText)
+			}
+			_, statErr := os.Stat(filepath.Join(h.credDir, "ballast-restic-password.local"))
+			gotKept := statErr == nil
+			if gotKept != tt.wantKept {
+				t.Errorf("generated password file present after failure = %v (stat err %v), want %v", gotKept, statErr, tt.wantKept)
+			}
+			if tt.wantKept && !strings.Contains(err.Error(), "was kept because a repository may already have been created") {
+				t.Errorf("error = %q, want it to explain the kept password file", err)
+			}
+			_, getErr := inventory.GetDestination(h.ops.DB, "local")
+			if gotRow := getErr == nil; gotRow != tt.wantRowAfter {
+				t.Errorf("destination row present after failure = %v, want %v", gotRow, tt.wantRowAfter)
+			}
+		})
+	}
+}
+
+// TestOpsEnsureLocalPasswordNeverOverwrites: if the credential file
+// already exists — created by an operator, or by a concurrent
+// PutDestination call that won a creation race — ensureLocalPassword
+// must report "nothing generated" and leave its contents untouched,
+// never silently replace it (review finding A: a TOCTOU stat-then-
+// write could otherwise clobber a password restic init already used).
+func TestOpsEnsureLocalPasswordNeverOverwrites(t *testing.T) {
+	h := newHarness(t)
+	dest := inventory.Destination{Name: "local", Location: "/stub-repo", PasswordCredential: "ballast-restic-password.local"}
+	path := filepath.Join(h.credDir, dest.PasswordCredential)
+	const original = "already-here-password\n"
+	if err := os.WriteFile(path, []byte(original), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := h.ops.ensureLocalPassword(dest)
+	if err != nil {
+		t.Fatalf("ensureLocalPassword: %v", err)
+	}
+	if got != "" {
+		t.Errorf("ensureLocalPassword returned path %q, want \"\" (nothing generated) for a pre-existing file", got)
+	}
+	after, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(after) != original {
+		t.Errorf("password file content = %q, want it unchanged (%q)", after, original)
+	}
+}
+
+// TestOpsPutDestinationConcurrentInitIsSerialized: several goroutines
+// racing to PutDestination(init=true) the same brand-new local
+// destination (a GUI double-click, or an API client retrying) must
+// behave as if they ran one at a time — review finding A. Only one
+// password can ever be generated and used to initialize the
+// repository; nothing overwrites it, and no cleanup from one call can
+// delete state another call already relies on.
+// TestOpsPutDestinationWaitsForOtherProcess: with DestinationLocks
+// set, PutDestination waits while another holder (standing in for a
+// second Ballast process: flock locks are per open file, so a separate
+// FileLocker in this process behaves the same) sets up the same
+// destination, gives up cleanly if ctx ends first — touching nothing —
+// and goes ahead once the lock is free.
+func TestOpsPutDestinationWaitsForOtherProcess(t *testing.T) {
+	h := newHarness(t)
+	lockDir := filepath.Join(t.TempDir(), "locks")
+	h.ops.DestinationLocks = scheduler.FileLocker{Dir: lockDir}
+	dest := inventory.Destination{Name: "local", Location: "/stub-repo", KeepDaily: 7}
+
+	release, ok, err := scheduler.FileLocker{Dir: lockDir}.TryLock("local")
+	if err != nil || !ok {
+		t.Fatalf("taking the other process's lock: ok=%v err=%v", ok, err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
+	defer cancel()
+	err = h.ops.PutDestination(ctx, dest, true /* init */)
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("PutDestination while locked elsewhere: err = %v, want context.DeadlineExceeded", err)
+	}
+	if !strings.Contains(err.Error(), "another Ballast command") {
+		t.Errorf("error should say why it waited: %v", err)
+	}
+	if _, err := inventory.GetDestination(h.ops.DB, "local"); !errors.Is(err, inventory.ErrNotFound) {
+		t.Errorf("GetDestination after giving up: err = %v, want ErrNotFound (nothing may be written)", err)
+	}
+	if _, err := os.Stat(filepath.Join(h.credDir, "ballast-restic-password.local")); !os.IsNotExist(err) {
+		t.Errorf("a password file was generated while another process held the lock (stat err = %v)", err)
+	}
+
+	done := make(chan error, 1)
+	go func() { done <- h.ops.PutDestination(context.Background(), dest, true /* init */) }()
+	select {
+	case err := <-done:
+		t.Fatalf("PutDestination returned (%v) while the other process still held the lock", err)
+	case <-time.After(200 * time.Millisecond):
+	}
+	release()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("PutDestination after the lock was released: %v", err)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("PutDestination still waiting after the lock was released")
+	}
+	if _, err := inventory.GetDestination(h.ops.DB, "local"); err != nil {
+		t.Errorf("GetDestination after setup: %v", err)
+	}
+}
+
+func TestOpsPutDestinationConcurrentInitIsSerialized(t *testing.T) {
+	h := newHarness(t)
+	initPasswordLog := filepath.Join(h.credDir, "init_password.log")
+	t.Setenv("STUB_INIT_PASSWORD_LOG", initPasswordLog)
+	// The repository doesn't exist yet: only the very first probe
+	// should report that, so exactly one goroutine calls Init and
+	// every later one (its own, or another goroutine's) finds the
+	// repository already there, just like a real restic backend.
+	t.Setenv("STUB_SNAPSHOTS_MISSING_COUNT", "1")
+	dest := inventory.Destination{Name: "local", Location: "/stub-repo", KeepDaily: 7}
+
+	const n = 5
+	errs := make([]error, n)
+	var wg sync.WaitGroup
+	wg.Add(n)
+	for i := 0; i < n; i++ {
+		go func(i int) {
+			defer wg.Done()
+			errs[i] = h.ops.PutDestination(context.Background(), dest, true /* init */)
+		}(i)
+	}
+	wg.Wait()
+
+	for i, err := range errs {
+		if err != nil {
+			t.Errorf("goroutine %d: PutDestination: %v", i, err)
+		}
+	}
+
+	credPath := filepath.Join(h.credDir, "ballast-restic-password.local")
+	content, err := os.ReadFile(credPath)
+	if err != nil {
+		t.Fatalf("reading generated credential: %v", err)
+	}
+	pw := strings.TrimSpace(string(content))
+	if pw == "" {
+		t.Fatal("generated repository password is empty")
+	}
+
+	// Exactly one restic init call must have happened — the lock
+	// makes every call but the first find the repository already
+	// initialized (see TestOpsPutDestinationInitIsIdempotent) — and
+	// it must have been given the password that ended up on disk, not
+	// one a later, discarded generation attempt produced.
+	initPasswords, err := os.ReadFile(initPasswordLog)
+	if err != nil {
+		t.Fatalf("reading init password log: %v", err)
+	}
+	lines := strings.Split(strings.TrimRight(string(initPasswords), "\n"), "\n")
+	if len(lines) != 1 {
+		t.Fatalf("restic init was called %d times, want exactly 1 (log: %q)", len(lines), initPasswords)
+	}
+	if strings.TrimSpace(lines[0]) != pw {
+		t.Errorf("init was given password %q, but the file on disk holds %q", strings.TrimSpace(lines[0]), pw)
+	}
+
+	if _, err := inventory.GetDestination(h.ops.DB, "local"); err != nil {
+		t.Errorf("GetDestination after concurrent init: %v", err)
+	}
+}
+
+// TestOpsPutDestinationTooOldRestic: restic before 0.17 cannot say "no
+// repository here yet", so its generic failure must be explained as
+// "update restic", not surfaced raw.
+func TestOpsPutDestinationTooOldRestic(t *testing.T) {
+	h := newHarness(t)
+	t.Setenv("STUB_FAIL_CMD", "snapshots")
+	t.Setenv("STUB_FAIL_CODE", "1")
+	t.Setenv("STUB_VERSION", "0.16.4")
+	err := h.ops.PutDestination(context.Background(), inventory.Destination{Name: "local", Location: "/stub-repo", KeepDaily: 7}, true)
+	if err == nil || !strings.Contains(err.Error(), "restic 0.16.4 is too old") {
+		t.Errorf("PutDestination error = %v, want it to say restic 0.16.4 is too old", err)
+	}
+}
+
+func TestOpsNotificationSettingsErrors(t *testing.T) {
+	tests := []struct {
+		name           string
+		service        string
+		dropTable      bool
+		maxAge         int
+		wantNotFound   bool
+		wantValidation bool
+	}{
+		{name: "unknown service", service: "nope", wantNotFound: true},
+		{name: "non-positive max age", service: "svc", maxAge: -1, wantValidation: true},
+		{name: "storage failure is not a validation error", service: "svc", dropTable: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			h := newHarness(t)
+			withService(t, h)
+			if tt.dropTable {
+				if _, err := h.ops.DB.Exec(`DROP TABLE notification_settings`); err != nil {
+					t.Fatal(err)
+				}
+			}
+			s := notify.Settings{Service: tt.service, Enabled: true}
+			if tt.maxAge != 0 {
+				s.MaxAgeHours = &tt.maxAge
+			}
+			err := h.ops.SetNotificationSettings(context.Background(), tt.service, s)
+			if err == nil {
+				t.Fatal("SetNotificationSettings = nil, want an error")
+			}
+			if got := errors.Is(err, inventory.ErrNotFound); got != tt.wantNotFound {
+				t.Errorf("errors.Is(%v, ErrNotFound) = %v, want %v", err, got, tt.wantNotFound)
+			}
+			if got := errors.Is(err, ErrValidation); got != tt.wantValidation {
+				t.Errorf("errors.Is(%v, ErrValidation) = %v, want %v", err, got, tt.wantValidation)
+			}
+		})
+	}
+}
+
 func TestOpsDeleteDestinationInUse(t *testing.T) {
 	h := newHarness(t)
 	h.addDestination("local")
@@ -297,7 +805,7 @@ func TestOpsBackupAndStartBackup(t *testing.T) {
 func TestOpsRedactErrPreservesErrorType(t *testing.T) {
 	h := newHarness(t)
 	const secret = "s3cret-token"
-	h.ops.Redact = []string{secret}
+	h.ops.Redact = secretpkg.NewSet(secret)
 
 	original := fmt.Errorf("service svc: %w: saw token %s", scheduler.ErrAlreadyRunning, secret)
 	got := h.ops.redactErr(original)
@@ -463,6 +971,72 @@ func TestOpsStartTrigger(t *testing.T) {
 	}
 }
 
+func TestOpsCheckPreflight_ResticAndDockerFound(t *testing.T) {
+	tests := []struct {
+		version     string
+		wantErrText string // "" = restic usable
+	}{
+		{version: "0.17.3"},
+		{version: "0.16.4", wantErrText: "too old"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.version, func(t *testing.T) {
+			h := newHarness(t)
+			dir := t.TempDir()
+			if err := os.WriteFile(filepath.Join(dir, "docker"), []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+			t.Setenv("STUB_LOG", filepath.Join(dir, "restic.log"))
+			t.Setenv("STUB_VERSION", tt.version)
+			h.ops.Runner = &runner.Runner{}
+			h.ops.ResticBin = h.resticBin
+
+			res := h.ops.CheckPreflight(context.Background())
+			if !res.ResticInstalled || res.ResticVersion != tt.version {
+				t.Errorf("CheckPreflight restic = installed=%v version=%q, want installed %s", res.ResticInstalled, res.ResticVersion, tt.version)
+			}
+			if tt.wantErrText == "" && res.ResticError != "" {
+				t.Errorf("ResticError = %q, want none", res.ResticError)
+			}
+			if tt.wantErrText != "" && !strings.Contains(res.ResticError, tt.wantErrText) {
+				t.Errorf("ResticError = %q, want it to contain %q", res.ResticError, tt.wantErrText)
+			}
+			if !res.DockerInstalled || res.DockerError != "" {
+				t.Errorf("CheckPreflight docker = installed=%v error=%q, want installed with no error", res.DockerInstalled, res.DockerError)
+			}
+		})
+	}
+}
+
+func TestOpsCheckPreflight_ResticMissing(t *testing.T) {
+	h := newHarness(t)
+	t.Setenv("PATH", t.TempDir()) // nothing on PATH
+	h.ops.Runner = &runner.Runner{}
+
+	res := h.ops.CheckPreflight(context.Background())
+	if res.ResticInstalled {
+		t.Error("CheckPreflight reports restic installed, want not installed")
+	}
+	if !strings.Contains(res.ResticError, "restic is not installed") {
+		t.Errorf("ResticError = %q, want it to say restic is not installed", res.ResticError)
+	}
+	if res.DockerInstalled {
+		t.Error("CheckPreflight reports docker installed, want not installed")
+	}
+}
+
+func TestOpsCheckPreflight_NoRunnerConfigured(t *testing.T) {
+	h := newHarness(t)
+	res := h.ops.CheckPreflight(context.Background())
+	if res.ResticInstalled || res.DockerInstalled {
+		t.Errorf("CheckPreflight with no Runner = %+v, want neither tool reported installed", res)
+	}
+	if res.ResticError == "" || res.DockerError == "" {
+		t.Error("CheckPreflight with no Runner configured should still explain why in both fields")
+	}
+}
+
 func TestOpsListCatalog(t *testing.T) {
 	h := newHarness(t)
 	list := h.ops.ListCatalog()
@@ -527,5 +1101,30 @@ func TestOpsStatusUnknownServiceErrors(t *testing.T) {
 	h := newHarness(t)
 	if _, err := h.ops.Status(context.Background(), "nope", false); !errors.Is(err, inventory.ErrNotFound) {
 		t.Errorf("Status = %v, want ErrNotFound", err)
+	}
+}
+
+// TestOpsEnsureLocalPasswordRespectsSearchDirs: a password the
+// operator provided in another credential directory (systemd's
+// $CREDENTIALS_DIRECTORY) is used as is — no second, generated one
+// may shadow it in Ballast's own directory.
+func TestOpsEnsureLocalPasswordRespectsSearchDirs(t *testing.T) {
+	h := newHarness(t)
+	provided := t.TempDir()
+	if err := os.WriteFile(filepath.Join(provided, "ballast-restic-password.local"), []byte("operator\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	h.ops.CredentialSearchDirs = []string{provided, h.credDir}
+	dest := inventory.Destination{Name: "local", Location: "/stub-repo", PasswordCredential: "ballast-restic-password.local"}
+
+	got, err := h.ops.ensureLocalPassword(dest)
+	if err != nil {
+		t.Fatalf("ensureLocalPassword: %v", err)
+	}
+	if got != "" {
+		t.Errorf("generated %q although the operator provided a password", got)
+	}
+	if _, err := os.Stat(filepath.Join(h.credDir, "ballast-restic-password.local")); err == nil {
+		t.Error("a password file was written to Ballast's own directory")
 	}
 }

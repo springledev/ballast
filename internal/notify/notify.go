@@ -293,11 +293,19 @@ func formatDuration(d time.Duration) string {
 // freshness breach as reported when nothing was actually able to
 // deliver it, or a service configured after the fact would never
 // hear about a breach that happened before its channels existed.
-var ErrNoChannels = errors.New("no notification channels registered for this service")
+var ErrNoChannels = errors.New("no notifications are set up for this service (see Notifications in the web UI to set one up)")
 
 // Notifier sends notifications for backup events.
 type Notifier struct {
 	channels map[string][]Channel // keyed by service; multiple channels per service
+
+	// Resolve, when set, is asked for a service's channels at send time
+	// whenever none were registered for it up front. This is what lets
+	// a long-running `ballast serve` notify about a service added
+	// after it started (from the web UI, say) — or pick up a channel
+	// credential file written after startup — without a restart. An
+	// error from Resolve is returned from Send, never swallowed.
+	Resolve func(service string) ([]Channel, error)
 }
 
 // NewNotifier creates a new notifier with empty channel registry.
@@ -328,8 +336,14 @@ func (n *Notifier) RegisterChannel(service string, ch Channel) {
 // optional to configure, but once a caller asks to send one, "nobody
 // was listening" must be visible, not indistinguishable from success.
 func (n *Notifier) Send(ctx context.Context, event Event) error {
-	chs, ok := n.channels[event.Service]
-	if !ok || len(chs) == 0 {
+	chs := n.channels[event.Service]
+	if len(chs) == 0 && n.Resolve != nil {
+		var err error
+		if chs, err = n.Resolve(event.Service); err != nil {
+			return fmt.Errorf("%s: loading notification channels: %w", event.Service, err)
+		}
+	}
+	if len(chs) == 0 {
 		return fmt.Errorf("%s: %w", event.Service, ErrNoChannels)
 	}
 

@@ -9,7 +9,6 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
-	"strings"
 
 	bundledcatalog "github.com/springledev/ballast/catalog"
 	"github.com/springledev/ballast/internal/api"
@@ -21,6 +20,7 @@ import (
 	"github.com/springledev/ballast/internal/restic"
 	execrunner "github.com/springledev/ballast/internal/runner"
 	"github.com/springledev/ballast/internal/scheduler"
+	"github.com/springledev/ballast/internal/secret"
 	"github.com/springledev/ballast/internal/store"
 )
 
@@ -51,7 +51,7 @@ type app struct {
 	coord    *scheduler.Coordinator
 	notifier *notify.Notifier
 	apiToken string // "" when no ballast-api-token credential is configured
-	secrets  []string
+	secrets  *secret.Set
 	logw     io.Writer
 }
 
@@ -62,12 +62,7 @@ func (a *app) Close() error { return a.store.Close() }
 // defence api.Ops and scheduler.Coordinator apply to their own error
 // text (spec rule 2).
 func (a *app) redact(s string) string {
-	for _, secret := range a.secrets {
-		if secret != "" {
-			s = strings.ReplaceAll(s, secret, "[redacted]")
-		}
-	}
-	return s
+	return a.secrets.Redact(s)
 }
 
 // logf writes one redacted, plain-English line to the app's log
@@ -105,35 +100,38 @@ func openApp(cfg config.Config, logw io.Writer) (*app, error) {
 		st.Close()
 		return nil, err
 	}
-	notifier, notifySecrets, err := pipeline.BuildNotifier(cfg.CredentialsDir, services)
-	if err != nil {
-		st.Close()
-		return nil, fmt.Errorf("loading notification channels: %w", err)
-	}
+	// One shared, growable Set: anything added later (a generated
+	// repository password, a notification URL read for a service added
+	// after startup) is redacted everywhere at once.
+	secrets := secret.NewSet()
+	credDirs := cfg.CredentialDirs()
+	notifier, notifyProblems := pipeline.BuildNotifier(credDirs, services, secrets)
 
-	apiToken, err := loadOptionalCredential(cfg.CredentialsDir, apiTokenCredential)
+	apiToken, err := loadOptionalCredential(credDirs, apiTokenCredential)
 	if err != nil {
 		st.Close()
 		return nil, fmt.Errorf("loading API token: %w", err)
 	}
 
-	secrets := append([]string(nil), notifySecrets...)
-	if apiToken != "" {
-		secrets = append(secrets, apiToken)
+	secrets.Add(apiToken)
+	if err := loadRepositoryPasswords(st, credDirs, secrets); err != nil {
+		st.Close()
+		return nil, err
 	}
 
 	r := &execrunner.Runner{Redact: secrets}
 	adapter := &notify.EngineAdapter{DB: st.DB(), Notifier: notifier}
 
 	pl := &pipeline.Pipeline{
-		DB:       st.DB(),
-		Catalog:  reg,
-		Runner:   r,
-		CredDir:  cfg.CredentialsDir,
-		WorkRoot: filepath.Join(cfg.DataDir, "work"),
-		Notifier: adapter,
-		Log:      logw,
-		Redact:   secrets,
+		DB:         st.DB(),
+		Catalog:    reg,
+		Runner:     r,
+		CredDir:    cfg.CredentialsDir,
+		OwnCredDir: cfg.WritableCredentialsDir,
+		WorkRoot:   filepath.Join(cfg.DataDir, "work"),
+		Notifier:   adapter,
+		Log:        logw,
+		Redact:     secrets,
 	}
 
 	realRunner := scheduler.Runner(pl)
@@ -153,15 +151,27 @@ func openApp(cfg config.Config, logw io.Writer) (*app, error) {
 	}
 
 	repoFor := func(dest inventory.Destination) (*restic.Repository, error) {
-		return restic.Open(dest.Location, restic.Options{
-			Runner:       r,
-			PasswordFile: filepath.Join(cfg.CredentialsDir, dest.PasswordCredential),
-		})
+		pwFile := filepath.Join(execrunner.FindCredentialDir(dest.PasswordCredential, credDirs...), dest.PasswordCredential)
+		// Re-read on every use, not only at startup: a destination
+		// added (or a password file replaced) while `ballast serve`
+		// runs must be redacted before restic ever sees it.
+		secrets.AddFile(pwFile)
+		return restic.Open(dest.Location, restic.Options{Runner: r, PasswordFile: pwFile})
 	}
-	ops := &api.Ops{DB: st.DB(), Catalog: reg, Coord: coord, Repo: repoFor, Redact: secrets}
+	ops := &api.Ops{DB: st.DB(), Catalog: reg, Coord: coord, Repo: repoFor, DestinationLocks: scheduler.FileLocker{Dir: filepath.Join(cfg.DataDir, "locks", "destinations")}, Runner: r, CredentialsDir: cfg.WritableCredentialsDir, CredentialSearchDirs: credDirs, Redact: secrets}
 
 	a := &app{cfg: cfg, store: st, ops: ops, coord: coord, notifier: notifier, apiToken: apiToken, secrets: secrets, logw: logw}
-	a.logf("using credential directory %s", cfg.CredentialsDir)
+	if cfg.WritableCredentialsDir != cfg.CredentialsDir {
+		a.logf("using credential directories %s (provided) and %s (secrets Ballast creates are saved here)", cfg.CredentialsDir, cfg.WritableCredentialsDir)
+	} else {
+		a.logf("using credential directory %s", cfg.CredentialsDir)
+	}
+	for _, p := range notifyProblems {
+		// Per service, never fatal (spec §3 principle 3): one broken
+		// file must not stop every other service's backups. Sending for
+		// that service keeps failing loudly until it is fixed.
+		a.logf("warning: notifications will not work until this is fixed: %v", p)
+	}
 	checkResticVersion(a, r)
 	return a, nil
 }
@@ -188,6 +198,25 @@ func checkResticVersion(a *app, r *execrunner.Runner) {
 	if w := v.Warning(); w != "" {
 		a.logf("%s", w)
 	}
+}
+
+// loadRepositoryPasswords adds every configured destination's restic
+// repository password to secrets, so none of them can reach a log
+// line or error message even if restic (or a wrapper) echoes one. It
+// reads the files directly rather than through the strict credential
+// checks: redaction must cover whatever restic itself can read, and a
+// missing or unreadable file is reported loudly by the first command
+// that actually uses that destination, not here.
+func loadRepositoryPasswords(st *store.Store, credDirs []string, secrets *secret.Set) error {
+	dests, err := inventory.ListDestinations(st.DB())
+	if err != nil {
+		return fmt.Errorf("listing destinations: %w", err)
+	}
+	for _, d := range dests {
+		dir := execrunner.FindCredentialDir(d.PasswordCredential, credDirs...)
+		secrets.AddFile(filepath.Join(dir, d.PasswordCredential))
+	}
+	return nil
 }
 
 // monitoredServices returns the union of every service name from
@@ -223,9 +252,10 @@ func monitoredServices(st *store.Store) ([]string, error) {
 
 // loadOptionalCredential reads a root-only credential file, returning
 // "" (not an error) when it simply does not exist — many credentials
-// (the API token, notification channels) are optional.
-func loadOptionalCredential(dir, name string) (string, error) {
-	v, err := notify.LoadCredentialValue(dir, name)
+// (the API token, notification channels) are optional. The first of
+// dirs holding the file is used (execrunner.FindCredentialDir).
+func loadOptionalCredential(dirs []string, name string) (string, error) {
+	v, err := notify.LoadCredentialValue(execrunner.FindCredentialDir(name, dirs...), name)
 	if err == nil {
 		return v, nil
 	}

@@ -1,0 +1,8 @@
+{
+  "status": 200,
+  "body": {
+    "enabled": true,
+    "heartbeat_enabled": false,
+    "service": "svc"
+  }
+}

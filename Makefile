@@ -9,6 +9,10 @@ VERSION ?= $(shell $(GO) run ./cmd/ballast version 2>/dev/null || echo dev)
 
 LDFLAGS := -s -w -X main.version=$(if $(VERSION),$(VERSION),dev)
 
+.PHONY: web
+web: ## Build the Vue frontend into web/dist (spec §10: no Node needed at runtime, only to build)
+	cd web && npm ci && npm run build
+
 .PHONY: build
 build:
 	$(GO) build -trimpath -ldflags "$(LDFLAGS)" -o bin/$(BINARY) ./cmd/ballast

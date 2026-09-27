@@ -46,6 +46,28 @@ func FileEnv(dir string, files map[string]string) ([]string, error) {
 	return env, nil
 }
 
+// FindCredentialDir returns the first of dirs that holds an entry
+// called name, so a credential can live either where the operator put
+// it ($CREDENTIALS_DIRECTORY under systemd) or where Ballast saved it
+// itself. When none holds it, the first non-empty dir is returned, so
+// a "missing file" error names the operator-facing location. Empty
+// dirs are skipped. Only paths are inspected, never contents.
+func FindCredentialDir(name string, dirs ...string) string {
+	first := ""
+	for _, d := range dirs {
+		if d == "" {
+			continue
+		}
+		if first == "" {
+			first = d
+		}
+		if _, err := os.Lstat(filepath.Join(d, name)); err == nil {
+			return d
+		}
+	}
+	return first
+}
+
 // CheckCredentialFile validates that path is a regular file readable
 // only by its owner (0600 or stricter) — the same rule FileEnv
 // applies to every credential path it resolves. Exported so other

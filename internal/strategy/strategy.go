@@ -135,7 +135,7 @@ func (o Options) runnerFor(req Request) *runner.Runner {
 		return o.Runner
 	}
 	r := *o.Runner
-	r.Redact = append(append([]string(nil), o.Runner.Redact...), values...)
+	r.Redact = o.Runner.Redact.With(values...)
 	return &r
 }
 

@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/springledev/ballast/internal/engine"
+	secretpkg "github.com/springledev/ballast/internal/secret"
 )
 
 // TestStartRefusesWhileRunning: Start must report ErrAlreadyRunning
@@ -115,7 +116,7 @@ func TestStartRunsInBackgroundAndReleasesLockWhenDone(t *testing.T) {
 func TestStartRedactsErrorsLikeRunNow(t *testing.T) {
 	f := newFixture(t)
 	const secret = "s3cret-token"
-	f.c.Redact = []string{secret}
+	f.c.Redact = secretpkg.NewSet(secret)
 	f.runner.err = errors.New("boom: " + secret)
 
 	done, _, err := f.c.Start(context.Background(), "immich")

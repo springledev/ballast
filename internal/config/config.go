@@ -27,8 +27,20 @@ type Config struct {
 	CatalogDirs []string
 
 	// CredentialsDir is the directory of root-only 0600 secret
-	// files (systemd LoadCredential= semantics).
+	// files (systemd LoadCredential= semantics). Under systemd it is
+	// $CREDENTIALS_DIRECTORY: read-only and rebuilt on every start, so
+	// Ballast only ever reads from it.
 	CredentialsDir string
+
+	// WritableCredentialsDir is where Ballast saves secrets it creates
+	// itself (a generated repository password, an ntfy link typed into
+	// the wizard). It is always <config dir>/credentials, never
+	// $CREDENTIALS_DIRECTORY, so a secret written by an interactive
+	// `sudo ballast wizard` is still there for the systemd service and
+	// after every restart (spec §8: credential paths differ between
+	// systemd and interactive runs). Equal to CredentialsDir outside
+	// systemd.
+	WritableCredentialsDir string
 
 	// ConfigDir is the directory holding ballast.yaml and
 	// user-supplied catalog/credential subdirectories.
@@ -115,7 +127,22 @@ func Load(getenv func(string) string, homeDir func() (string, error)) (Config, e
 	}
 
 	cfg.CredentialsDir = credentialsDir(getenv, cfg.ConfigDir)
+	cfg.WritableCredentialsDir = filepath.Join(cfg.ConfigDir, "credentials")
 	return cfg, nil
+}
+
+// CredentialDirs lists every directory a credential file is looked up
+// in, in priority order: CredentialsDir (what the operator provided,
+// e.g. via LoadCredential=) first, then WritableCredentialsDir (what
+// Ballast saved itself). Empty and duplicate entries are left out.
+func (c Config) CredentialDirs() []string {
+	var out []string
+	for _, d := range []string{c.CredentialsDir, c.WritableCredentialsDir} {
+		if d != "" && (len(out) == 0 || out[0] != d) {
+			out = append(out, d)
+		}
+	}
+	return out
 }
 
 // configFilePath returns the config file path for an error message.

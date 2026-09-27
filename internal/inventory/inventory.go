@@ -43,7 +43,7 @@ var nameRE = regexp.MustCompile(`^[a-z0-9][a-z0-9_-]{0,62}$`)
 // or service name.
 func ValidateName(name string) error {
 	if !nameRE.MatchString(name) {
-		return fmt.Errorf("name %q is invalid: must match %s (lowercase letters, digits, '-' and '_', starting with a letter or digit, up to 63 characters)", name, nameRE.String())
+		return fmt.Errorf("%q can't be used as a name: use lowercase letters, numbers, dashes and underscores, starting with a letter or number (up to 63 characters)", name)
 	}
 	return nil
 }
@@ -149,7 +149,11 @@ func ListDestinations(db *sql.DB) ([]Destination, error) {
 	}
 	defer rows.Close()
 
-	var out []Destination
+	// A non-nil empty slice, not nil: this list is a JSON API response
+	// body (spec §9), and json.Marshal renders a nil slice as `null`,
+	// not `[]` — a needless null the web UI would have to guard against
+	// on every "no destinations yet" case.
+	out := []Destination{}
 	for rows.Next() {
 		var d Destination
 		if err := rows.Scan(&d.Name, &d.Location, &d.PasswordCredential, &d.KeepDaily, &d.KeepWeekly, &d.KeepMonthly); err != nil {
@@ -287,7 +291,9 @@ func ListServices(db *sql.DB) ([]Service, error) {
 	}
 	defer rows.Close()
 
-	var out []Service
+	// Non-nil empty slice for the same reason as ListDestinations: this
+	// is a JSON API response body, and a nil slice marshals as `null`.
+	out := []Service{}
 	for rows.Next() {
 		var s Service
 		var paramsJSON, containersJSON string
