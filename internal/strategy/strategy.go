@@ -4,7 +4,7 @@
 // which the engine then uploads (restic) and verifies in later
 // phases. Strategies never upload and never verify themselves.
 //
-// The four strategies are:
+// The five strategies are:
 //
 //   - files: back up filesystem paths directly (nothing is produced;
 //     the paths are handed to the uploader as-is).
@@ -17,6 +17,9 @@
 //     its artifact(s) in the work directory. This is the reserved
 //     Phase-2 contract (pymobiledevice3 gets wrapped, never imported);
 //     v0.1 ships and tests it with stub scripts only.
+//   - volume: archive named Docker volumes through a throwaway helper
+//     container on the service's Docker host — live, or with the
+//     service's containers stopped (spec §17.5).
 //
 // All external work goes through internal/runner (pipefail, SIGPIPE,
 // redaction) — strategies contain no per-service logic (catalog is
@@ -117,6 +120,10 @@ type Options struct {
 	// §17.3); this is a self-contained interim implementation so the
 	// transport exists and is testable ahead of that.
 	PctBin string
+
+	// VolumeHelperImage is the image the volume strategy runs tar in;
+	// empty means DefaultVolumeHelperImage.
+	VolumeHelperImage string
 }
 
 // pct returns the configured Proxmox pct binary name.
@@ -230,8 +237,16 @@ func For(entry *catalog.Entry, opts Options) (Strategy, error) {
 			return nil, fmt.Errorf("service %s: exec script %q must be an absolute path, so the same file runs under systemd, cron and interactive shells", entry.Service, entry.Backup.Exec.Script)
 		}
 		return &Exec{entry: entry, opts: opts}, nil
+	case "volume":
+		if opts.Runner == nil {
+			return nil, fmt.Errorf("service %s: volume strategy needs a command runner", entry.Service)
+		}
+		if err := validateVolumeEntry(entry); err != nil {
+			return nil, err
+		}
+		return &Volume{entry: entry, opts: opts}, nil
 	default:
-		return nil, fmt.Errorf("service %s: unknown backup strategy %q (want one of: files, dump, stop-start, exec)", entry.Service, entry.Backup.Strategy)
+		return nil, fmt.Errorf("service %s: unknown backup strategy %q (want one of: files, dump, stop-start, exec, volume)", entry.Service, entry.Backup.Strategy)
 	}
 }
 

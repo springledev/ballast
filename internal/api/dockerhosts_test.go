@@ -263,3 +263,59 @@ func TestDeleteDockerHostRemovesCredentialFiles(t *testing.T) {
 		t.Errorf("host row still exists after delete: %v", gerr)
 	}
 }
+
+// dockerVolumeLsStub is a fake `docker volume ls` answering with two
+// fixed volumes, so ListDockerHostVolumes tests are hermetic (no
+// Docker daemon needed).
+const dockerVolumeLsStub = "#!/bin/sh\n" +
+	`if [ "$1 $2" = "volume ls" ]; then` + "\n" +
+	`  printf '%s\n' '{"Name":"immich_pgdata","Driver":"local","Labels":"com.docker.compose.project=immich"}'` + "\n" +
+	`  printf '%s\n' '{"Name":"a_plain_volume","Driver":"local","Labels":""}'` + "\n" +
+	"fi\nexit 0\n"
+
+// TestListDockerHostVolumes checks the happy path: volumes come back
+// sorted by name, with the compose project label surfaced.
+func TestListDockerHostVolumes(t *testing.T) {
+	h := newHarness(t)
+	h.ops.Runner = &runner.Runner{}
+	h.ops.DockerHosts = dockerhost.Resolver{DockerBin: writeDockerStub(t, dockerVolumeLsStub)}
+
+	got, err := h.ops.ListDockerHostVolumes(context.Background(), dockerhost.LocalName)
+	if err != nil {
+		t.Fatalf("ListDockerHostVolumes: %v", err)
+	}
+	want := []dockerhost.Volume{
+		{Name: "a_plain_volume", Driver: "local"},
+		{Name: "immich_pgdata", Driver: "local", ComposeProject: "immich"},
+	}
+	if len(got) != len(want) {
+		t.Fatalf("ListDockerHostVolumes() = %+v, want %+v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Errorf("volume[%d] = %+v, want %+v", i, got[i], want[i])
+		}
+	}
+}
+
+// TestListDockerHostVolumesUnknownHost checks that an unknown host
+// name is reported as a not-found error, not a crash.
+func TestListDockerHostVolumesUnknownHost(t *testing.T) {
+	h := newHarness(t)
+	h.ops.Runner = &runner.Runner{}
+	_, err := h.ops.ListDockerHostVolumes(context.Background(), "nope")
+	if !errors.Is(err, inventory.ErrNotFound) {
+		t.Fatalf("err = %v, want ErrNotFound", err)
+	}
+}
+
+// TestListDockerHostVolumesNoRunner checks the internal-wiring guard:
+// listing volumes without a configured runner must fail loudly
+// instead of nil-pointer-panicking.
+func TestListDockerHostVolumesNoRunner(t *testing.T) {
+	h := newHarness(t)
+	_, err := h.ops.ListDockerHostVolumes(context.Background(), dockerhost.LocalName)
+	if err == nil {
+		t.Fatal("want an error when no runner is configured")
+	}
+}

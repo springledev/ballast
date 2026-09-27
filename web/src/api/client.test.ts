@@ -155,6 +155,23 @@ describe("api client", () => {
     expect(init.method).toBe("POST");
   });
 
+  it("lists docker volumes on a host", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      jsonResponse(200, [
+        { name: "a_plain_volume", driver: "local" },
+        { name: "immich_pgdata", driver: "local", compose_project: "immich" },
+      ]),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(api.listDockerHostVolumes("nas")).resolves.toEqual([
+      { name: "a_plain_volume", driver: "local" },
+      { name: "immich_pgdata", driver: "local", compose_project: "immich" },
+    ]);
+    const [url] = fetchMock.mock.calls[0];
+    expect(url).toBe("/api/v1/docker-hosts/nas/volumes");
+  });
+
   it("passes the host query param on detect when given", async () => {
     const fetchMock = vi.fn().mockImplementation(() => Promise.resolve(jsonResponse(200, { containers: [], suggestions: [] })));
     vi.stubGlobal("fetch", fetchMock);

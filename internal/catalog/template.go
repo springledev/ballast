@@ -35,6 +35,7 @@ func (e *Entry) DeepCopy() *Entry {
 		c.Backup.Dumps[i] = d
 	}
 	c.Backup.Files = append([]FileSpec(nil), e.Backup.Files...)
+	c.Backup.Volumes = append([]VolumeSpec(nil), e.Backup.Volumes...)
 	if e.Backup.StopStart != nil {
 		ss := *e.Backup.StopStart
 		ss.Containers = append([]string(nil), e.Backup.StopStart.Containers...)
@@ -206,6 +207,13 @@ func (e *Entry) Resolve(ctx TemplateContext) error {
 			return fmt.Errorf("file %q: %w", f.Path, err)
 		}
 		e.Backup.Files[i].Path = p
+	}
+	for i, v := range e.Backup.Volumes {
+		n, err := substitute(v.Name, ctx)
+		if err != nil {
+			return fmt.Errorf("volume %q: %w", v.Name, err)
+		}
+		e.Backup.Volumes[i].Name = n
 	}
 	ss := e.Backup.StopStart
 	if ss != nil {

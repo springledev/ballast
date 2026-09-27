@@ -120,6 +120,16 @@ func TestLoadRejections(t *testing.T) {
 			wantErr: "catalog validation",
 		},
 		{
+			name:    "volume strategy without volumes",
+			yaml:    volumeEntryYAML(""),
+			wantErr: "catalog validation",
+		},
+		{
+			name:    "unknown parameter picker",
+			yaml:    strings.Replace(volumeEntryYAML("  volumes:\n    - name: \"{{ .Params.volume }}\"\n"), "picker: docker-volume", "picker: colour-wheel", 1),
+			wantErr: "catalog validation",
+		},
+		{
 			name:    "imagePattern is not a valid regular expression",
 			yaml:    strings.Replace(validEntry, `imagePattern: "ghcr.io/immich-app/immich-server"`, `imagePattern: "immich-server("`, 1),
 			wantErr: "not a valid regular expression",
@@ -152,6 +162,45 @@ func TestLoadFileWrapsPath(t *testing.T) {
 	}
 	if _, err := LoadFile(filepath.Join(dir, "missing.yaml")); err == nil {
 		t.Fatal("LoadFile(missing) = nil error, want error")
+	}
+}
+
+// volumeEntryYAML is a minimal volume-strategy entry whose backup
+// block ends with volumesBlock (indented under backup:).
+func volumeEntryYAML(volumesBlock string) string {
+	return `apiVersion: ballast.dev/v1
+service: vol
+version: 1
+parameters:
+  - name: volume
+    required: true
+    picker: docker-volume
+backup:
+  strategy: volume
+` + volumesBlock + `verify:
+  method: archive-integrity
+`
+}
+
+// TestResolveVolumeTemplates checks that volume names are templated,
+// the picker hint survives loading, and DeepCopy isolates volumes.
+func TestResolveVolumeTemplates(t *testing.T) {
+	entry, err := Load([]byte(volumeEntryYAML("  volumes:\n    - name: \"{{ .Params.volume }}\"\n")))
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if got := entry.Parameters[0].Picker; got != "docker-volume" {
+		t.Errorf("picker = %q, want docker-volume", got)
+	}
+	deep := entry.DeepCopy()
+	if err := deep.Resolve(TemplateContext{Params: map[string]string{"volume": "app_data"}}); err != nil {
+		t.Fatalf("Resolve: %v", err)
+	}
+	if got := deep.Backup.Volumes[0].Name; got != "app_data" {
+		t.Errorf("volume name = %q, want app_data", got)
+	}
+	if got := entry.Backup.Volumes[0].Name; got != "{{ .Params.volume }}" {
+		t.Errorf("original entry mutated; volume name = %q", got)
 	}
 }
 

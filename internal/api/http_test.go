@@ -17,6 +17,7 @@ import (
 	"github.com/springledev/ballast/internal/dockerhost"
 	"github.com/springledev/ballast/internal/inventory"
 	"github.com/springledev/ballast/internal/notify"
+	"github.com/springledev/ballast/internal/runner"
 )
 
 // fakeEd25519PrivateKey is a syntactically valid, unencrypted OpenSSH
@@ -601,6 +602,22 @@ func TestHTTPGolden(t *testing.T) {
 			name: "docker_hosts_get_not_found",
 			req: func(h *harness) *http.Request {
 				return httptest.NewRequest(http.MethodGet, "/api/v1/docker-hosts/nope", nil)
+			},
+		},
+		{
+			name: "docker_hosts_list_volumes",
+			arrange: func(t *testing.T, h *harness) {
+				h.ops.Runner = &runner.Runner{}
+				h.ops.DockerHosts = dockerhost.Resolver{DockerBin: writeDockerStub(t, dockerVolumeLsStub)}
+			},
+			req: func(h *harness) *http.Request {
+				return httptest.NewRequest(http.MethodGet, "/api/v1/docker-hosts/local/volumes", nil)
+			},
+		},
+		{
+			name: "docker_hosts_list_volumes_not_found",
+			req: func(h *harness) *http.Request {
+				return httptest.NewRequest(http.MethodGet, "/api/v1/docker-hosts/nope/volumes", nil)
 			},
 		},
 		{

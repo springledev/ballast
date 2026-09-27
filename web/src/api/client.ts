@@ -9,6 +9,7 @@ import type {
   DetectResult,
   DockerHost,
   DockerHostTestResult,
+  DockerVolume,
   NotificationSettings,
   PreflightResult,
   ScheduledJob,
@@ -175,5 +176,8 @@ export const api = {
   },
   testDockerHost(name: string): Promise<DockerHostTestResult> {
     return request("POST", `${base}/docker-hosts/${encodeURIComponent(name)}/test`);
+  },
+  listDockerHostVolumes(name: string): Promise<DockerVolume[]> {
+    return request("GET", `${base}/docker-hosts/${encodeURIComponent(name)}/volumes`);
   },
 };

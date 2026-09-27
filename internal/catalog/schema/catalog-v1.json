@@ -57,7 +57,8 @@
           "name": { "type": "string" },
           "required": { "type": "boolean" },
           "prompt": { "type": "string" },
-          "default": { "type": "string" }
+          "default": { "type": "string" },
+          "picker": { "enum": ["docker-volume"] }
         }
       }
     },
@@ -67,7 +68,7 @@
       "required": ["strategy"],
       "properties": {
         "strategy": {
-          "enum": ["dump", "stop-start", "files", "exec"]
+          "enum": ["dump", "stop-start", "files", "exec", "volume"]
         },
         "dumps": {
           "type": "array",
@@ -102,6 +103,17 @@
             }
           }
         },
+        "volumes": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["name"],
+            "properties": {
+              "name": { "type": "string" }
+            }
+          }
+        },
         "stopStart": {
           "type": "object",
           "additionalProperties": false,
@@ -120,8 +132,16 @@
           }
         }
       },
-      "if": { "properties": { "strategy": { "const": "dump" } } },
-      "then": { "required": ["dumps"] }
+      "allOf": [
+        {
+          "if": { "properties": { "strategy": { "const": "dump" } } },
+          "then": { "required": ["dumps"] }
+        },
+        {
+          "if": { "properties": { "strategy": { "const": "volume" } } },
+          "then": { "required": ["volumes"] }
+        }
+      ]
     },
     "verify": {
       "type": "object",

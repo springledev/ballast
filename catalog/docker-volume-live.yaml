@@ -1,0 +1,31 @@
+# catalog/docker-volume-live.yaml — "Generic Docker volume", live mode
+# (spec §5.1, §17.5).
+#
+# Archives one named Docker volume while its containers keep running,
+# through a small throwaway helper container on the service's Docker
+# host. No downtime, but files being written during the copy can be
+# captured half-written: use this for data that rarely changes (media,
+# uploads, static configuration), and the stopped variant
+# (docker-volume) for databases.
+#
+# Verification: the archive is fully read back (tar index test) and
+# restic re-reads a sample of the snapshot.
+apiVersion: ballast.dev/v1
+service: docker-volume-live
+version: 1
+display:
+  name: Docker volume (live, no downtime)
+  description: Back up a Docker volume while it stays in use; best for files that rarely change
+parameters:
+  - name: volume
+    required: true
+    picker: docker-volume
+    prompt: "Name of the Docker volume to back up"
+backup:
+  strategy: volume
+  volumes:
+    - name: "{{ .Params.volume }}"
+verify:
+  method: archive-integrity
+notifications:
+  failureVerbosity: full

@@ -65,15 +65,23 @@ type Parameter struct {
 	Required bool   `yaml:"required,omitempty" json:"required,omitempty"`
 	Prompt   string `yaml:"prompt,omitempty" json:"prompt,omitempty"`
 	Default  string `yaml:"default,omitempty" json:"default,omitempty"`
+	// Picker tells the web UI how to help the user fill the value in.
+	// "docker-volume" offers the named volumes on the service's Docker
+	// host; empty means a plain text box. It never changes how the
+	// value is used — the parameter is still an ordinary string.
+	Picker string `yaml:"picker,omitempty" json:"picker,omitempty"`
 }
 
 // Backup describes how to create the backup artifacts.
 type Backup struct {
-	Strategy  string      `yaml:"strategy" json:"strategy"`
-	Dumps     []Dump      `yaml:"dumps,omitempty" json:"dumps,omitempty"`
-	Files     []FileSpec  `yaml:"files,omitempty" json:"files,omitempty"`
-	StopStart *StopStart  `yaml:"stopStart,omitempty" json:"stopStart,omitempty"`
-	Exec      *ExecBackup `yaml:"exec,omitempty" json:"exec,omitempty"`
+	Strategy string     `yaml:"strategy" json:"strategy"`
+	Dumps    []Dump     `yaml:"dumps,omitempty" json:"dumps,omitempty"`
+	Files    []FileSpec `yaml:"files,omitempty" json:"files,omitempty"`
+	// Volumes are the named Docker volumes the volume strategy
+	// archives (spec §17.5).
+	Volumes   []VolumeSpec `yaml:"volumes,omitempty" json:"volumes,omitempty"`
+	StopStart *StopStart   `yaml:"stopStart,omitempty" json:"stopStart,omitempty"`
+	Exec      *ExecBackup  `yaml:"exec,omitempty" json:"exec,omitempty"`
 }
 
 // Dump is one dump command run inside a container (typically docker exec)
@@ -105,6 +113,13 @@ type Dump struct {
 // FileSpec is a filesystem path included directly in the backup.
 type FileSpec struct {
 	Path string `yaml:"path" json:"path"`
+}
+
+// VolumeSpec is one named Docker volume archived by the volume
+// strategy. It is read through a throwaway helper container on the
+// service's Docker host, so no host filesystem access is needed.
+type VolumeSpec struct {
+	Name string `yaml:"name" json:"name"`
 }
 
 // StopStart lists the containers that the stop-start strategy must stop

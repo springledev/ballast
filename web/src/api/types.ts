@@ -9,6 +9,8 @@ export interface CatalogParameter {
   required?: boolean;
   prompt?: string;
   default?: string;
+  /** "docker-volume": show a picker of the service's Docker host's volumes. */
+  picker?: string;
 }
 
 export interface CatalogSummary {
@@ -214,6 +216,14 @@ export interface CreateDockerHostRequest {
 
 export interface DockerHostTestResult {
   server_version: string;
+}
+
+/** One Docker volume on a host, for the "docker-volume" parameter picker. */
+export interface DockerVolume {
+  name: string;
+  driver: string;
+  /** The Compose project the volume belongs to, when it has one. */
+  compose_project?: string;
 }
 
 /** POST /api/v1/docker-hosts response. */

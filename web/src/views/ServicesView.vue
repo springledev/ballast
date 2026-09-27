@@ -1,8 +1,8 @@
 <script setup lang="ts">
-import { computed, onMounted, reactive, ref } from "vue";
+import { computed, onMounted, reactive, ref, watch } from "vue";
 
 import { api } from "@/api/client";
-import type { CatalogSummary, Destination, DockerHost, Retention, Service, Snapshot } from "@/api/types";
+import type { CatalogSummary, Destination, DockerHost, DockerVolume, Retention, Service, Snapshot } from "@/api/types";
 import { formatDateTime, formatRelative } from "@/lib/format";
 import { describeServiceRetention } from "@/lib/retention";
 
@@ -142,6 +142,43 @@ function entryName(id: string): string {
   return catalog.value.find((c) => c.service === id)?.name ?? id;
 }
 
+// --- Docker volume picker (parameters with picker: "docker-volume") ---
+
+const volumeOptions = ref<DockerVolume[]>([]);
+const volumeError = ref("");
+const volumeHost = ref("");
+
+const hasVolumePicker = computed(() => (selectedEntry.value?.parameters ?? []).some((p) => p.picker === "docker-volume"));
+
+/** Loads the volumes on form.docker_host, for the datalist of any
+ * "docker-volume" parameter. Best-effort: on failure the picker just
+ * falls back to a plain text box. */
+async function loadVolumes() {
+  if (!hasVolumePicker.value || !form.docker_host) {
+    volumeOptions.value = [];
+    volumeError.value = "";
+    return;
+  }
+  const host = form.docker_host;
+  volumeHost.value = host;
+  volumeError.value = "";
+  try {
+    const vols = await api.listDockerHostVolumes(host);
+    if (volumeHost.value !== host) return; // the host changed meanwhile
+    volumeOptions.value = vols;
+  } catch {
+    if (volumeHost.value !== host) return;
+    volumeOptions.value = [];
+    volumeError.value = "Couldn't list volumes on this host — type the volume name.";
+  }
+}
+
+function volumeLabel(v: DockerVolume): string {
+  return v.compose_project ? `${v.name} (${v.compose_project})` : v.name;
+}
+
+watch(() => [form.catalog_entry, form.docker_host], loadVolumes);
+
 async function load() {
   loading.value = true;
   error.value = "";
@@ -169,6 +206,8 @@ function openAdd() {
   form.params = {};
   saved.value = "";
   showForm.value = true;
+  volumeOptions.value = [];
+  volumeError.value = "";
 }
 
 function startEdit(s: Service) {
@@ -181,6 +220,7 @@ function startEdit(s: Service) {
   form.params = { ...(s.params ?? {}) };
   saved.value = "";
   showForm.value = true;
+  void loadVolumes();
 }
 
 function closeForm() {
@@ -379,8 +419,15 @@ onMounted(load);
         </div>
         <div v-for="p in selectedEntry.parameters ?? []" :key="p.name" class="field">
           <label :for="`param-${p.name}`">{{ p.prompt || p.name }}<span v-if="!p.required" class="muted"> (optional)</span></label>
-          <input :id="`param-${p.name}`" v-model="form.params[p.name]" />
+          <template v-if="p.picker === 'docker-volume'">
+            <input :id="`param-${p.name}`" v-model="form.params[p.name]" list="docker-volume-options" autocomplete="off" />
+            <p v-if="volumeError" class="hint">{{ volumeError }}</p>
+          </template>
+          <input v-else :id="`param-${p.name}`" v-model="form.params[p.name]" />
         </div>
+        <datalist v-if="hasVolumePicker" id="docker-volume-options">
+          <option v-for="v in volumeOptions" :key="v.name" :value="v.name">{{ volumeLabel(v) }}</option>
+        </datalist>
         <div v-if="showHostPicker" class="field">
           <label for="svc-host">Docker host</label>
           <select id="svc-host" v-model="form.docker_host">

@@ -25,19 +25,27 @@ func writeStub(t *testing.T, dir, name, body string) string {
 
 // dockerStub is a fake docker CLI. It appends every invocation's argv
 // to $STUB_LOG (one line per call), fails when any argument is
-// "fail-<subcommand>" (so "fail-stop" only breaks docker stop), and
-// answers `docker exec ...` with a small SQL dump on stdout.
+// "fail-<subcommand>" or a "fail-<subcommand>:…" volume mount (so
+// "fail-stop" only breaks docker stop),
+// answers `docker exec ...` with a small SQL dump on stdout, and for
+// `docker run ...` either saves its stdin to $STUB_STDIN (when set) or
+// prints the file $STUB_TAR (when set).
 const dockerStub = `#!/bin/sh
 printf '%s\n' "$*" >> "$STUB_LOG"
 cmd="$1"
 for a in "$@"; do
-  if [ "$a" = "fail-$cmd" ]; then
-    echo "stub: simulated $cmd failure" >&2
-    exit 1
-  fi
+  case "$a" in
+    "fail-$cmd"|"fail-$cmd":*)
+      echo "stub: simulated $cmd failure" >&2
+      exit 1 ;;
+  esac
 done
 case "$cmd" in
   exec) printf 'CREATE TABLE stub(id int);\n' ;;
+  run)
+    if [ -n "$STUB_STDIN" ]; then cat > "$STUB_STDIN"
+    elif [ -n "$STUB_TAR" ]; then cat "$STUB_TAR"
+    fi ;;
 esac
 exit 0
 `

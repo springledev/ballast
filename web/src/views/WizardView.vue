@@ -1,8 +1,8 @@
 <script setup lang="ts">
-import { computed, onMounted, onUnmounted, reactive, ref } from "vue";
+import { computed, onMounted, onUnmounted, reactive, ref, watch } from "vue";
 
 import { api } from "@/api/client";
-import type { CatalogSummary, Destination, DetectResult, DockerHost, PreflightResult, ServiceStatus } from "@/api/types";
+import type { CatalogSummary, Destination, DetectResult, DockerHost, DockerVolume, PreflightResult, ServiceStatus } from "@/api/types";
 import { schedulePresets } from "@/lib/schedule";
 import { describeCheck, describeTier } from "@/lib/status";
 
@@ -99,6 +99,40 @@ function chooseEntry(id: string) {
   for (const k of Object.keys(params)) delete params[k];
   for (const p of selectedEntry.value?.parameters ?? []) params[p.name] = p.default ?? "";
 }
+
+// --- Docker volume picker (parameters with picker: "docker-volume") ---
+
+const volumeOptions = ref<DockerVolume[]>([]);
+const volumeError = ref("");
+const hasVolumePicker = computed(() => (selectedEntry.value?.parameters ?? []).some((p) => p.picker === "docker-volume"));
+
+/** Loads the volumes on chosenHost, for the datalist of any
+ * "docker-volume" parameter. Best-effort: on failure the picker just
+ * falls back to a plain text box. */
+async function loadVolumes() {
+  if (!hasVolumePicker.value || !chosenHost.value) {
+    volumeOptions.value = [];
+    volumeError.value = "";
+    return;
+  }
+  volumeError.value = "";
+  const host = chosenHost.value;
+  try {
+    const vols = await api.listDockerHostVolumes(host);
+    if (chosenHost.value !== host) return; // the host changed meanwhile
+    volumeOptions.value = vols;
+  } catch {
+    if (chosenHost.value !== host) return;
+    volumeOptions.value = [];
+    volumeError.value = "Couldn't list volumes on this host — type the volume name.";
+  }
+}
+
+function volumeLabel(v: DockerVolume): string {
+  return v.compose_project ? `${v.name} (${v.compose_project})` : v.name;
+}
+
+watch(() => [chosenEntry.value, chosenHost.value], loadVolumes);
 
 function next() {
   error.value = "";
@@ -268,8 +302,15 @@ const resultLight = computed(() => {
 
       <div v-for="p in selectedEntry?.parameters ?? []" :key="p.name" class="field" style="margin-top: 1rem">
         <label :for="`wiz-param-${p.name}`">{{ p.prompt || p.name }}<span v-if="!p.required" class="muted"> (optional)</span></label>
-        <input :id="`wiz-param-${p.name}`" v-model="params[p.name]" />
+        <template v-if="p.picker === 'docker-volume'">
+          <input :id="`wiz-param-${p.name}`" v-model="params[p.name]" list="wiz-docker-volume-options" autocomplete="off" />
+          <p v-if="volumeError" class="hint">{{ volumeError }}</p>
+        </template>
+        <input v-else :id="`wiz-param-${p.name}`" v-model="params[p.name]" />
       </div>
+      <datalist v-if="hasVolumePicker" id="wiz-docker-volume-options">
+        <option v-for="v in volumeOptions" :key="v.name" :value="v.name">{{ volumeLabel(v) }}</option>
+      </datalist>
       <div class="field">
         <label for="wiz-name">Name</label>
         <input id="wiz-name" v-model="serviceName" />

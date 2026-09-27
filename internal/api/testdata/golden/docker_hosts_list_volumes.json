@@ -1,0 +1,14 @@
+{
+  "status": 200,
+  "body": [
+    {
+      "driver": "local",
+      "name": "a_plain_volume"
+    },
+    {
+      "compose_project": "immich",
+      "driver": "local",
+      "name": "immich_pgdata"
+    }
+  ]
+}

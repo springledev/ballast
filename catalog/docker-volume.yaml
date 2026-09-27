@@ -1,0 +1,39 @@
+# catalog/docker-volume.yaml — "Generic Docker volume", stop mode
+# (spec §5.1, §17.5).
+#
+# Archives one named Docker volume through a small throwaway helper
+# container on the service's Docker host, so it works the same on
+# local and remote hosts and needs no access to the host's folders.
+# The container using the volume is stopped while the volume is
+# copied and always started again — even when the backup fails or is
+# cancelled — so databases and other files that are written all the
+# time are captured in a consistent state.
+#
+# Verification: the archive is fully read back (tar index test) and
+# restic re-reads a sample of the snapshot.
+apiVersion: ballast.dev/v1
+service: docker-volume
+version: 1
+display:
+  name: Docker volume (stopped while copied)
+  description: Back up a Docker volume; its container is briefly stopped so the copy is consistent
+parameters:
+  - name: volume
+    required: true
+    picker: docker-volume
+    prompt: "Name of the Docker volume to back up"
+  - name: container
+    required: true
+    prompt: "Name of the container that uses this volume (stopped during the copy, then started again)"
+backup:
+  strategy: volume
+  volumes:
+    - name: "{{ .Params.volume }}"
+  stopStart:
+    containers:
+      - "{{ .Params.container }}"
+verify:
+  method: archive-integrity
+  restartPolicy: always # the container is restarted every run
+notifications:
+  failureVerbosity: full

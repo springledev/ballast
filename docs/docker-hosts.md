@@ -110,7 +110,9 @@ Ballast runs these commands on the remote machine, but nothing is installed ther
 
 - `docker ps` — to discover and list containers
 - `docker exec` — to run database dumps (e.g., `pg_dump`)
-- `docker stop` and `docker start` — for stop-start services
+- `docker stop` and `docker start` — for stop-start services and stopped-mode volume backups
+- `docker volume ls` / `docker volume inspect` — to list volumes in the web UI and check a volume exists before backing it up
+- A temporary `alpine` helper container (`docker run --rm`, no network, volume mounted read-only) — to copy a Docker volume into the backup. The image is pulled once on that machine the first time a volume is backed up.
 - Temporary restore containers — created and destroyed during verification
 
 ## Troubleshooting

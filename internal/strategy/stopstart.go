@@ -44,17 +44,8 @@ func (s *StopStart) Backup(ctx context.Context, req Request) (res *Result, retEr
 		return nil, fmt.Errorf("service %s: %w", s.entry.Service, err)
 	}
 	containers := s.entry.Backup.StopStart.Containers
-
-	stopped := 0
-	for _, c := range containers {
-		if _, err := s.opts.Runner.Run(ctx, nil, nil, s.dockerCmd("stop", c)); err != nil {
-			retErr = fmt.Errorf("service %s: stopping container %s: %w", s.entry.Service, c, err)
-			if rerr := s.startAll(containers[:stopped]); rerr != nil {
-				retErr = errors.Join(retErr, rerr)
-			}
-			return nil, retErr
-		}
-		stopped++
+	if err := s.stopAll(ctx, containers); err != nil {
+		return nil, err
 	}
 
 	// Guaranteed restart (spec §4.2). It runs with a cancellation-free
@@ -77,6 +68,23 @@ func (s *StopStart) Backup(ctx context.Context, req Request) (res *Result, retEr
 		Artifacts: []Artifact{{Name: stopStartArtifact, Path: tarPath, Format: "tar"}},
 		Skipped:   skipped,
 	}, nil
+}
+
+// stopAll stops the containers in order. Stopping is all-or-nothing:
+// if a stop fails, the containers already stopped are started again
+// before the error returns, so the caller only needs to arrange the
+// restart once stopAll succeeded.
+func (s *StopStart) stopAll(ctx context.Context, containers []string) error {
+	for i, c := range containers {
+		if _, err := s.opts.Runner.Run(ctx, nil, nil, s.dockerCmd("stop", c)); err != nil {
+			retErr := fmt.Errorf("service %s: stopping container %s: %w", s.entry.Service, c, err)
+			if rerr := s.startAll(containers[:i]); rerr != nil {
+				retErr = errors.Join(retErr, rerr)
+			}
+			return retErr
+		}
+	}
+	return nil
 }
 
 // dockerCmd builds a docker CLI invocation.

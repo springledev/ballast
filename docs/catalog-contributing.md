@@ -41,9 +41,10 @@ parameters:                  # optional: values the wizard/CLI ask the user for
     required: true            # missing + required = wizard/service add fails with a clear error
     prompt: "Path to My Service's data folder"
     default: "/srv/myservice/data"   # used when the value is omitted (not just left blank on purpose)
+    # picker: docker-volume    # optional UI hint: offer the named volumes on the service's Docker host
 
 backup:                      # required
-  strategy: dump              # required: one of dump | stop-start | files | exec
+  strategy: dump              # required: one of dump | stop-start | files | exec | volume
   dumps:                      # required when strategy is dump; one entry per thing to dump
     - name: database
       container: "{{ .Params.container }}"   # optional: docker container to `docker exec` into
@@ -51,7 +52,9 @@ backup:                      # required
       format: sql              # optional; free text (drives the output file's extension)
   files:                      # optional (any strategy): plain paths backed up directly via restic
     - path: "{{ .Params.data_dir }}"
-  stopStart:                  # optional; used by the stop-start strategy
+  volumes:                    # required when strategy is volume: named Docker volumes to archive
+    - name: "{{ .Params.volume }}"
+  stopStart:                  # optional; used by the stop-start and volume strategies
     containers:
       - "{{ .Params.container }}"
   exec:                       # required when strategy is exec (Phase-2 reserved interface — see below)
@@ -77,6 +80,7 @@ A few rules worth calling out:
   uses `additionalProperties: false` throughout, so a misspelled field name
   fails to load instead of being silently ignored.
 - `backup.strategy: dump` requires at least one entry in `backup.dumps`.
+- `backup.strategy: volume` requires at least one entry in `backup.volumes`.
 - `verify.method: container-restore` requires `verify.image`.
 - Every entry **must** define a `verify` block — there is no way to skip
   verification. That's the whole point of Ballast (see below).
@@ -108,6 +112,7 @@ empty string, that empty string wins, not the default.
 |---|---|---|
 | `dump` | Runs a command (optionally via `docker exec` into a named container) and captures its stdout as a backup artifact; the app keeps running. | The app has an export/dump tool that produces a consistent snapshot without stopping (e.g. `pg_dumpall`, `mysqldump --single-transaction`). |
 | `stop-start` | Stops the listed containers, backs up `files` paths directly, then always restarts the containers — even if the backup fails or is interrupted. | The app's on-disk data (e.g. a SQLite file, an append-only data folder) isn't safe to copy while the app is writing to it. |
+| `volume` | Copies each named Docker volume in `volumes` into a tar archive using a small temporary helper container on the service's Docker host (works the same on remote hosts; no host folders needed). With `stopStart.containers` set, those containers are stopped during the copy and always started again; without it the volume is copied live. | The data lives in a named Docker volume rather than a folder you can point at. Stop the containers for anything that writes constantly (databases); live is fine for media and rarely-changing files. See `catalog/docker-volume.yaml` and `catalog/docker-volume-live.yaml`. |
 | `files` | Backs up `files` paths directly, no container involved. | A plain folder, or any data that's already safe to read live. |
 | `exec` | Runs a user-provided script instead of a built-in strategy. | **Not available for general use in v0.1** — this is a reserved Phase-2 interface (mobile/external triggers), tested only with stub scripts. Don't build a catalog entry around it yet. |
 

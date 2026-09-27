@@ -37,6 +37,29 @@ func (o *Ops) ListDockerHosts(ctx context.Context) ([]dockerhost.Host, error) {
 	return inventory.ListDockerHosts(o.DB)
 }
 
+// ListDockerHostVolumes lists the Docker volumes on a saved host, for
+// the "docker-volume" parameter picker in a service's setup form.
+// Listing volumes is a best-effort convenience: the caller falls back
+// to a plain text box when this fails.
+func (o *Ops) ListDockerHostVolumes(ctx context.Context, name string) ([]dockerhost.Volume, error) {
+	h, err := inventory.GetDockerHost(o.DB, name)
+	if err != nil {
+		return nil, wrapf("docker host "+name, err)
+	}
+	if o.Runner == nil {
+		return nil, fmt.Errorf("docker host %s: listing volumes is not configured (internal wiring error)", h.Name)
+	}
+	d, err := o.DockerHosts.Docker(h)
+	if err != nil {
+		return nil, o.redactErr(err)
+	}
+	list, err := dockerhost.ListVolumes(ctx, o.Runner, d)
+	if err != nil {
+		return nil, o.redactErr(err)
+	}
+	return list, nil
+}
+
 // GetDockerHost returns one Docker host.
 func (o *Ops) GetDockerHost(ctx context.Context, name string) (dockerhost.Host, error) {
 	h, err := inventory.GetDockerHost(o.DB, name)
