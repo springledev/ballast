@@ -86,6 +86,85 @@ func TestDumpContainer(t *testing.T) {
 	}
 }
 
+// TestDumpSecretEnvForwarded checks that a dump's catalog secretEnv
+// (already resolved to a plaintext value, as catalog.Entry.ResolveSecrets
+// would leave it) is forwarded into the container exactly like a
+// non-secret env key — `docker exec -e KEY`, value never in argv —
+// alongside the request's own env.
+func TestDumpSecretEnvForwarded(t *testing.T) {
+	dockerBin, logPath := newDockerStub(t)
+	entry := &catalog.Entry{
+		Service: "mysql",
+		Backup: catalog.Backup{
+			Strategy: "dump",
+			Dumps: []catalog.Dump{{
+				Name:      "database",
+				Container: "mysql_1",
+				Command:   []string{"mysqldump", "--all-databases"},
+				Format:    "sql",
+				SecretEnv: map[string]string{"MYSQL_PWD": "s3cr3t-pw"},
+			}},
+		},
+	}
+	s, err := For(entry, Options{Runner: stubRunner(logPath), DockerBin: dockerBin})
+	if err != nil {
+		t.Fatalf("For: %v", err)
+	}
+	res, err := s.Backup(context.Background(), Request{
+		WorkDir: t.TempDir(),
+		Env:     []string{"PGPASSFILE=/run/credentials/pg"},
+	})
+	if err != nil {
+		t.Fatalf("Backup: %v", err)
+	}
+	if len(res.Artifacts) != 1 {
+		t.Fatalf("Artifacts = %v, want exactly one", res.Artifacts)
+	}
+
+	log := readStubLog(t, logPath)
+	want := "exec -e PGPASSFILE -e MYSQL_PWD mysql_1 mysqldump --all-databases"
+	if len(log) != 1 || log[0] != want {
+		t.Errorf("docker invocations = %v, want [%q] (secret value must never appear in argv)", log, want)
+	}
+	if strings.Contains(log[0], "s3cr3t-pw") {
+		t.Fatalf("docker argv leaked the secret value: %q", log[0])
+	}
+}
+
+// TestDumpSecretEnvRedacted checks that a secretEnv value is redacted
+// from the error a failing dump returns, even though the value never
+// appears in argv and so is only reachable via the command's own
+// stderr.
+func TestDumpSecretEnvRedacted(t *testing.T) {
+	dir := t.TempDir()
+	hostStub := writeStub(t, dir, "leaky", "#!/bin/sh\necho \"auth failed for $DB_PASSWORD\" >&2\nexit 1\n")
+	entry := &catalog.Entry{
+		Service: "svc",
+		Backup: catalog.Backup{
+			Strategy: "dump",
+			Dumps: []catalog.Dump{{
+				Name:      "database",
+				Command:   []string{hostStub},
+				SecretEnv: map[string]string{"DB_PASSWORD": "top-secret-value"},
+			}},
+		},
+	}
+	s, err := For(entry, Options{Runner: &runner.Runner{}})
+	if err != nil {
+		t.Fatalf("For: %v", err)
+	}
+	_, err = s.Backup(context.Background(), Request{WorkDir: t.TempDir()})
+	if err == nil {
+		t.Fatal("Backup = nil error, want the dump failure")
+	}
+	if strings.Contains(err.Error(), "top-secret-value") {
+		t.Errorf("error leaked the secret value: %v", err)
+	}
+	if !strings.Contains(err.Error(), "[redacted]") {
+		t.Errorf("error = %q, want the redaction placeholder", err)
+	}
+}
+
 // TestDumpHostCommand runs a dump without a container: the command
 // runs directly, with the request environment.
 func TestDumpHostCommand(t *testing.T) {

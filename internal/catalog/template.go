@@ -23,7 +23,12 @@ var placeholderRE = regexp.MustCompile(`\{\{\s*([^}]+?)\s*\}\}`)
 func (e *Entry) DeepCopy() *Entry {
 	c := *e
 	c.Parameters = append([]Parameter(nil), e.Parameters...)
-	c.Backup.Dumps = append([]Dump(nil), e.Backup.Dumps...)
+	c.Backup.Dumps = make([]Dump, len(e.Backup.Dumps))
+	for i, d := range e.Backup.Dumps {
+		d.Command = append([]string(nil), d.Command...)
+		d.SecretEnv = copyStringMap(d.SecretEnv)
+		c.Backup.Dumps[i] = d
+	}
 	c.Backup.Files = append([]FileSpec(nil), e.Backup.Files...)
 	if e.Backup.StopStart != nil {
 		ss := *e.Backup.StopStart
@@ -37,6 +42,18 @@ func (e *Entry) DeepCopy() *Entry {
 	}
 	c.Verify.FilterStderr = append([]string(nil), e.Verify.FilterStderr...)
 	return &c
+}
+
+// copyStringMap returns a copy of m, or nil for a nil/empty m.
+func copyStringMap(m map[string]string) map[string]string {
+	if len(m) == 0 {
+		return nil
+	}
+	out := make(map[string]string, len(m))
+	for k, v := range m {
+		out[k] = v
+	}
+	return out
 }
 
 // lookup resolves one placeholder expression to its value. The expression
@@ -163,6 +180,71 @@ func (e *Entry) Resolve(ctx TemplateContext) error {
 			return fmt.Errorf("verify image: %w", err)
 		}
 		e.Verify.Image = v
+	}
+	return nil
+}
+
+// lookupSecret resolves one {{ .Secrets.NAME }} placeholder expression
+// against secrets. Unlike lookup, no other table is accepted here:
+// secretEnv exists specifically to carry secret values, so mixing in
+// a parameter or detected-container reference would only invite a
+// catalog author to reach for {{ .Params.* }} here instead of the
+// intended secret, out of habit.
+func lookupSecret(expr string, secrets map[string]string) (string, error) {
+	parts := strings.SplitN(expr, ".", 3)
+	if len(parts) != 3 || parts[0] != "" || parts[1] != "Secrets" || parts[2] == "" {
+		return "", fmt.Errorf("unsupported secretEnv template expression %q: only {{ .Secrets.NAME }} is allowed", expr)
+	}
+	if v, ok := secrets[parts[2]]; ok {
+		return v, nil
+	}
+	return "", fmt.Errorf("secretEnv references unknown secret %q", parts[2])
+}
+
+// substituteSecret replaces every {{ .Secrets.NAME }} placeholder in s.
+func substituteSecret(s string, secrets map[string]string) (string, error) {
+	var firstErr error
+	out := placeholderRE.ReplaceAllStringFunc(s, func(m string) string {
+		if firstErr != nil {
+			return m
+		}
+		v, err := lookupSecret(placeholderRE.FindStringSubmatch(m)[1], secrets)
+		if err != nil {
+			firstErr = err
+			return m
+		}
+		return v
+	})
+	if firstErr != nil {
+		return "", firstErr
+	}
+	return out, nil
+}
+
+// ResolveSecrets substitutes {{ .Secrets.NAME }} placeholders in every
+// backup.dumps[].secretEnv value, using plaintext secret values the
+// caller has already read from a root-only credential file (spec §8;
+// this method never touches a file itself, so it has nothing to leak
+// on its own). Call this only immediately before actually running the
+// dump command: a read-only caller that never executes a dump (e.g.
+// re-verifying an existing snapshot) must not call it and must not
+// need secret values to resolve the rest of the entry — Resolve
+// already rejects any {{ .Secrets.* }} reference outside secretEnv,
+// so those call sites are unaffected by secrets being absent.
+func (e *Entry) ResolveSecrets(secrets map[string]string) error {
+	for i, d := range e.Backup.Dumps {
+		if len(d.SecretEnv) == 0 {
+			continue
+		}
+		resolved := make(map[string]string, len(d.SecretEnv))
+		for key, tmpl := range d.SecretEnv {
+			v, err := substituteSecret(tmpl, secrets)
+			if err != nil {
+				return fmt.Errorf("dump %q secretEnv %q: %w", d.Name, key, err)
+			}
+			resolved[key] = v
+		}
+		e.Backup.Dumps[i].SecretEnv = resolved
 	}
 	return nil
 }

@@ -212,6 +212,46 @@ func TestPutGetListDeleteService(t *testing.T) {
 	}
 }
 
+// TestPutServiceSecrets checks that a secret's credential file name
+// defaults to "ballast-secret.<service>.<name>" when left empty, that
+// an explicitly supplied name round-trips as given, and that a name
+// containing a path separator is a loud validation error rather than
+// something that could later be joined onto a credential directory
+// unsafely.
+func TestPutServiceSecrets(t *testing.T) {
+	db := openDB(t).DB()
+	if err := PutDestination(db, Destination{Name: "local", Location: "/srv", KeepDaily: 7}); err != nil {
+		t.Fatalf("PutDestination: %v", err)
+	}
+
+	s := Service{
+		Name: "mysql", CatalogEntry: "mysql", Destination: "local",
+		Secrets: map[string]string{
+			"db_password": "",
+			"api_key":     "my-custom-cred-file",
+		},
+	}
+	if err := PutService(db, s); err != nil {
+		t.Fatalf("PutService: %v", err)
+	}
+
+	got, err := GetService(db, "mysql")
+	if err != nil {
+		t.Fatalf("GetService: %v", err)
+	}
+	if want := "ballast-secret.mysql.db_password"; got.Secrets["db_password"] != want {
+		t.Errorf("Secrets[db_password] = %q, want default %q", got.Secrets["db_password"], want)
+	}
+	if got.Secrets["api_key"] != "my-custom-cred-file" {
+		t.Errorf("Secrets[api_key] = %q, want the supplied name unchanged", got.Secrets["api_key"])
+	}
+
+	bad := Service{Name: "mysql2", CatalogEntry: "mysql", Destination: "local", Secrets: map[string]string{"x": "../escape"}}
+	if err := PutService(db, bad); err == nil {
+		t.Error("PutService(path-separator credential name) = nil error, want error")
+	}
+}
+
 func TestPutServiceValidation(t *testing.T) {
 	db := openDB(t).DB()
 	if err := PutDestination(db, Destination{Name: "local", Location: "/srv", KeepDaily: 7}); err != nil {

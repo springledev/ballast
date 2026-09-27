@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 
 	"github.com/springledev/ballast/internal/catalog"
@@ -34,7 +35,8 @@ func (s *Dump) Backup(ctx context.Context, req Request) (*Result, error) {
 	r := s.opts.runnerFor(req)
 	env := req.env()
 	for _, d := range s.entry.Backup.Dumps {
-		artifact, err := s.runDump(ctx, r, env, req.WorkDir, d)
+		dumpEnv, dumpRunner := withDumpSecrets(r, env, d.SecretEnv)
+		artifact, err := s.runDump(ctx, dumpRunner, dumpEnv, req.WorkDir, d)
 		if err != nil {
 			return nil, err
 		}
@@ -70,6 +72,31 @@ func (s *Dump) runDump(ctx context.Context, r *runner.Runner, env []string, work
 		return Artifact{}, fmt.Errorf("service %s: dump %q: writing artifact file: %w", s.entry.Service, d.Name, closeErr)
 	}
 	return Artifact{Name: d.Name, Path: path, Format: d.Format}, nil
+}
+
+// withDumpSecrets appends one dump's own secretEnv (already resolved
+// to plaintext values by catalog.Entry.ResolveSecrets, keyed by env
+// var name) to env, and returns a runner whose redaction list also
+// covers those values. secretEnv is declared per catalog dump, unlike
+// Request.SecretEnv which is shared by every dump in the entry, so
+// each dump gets its own scoped copy rather than mutating r.
+func withDumpSecrets(r *runner.Runner, env []string, secretEnv map[string]string) ([]string, *runner.Runner) {
+	if len(secretEnv) == 0 {
+		return env, r
+	}
+	keys := make([]string, 0, len(secretEnv))
+	for k := range secretEnv {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	extra := make([]string, 0, len(keys))
+	for _, k := range keys {
+		extra = append(extra, k+"="+secretEnv[k])
+	}
+	dumpEnv := append(append([]string(nil), env...), extra...)
+	rr := *r
+	rr.Redact = r.Redact.With(secretValues(extra)...)
+	return dumpEnv, &rr
 }
 
 // dumpCommand builds the command for one dump. With a container, the

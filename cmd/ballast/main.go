@@ -383,6 +383,7 @@ func init() {
 	registerDestinationCommands(rootCmd)
 	registerScheduleCommands(rootCmd)
 	registerNotifyCommands(rootCmd)
+	registerSecretCommands(rootCmd)
 	rootCmd.AddCommand(backupCmd, statusCmd, snapshotsCmd, restoreCmd, tokenCmd, catalogCmd, wizardCmd, verifyCmd)
 }
 

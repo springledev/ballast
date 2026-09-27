@@ -66,6 +66,16 @@ type Dump struct {
 	Container string   `yaml:"container,omitempty" json:"container,omitempty"`
 	Command   []string `yaml:"command" json:"command"`
 	Format    string   `yaml:"format,omitempty" json:"format,omitempty"`
+	// SecretEnv is extra KEY: "{{ .Secrets.NAME }}" environment for the
+	// dump command, e.g. MYSQL_PWD for mysqldump. Values are template
+	// strings resolved by Entry.ResolveSecrets — never by Resolve,
+	// which has no access to secret values — and are forwarded to the
+	// command exactly like strategy.Request.SecretEnv: in the
+	// environment, never argv, and redacted from every log line and
+	// error. {{ .Params.* }} / {{ .Services.* }} are not accepted
+	// here; only {{ .Secrets.NAME }} is (spec §6 schema rule: a
+	// deliberately narrow grammar).
+	SecretEnv map[string]string `yaml:"secretEnv,omitempty" json:"secretEnv,omitempty"`
 }
 
 // FileSpec is a filesystem path included directly in the backup.

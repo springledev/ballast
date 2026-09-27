@@ -63,12 +63,14 @@ func resetCLIFlags() {
 	restoreSnapshot, restoreFiles, restoreTo = "", nil, ""
 
 	serviceCatalogEntry, serviceDestination = "", ""
-	serviceParams, serviceContainers = nil, nil
+	serviceParams, serviceContainers, serviceSecrets = nil, nil, nil
 
 	destLocation, destPasswordCredential, destInit = "", "", false
 	destKeepDaily, destKeepWeekly, destKeepMonthly = 7, 4, 6
 
 	notifyEnabled, notifyMaxAgeHours, notifyHeartbeat = true, 0, false
+
+	secretValueFlag = ""
 
 	verifyAll, verifyJSON = false, false
 }

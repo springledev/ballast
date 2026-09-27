@@ -93,6 +93,13 @@ func (p *Pipeline) Run(ctx context.Context, service string) (engine.State, error
 	if err := entry.Resolve(catalog.TemplateContext{Params: svc.Params, Services: svc.Containers}); err != nil {
 		return "", fmt.Errorf("service %s: resolving catalog entry %q: %w", service, svc.CatalogEntry, err)
 	}
+	secrets, err := p.resolveSecrets(svc)
+	if err != nil {
+		return "", fmt.Errorf("service %s: %w", service, err)
+	}
+	if err := entry.ResolveSecrets(secrets); err != nil {
+		return "", fmt.Errorf("service %s: resolving catalog entry %q: %w", service, svc.CatalogEntry, err)
+	}
 
 	m, err := engine.StartRun(p.DB, service)
 	if err != nil {
@@ -377,6 +384,33 @@ func ensureServiceContext(service string, err error) error {
 // redact scrubs every configured secret from s.
 func (p *Pipeline) redact(s string) string {
 	return p.Redact.Redact(s)
+}
+
+// resolveSecrets reads the plaintext value of every secret svc
+// declares (Service.Secrets: {{ .Secrets.NAME }} name -> credential
+// file name) from the credential directory, exactly like the
+// destination password file above, and immediately registers each
+// value with p.Redact — before the dump command that needs it ever
+// runs, so a secret can never reach a log line or error even if the
+// run that needed it fails on its very first step. Read fresh for
+// every run, for the same reason the destination password is: a
+// secret added, or its file replaced, after Ballast started must
+// still be picked up and redacted.
+func (p *Pipeline) resolveSecrets(svc inventory.Service) (map[string]string, error) {
+	if len(svc.Secrets) == 0 {
+		return nil, nil
+	}
+	out := make(map[string]string, len(svc.Secrets))
+	for name, cred := range svc.Secrets {
+		dir := runner.FindCredentialDir(cred, p.CredDir, p.OwnCredDir)
+		v, err := runner.LoadCredentialValue(dir, cred)
+		if err != nil {
+			return nil, fmt.Errorf("secret %q: %w", name, err)
+		}
+		p.Redact.Add(v)
+		out[name] = v
+	}
+	return out, nil
 }
 
 // logf writes one redacted, plain-English line to Log (os.Stderr when

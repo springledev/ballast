@@ -218,6 +218,52 @@ func TestCheckCredentialFile(t *testing.T) {
 	}
 }
 
+func TestLoadCredentialValue(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "mysql-password")
+	if err := os.WriteFile(path, []byte("hunter2\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := LoadCredentialValue(dir, "mysql-password")
+	if err != nil {
+		t.Fatalf("LoadCredentialValue() error = %v, want nil", err)
+	}
+	if got != "hunter2" {
+		t.Errorf("LoadCredentialValue() = %q, want %q (trimmed)", got, "hunter2")
+	}
+
+	if _, err := LoadCredentialValue(dir, "missing"); err == nil {
+		t.Error("LoadCredentialValue(missing file) = nil error, want error")
+	}
+
+	empty := filepath.Join(dir, "empty")
+	if err := os.WriteFile(empty, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := LoadCredentialValue(dir, "empty"); err == nil || !strings.Contains(err.Error(), "empty") {
+		t.Errorf("LoadCredentialValue(empty file) error = %v, want mentioning empty", err)
+	}
+
+	if _, err := LoadCredentialValue(dir, "../escape"); err == nil {
+		t.Error("LoadCredentialValue(path escape) = nil error, want error")
+	}
+	if _, err := LoadCredentialValue("relative/dir", "x"); err == nil {
+		t.Error("LoadCredentialValue(relative dir) = nil error, want error")
+	}
+
+	loose := filepath.Join(dir, "loose")
+	if err := os.WriteFile(loose, []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(loose, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := LoadCredentialValue(dir, "loose"); err == nil {
+		t.Error("LoadCredentialValue(loose permissions) = nil error, want error")
+	}
+}
+
 func TestFindCredentialDir(t *testing.T) {
 	systemd, own := t.TempDir(), t.TempDir()
 	write := func(dir, name string) {

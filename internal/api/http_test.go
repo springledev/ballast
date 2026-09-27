@@ -448,6 +448,35 @@ func TestHTTPGolden(t *testing.T) {
 			},
 		},
 		{
+			name:    "secrets_put",
+			arrange: withService,
+			req: func(h *harness) *http.Request {
+				body := map[string]any{"value": "hunter2"}
+				r := httptest.NewRequest(http.MethodPut, "/api/v1/services/svc/secrets/db_password", jsonBody(t, body))
+				r.Header.Set("Content-Type", "application/json")
+				return r
+			},
+		},
+		{
+			name:    "secrets_put_empty_value",
+			arrange: withService,
+			req: func(h *harness) *http.Request {
+				body := map[string]any{"value": ""}
+				r := httptest.NewRequest(http.MethodPut, "/api/v1/services/svc/secrets/db_password", jsonBody(t, body))
+				r.Header.Set("Content-Type", "application/json")
+				return r
+			},
+		},
+		{
+			name: "secrets_put_unknown_service",
+			req: func(h *harness) *http.Request {
+				body := map[string]any{"value": "hunter2"}
+				r := httptest.NewRequest(http.MethodPut, "/api/v1/services/nope/secrets/db_password", jsonBody(t, body))
+				r.Header.Set("Content-Type", "application/json")
+				return r
+			},
+		},
+		{
 			name: "destinations_list_empty",
 			req: func(h *harness) *http.Request {
 				return httptest.NewRequest(http.MethodGet, "/api/v1/destinations", nil)

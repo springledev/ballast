@@ -52,6 +52,7 @@ func NewHandler(ops *Ops, apiToken string) http.Handler {
 	protected.HandleFunc("POST /api/v1/services/{name}/trigger-token", h.generateTriggerToken)
 	protected.HandleFunc("GET /api/v1/services/{name}/notifications", h.getNotificationSettings)
 	protected.HandleFunc("PUT /api/v1/services/{name}/notifications", h.putNotificationSettings)
+	protected.HandleFunc("PUT /api/v1/services/{name}/secrets/{secret}", h.putSecret)
 
 	protected.HandleFunc("GET /api/v1/destinations", h.listDestinations)
 	protected.HandleFunc("POST /api/v1/destinations", h.createDestination)
@@ -353,6 +354,31 @@ func (h *handler) putNotificationSettings(w http.ResponseWriter, r *http.Request
 		return
 	}
 	writeJSON(w, http.StatusOK, s)
+}
+
+// --- secrets -----------------------------------------------------------
+
+type secretBody struct {
+	Value string `json:"value"`
+}
+
+// putSecret never returns the stored value in its response (spec rule
+// 2: shown/entered once, like a trigger token — but unlike a trigger
+// token this one is user-supplied, so there is nothing to show back).
+func (h *handler) putSecret(w http.ResponseWriter, r *http.Request) {
+	var body secretBody
+	if err := decodeJSON(r, &body); err != nil {
+		h.writeErr(w, err, http.StatusBadRequest)
+		return
+	}
+	name := pathName(r)
+	secretName := r.PathValue("secret")
+	if err := h.ops.SetSecret(r.Context(), name, secretName, body.Value); err != nil {
+		h.writeErr(w, err, http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Cache-Control", "no-store")
+	writeJSON(w, http.StatusOK, map[string]bool{"set": true})
 }
 
 // --- trigger tokens & trigger --------------------------------------------

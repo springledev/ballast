@@ -630,6 +630,74 @@ func (o *Ops) DeleteService(ctx context.Context, name string) error {
 	return nil
 }
 
+// SetSecret stores value in a root-only credential file backing one
+// service's {{ .Secrets.<name> }} catalog reference (spec §14 step
+// 15: "a password-protected DB can be dumped without a plaintext
+// secret anywhere in config or DB") and records that file's *name*
+// against the service (inventory.Service.Secrets), so the next run
+// resolves it automatically via internal/pipeline. The file name
+// defaults to "ballast-secret.<service>.<name>" the first time a
+// given secret is set, then stays fixed — matching how
+// PutDestination defaults PasswordCredential — and, unlike a
+// destination's generated repository password, this value is
+// user-supplied and may be rotated by calling SetSecret again: the
+// file is overwritten, never created with O_EXCL.
+//
+// value is registered with o.Redact immediately, before this method
+// returns, so it can never reach a log line or error even before any
+// run uses it.
+func (o *Ops) SetSecret(ctx context.Context, service, name, value string) error {
+	if value == "" {
+		return fmt.Errorf("service %s: %w: secret %q value must not be empty", service, ErrValidation, name)
+	}
+	svc, err := inventory.GetService(o.DB, service)
+	if err != nil {
+		return wrapf("service "+service, err)
+	}
+	if o.CredentialsDir == "" {
+		return fmt.Errorf("service %s: %w: no writable credential directory is configured", service, ErrValidation)
+	}
+	cred := svc.Secrets[name]
+	if cred == "" {
+		cred = "ballast-secret." + service + "." + name
+	}
+	// A credential file of this name already provided elsewhere (e.g.
+	// an operator's LoadCredential=) always wins over anything written
+	// here: internal/runner.FindCredentialDir and
+	// pipeline.Pipeline.resolveSecrets both search o.CredentialsDir
+	// last. Writing to it anyway would silently do nothing — the run
+	// would keep using the operator's value — so this fails loudly
+	// instead, the same guard PutDestination's ensureLocalPassword
+	// already applies to a generated repository password.
+	for _, dir := range o.CredentialSearchDirs {
+		if dir == o.CredentialsDir {
+			continue
+		}
+		if _, err := os.Lstat(filepath.Join(dir, cred)); err == nil {
+			return fmt.Errorf("service %s: %w: a credential file named %q already exists in %s (likely provided by the operator); it takes precedence over anything Ballast saves itself, so edit or replace that file directly instead", service, ErrValidation, cred, dir)
+		}
+	}
+	if err := os.MkdirAll(o.CredentialsDir, 0o700); err != nil {
+		return fmt.Errorf("service %s: creating credential directory %s: %w", service, o.CredentialsDir, err)
+	}
+	path := filepath.Join(o.CredentialsDir, cred)
+	if err := os.WriteFile(path, []byte(value+"\n"), 0o600); err != nil {
+		return fmt.Errorf("service %s: saving secret %s: %w", service, name, err)
+	}
+	o.Redact.Add(value)
+
+	if svc.Secrets == nil {
+		svc.Secrets = map[string]string{}
+	}
+	if svc.Secrets[name] != cred {
+		svc.Secrets[name] = cred
+		if err := inventory.PutService(o.DB, svc); err != nil {
+			return wrapf("service "+service, err)
+		}
+	}
+	return nil
+}
+
 // --- Destinations --------------------------------------------------------
 
 // ListDestinations lists every configured destination.

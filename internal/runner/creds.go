@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 )
 
 // FileEnv builds KEY=<dir>/<name> environment entries pointing at
@@ -91,4 +92,53 @@ func CheckCredentialFile(path string) error {
 		return fmt.Errorf("credential file %s has permissions %04o: group and other access is not allowed; run: chmod 600 %s", path, perm, path)
 	}
 	return nil
+}
+
+// LoadCredentialValue reads the trimmed contents of a root-only
+// credential file (systemd LoadCredential= semantics via
+// $CREDENTIALS_DIRECTORY, spec §8) and returns it as the secret value
+// itself — e.g. an ntfy topic URL, a webhook URL, or a catalog
+// {{ .Secrets.NAME }} value.
+//
+// This is the counterpart to FileEnv for callers that need the secret
+// value in memory rather than a file path in an env var: an in-process
+// HTTP client (internal/notify) or a value about to be forwarded into
+// a container's environment (internal/pipeline, for catalog secrets).
+// It reuses CheckCredentialFile so every credential-reading path
+// enforces the exact same permission rule (spec rule 2).
+//
+// dir must be an absolute path to the credential directory; name must
+// be a plain file name inside it (no path separators or ".."
+// components). The file must be a regular file readable only by its
+// owner (0600 or stricter) — anything looser is a loud error, not a
+// warning.
+//
+// The file's contents are never included in a returned error or in
+// any log line: only the directory and file name ever appear there,
+// so callers can log or wrap this function's errors freely.
+func LoadCredentialValue(dir, name string) (string, error) {
+	if dir == "" {
+		return "", fmt.Errorf("credential directory must not be empty")
+	}
+	if !filepath.IsAbs(dir) {
+		return "", fmt.Errorf("credential directory %q must be an absolute path", dir)
+	}
+	if name == "" || filepath.Base(name) != name {
+		return "", fmt.Errorf("credential file name %q must be a plain file name inside the credential directory", name)
+	}
+
+	path := filepath.Join(dir, name)
+	if err := CheckCredentialFile(path); err != nil {
+		return "", fmt.Errorf("credential file %s: %w", name, err)
+	}
+
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return "", fmt.Errorf("reading credential file %s: %w", name, err)
+	}
+	value := strings.TrimSpace(string(data))
+	if value == "" {
+		return "", fmt.Errorf("credential file %s is empty", name)
+	}
+	return value, nil
 }

@@ -213,6 +213,13 @@ type Service struct {
 	// Containers fills {{ .Services.* }} placeholders (detected
 	// container names).
 	Containers map[string]string `json:"containers,omitempty"`
+	// Secrets maps a catalog {{ .Secrets.NAME }} name to the *name*
+	// (never the value) of the root-only credential file holding it,
+	// e.g. {"db_password": "ballast-secret.myservice.db_password"} —
+	// the same non-secret-file-name pattern Destination.PasswordCredential
+	// uses. `ballast secret set` fills in a default name
+	// ("ballast-secret.<service>.<name>") when empty.
+	Secrets map[string]string `json:"secrets,omitempty"`
 }
 
 // PutService inserts or updates a service. name is validated; the
@@ -241,18 +248,27 @@ func PutService(db *sql.DB, s Service) error {
 	if err != nil {
 		return fmt.Errorf("service %s: encoding containers: %w", s.Name, err)
 	}
+	secrets, err := defaultedSecretNames(s.Name, s.Secrets)
+	if err != nil {
+		return fmt.Errorf("service %s: %w", s.Name, err)
+	}
+	secretsJSON, err := marshalMap(secrets)
+	if err != nil {
+		return fmt.Errorf("service %s: encoding secrets: %w", s.Name, err)
+	}
 
 	now := time.Now().UTC().Format(time.RFC3339Nano)
 	_, err = db.Exec(`
-		INSERT INTO services (name, catalog_entry, destination, params_json, containers_json, created_at, updated_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?)
+		INSERT INTO services (name, catalog_entry, destination, params_json, containers_json, secrets_json, created_at, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(name) DO UPDATE SET
 			catalog_entry = excluded.catalog_entry,
 			destination = excluded.destination,
 			params_json = excluded.params_json,
 			containers_json = excluded.containers_json,
+			secrets_json = excluded.secrets_json,
 			updated_at = excluded.updated_at`,
-		s.Name, s.CatalogEntry, s.Destination, paramsJSON, containersJSON, now, now,
+		s.Name, s.CatalogEntry, s.Destination, paramsJSON, containersJSON, secretsJSON, now, now,
 	)
 	if err != nil {
 		return fmt.Errorf("saving service %s: %w", s.Name, err)
@@ -263,11 +279,11 @@ func PutService(db *sql.DB, s Service) error {
 // GetService returns the named service, or ErrNotFound.
 func GetService(db *sql.DB, name string) (Service, error) {
 	var s Service
-	var paramsJSON, containersJSON string
+	var paramsJSON, containersJSON, secretsJSON string
 	err := db.QueryRow(`
-		SELECT name, catalog_entry, destination, params_json, containers_json
+		SELECT name, catalog_entry, destination, params_json, containers_json, secrets_json
 		FROM services WHERE name = ?`, name,
-	).Scan(&s.Name, &s.CatalogEntry, &s.Destination, &paramsJSON, &containersJSON)
+	).Scan(&s.Name, &s.CatalogEntry, &s.Destination, &paramsJSON, &containersJSON, &secretsJSON)
 	if errors.Is(err, sql.ErrNoRows) {
 		return Service{}, fmt.Errorf("service %s: %w", name, ErrNotFound)
 	}
@@ -280,12 +296,15 @@ func GetService(db *sql.DB, name string) (Service, error) {
 	if s.Containers, err = unmarshalMap(containersJSON); err != nil {
 		return Service{}, fmt.Errorf("service %s: decoding containers: %w", name, err)
 	}
+	if s.Secrets, err = unmarshalMap(secretsJSON); err != nil {
+		return Service{}, fmt.Errorf("service %s: decoding secrets: %w", name, err)
+	}
 	return s, nil
 }
 
 // ListServices returns every configured service, ordered by name.
 func ListServices(db *sql.DB) ([]Service, error) {
-	rows, err := db.Query(`SELECT name, catalog_entry, destination, params_json, containers_json FROM services ORDER BY name`)
+	rows, err := db.Query(`SELECT name, catalog_entry, destination, params_json, containers_json, secrets_json FROM services ORDER BY name`)
 	if err != nil {
 		return nil, fmt.Errorf("listing services: %w", err)
 	}
@@ -296,8 +315,8 @@ func ListServices(db *sql.DB) ([]Service, error) {
 	out := []Service{}
 	for rows.Next() {
 		var s Service
-		var paramsJSON, containersJSON string
-		if err := rows.Scan(&s.Name, &s.CatalogEntry, &s.Destination, &paramsJSON, &containersJSON); err != nil {
+		var paramsJSON, containersJSON, secretsJSON string
+		if err := rows.Scan(&s.Name, &s.CatalogEntry, &s.Destination, &paramsJSON, &containersJSON, &secretsJSON); err != nil {
 			return nil, fmt.Errorf("listing services: %w", err)
 		}
 		if s.Params, err = unmarshalMap(paramsJSON); err != nil {
@@ -305,6 +324,9 @@ func ListServices(db *sql.DB) ([]Service, error) {
 		}
 		if s.Containers, err = unmarshalMap(containersJSON); err != nil {
 			return nil, fmt.Errorf("service %s: decoding containers: %w", s.Name, err)
+		}
+		if s.Secrets, err = unmarshalMap(secretsJSON); err != nil {
+			return nil, fmt.Errorf("service %s: decoding secrets: %w", s.Name, err)
 		}
 		out = append(out, s)
 	}
@@ -325,6 +347,29 @@ func DeleteService(db *sql.DB, name string) error {
 		return fmt.Errorf("service %s: %w", name, ErrNotFound)
 	}
 	return nil
+}
+
+// defaultedSecretNames returns secrets with every empty credential
+// file name defaulted to "ballast-secret.<service>.<name>" (the same
+// default-naming pattern PutDestination applies to
+// PasswordCredential), validates that every name is a plain file name
+// (no path separators — it is joined onto a credential directory
+// verbatim), and leaves the caller's map untouched.
+func defaultedSecretNames(service string, secrets map[string]string) (map[string]string, error) {
+	if len(secrets) == 0 {
+		return nil, nil
+	}
+	out := make(map[string]string, len(secrets))
+	for name, cred := range secrets {
+		if cred == "" {
+			cred = "ballast-secret." + service + "." + name
+		}
+		if filepath.Base(cred) != cred {
+			return nil, fmt.Errorf("secret %s: credential file name %q must be a plain file name (no path separators)", name, cred)
+		}
+		out[name] = cred
+	}
+	return out, nil
 }
 
 // marshalMap encodes m as JSON, treating a nil map as "{}".

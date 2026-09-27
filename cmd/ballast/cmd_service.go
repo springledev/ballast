@@ -13,6 +13,7 @@ var (
 	serviceDestination  string
 	serviceParams       []string
 	serviceContainers   []string
+	serviceSecrets      []string
 )
 
 // parseKV parses a list of "key=value" flag values into a map.
@@ -41,6 +42,10 @@ var serviceAddCmd = &cobra.Command{
 		if err != nil {
 			return err
 		}
+		secrets, err := parseKV(serviceSecrets)
+		if err != nil {
+			return err
+		}
 		cfg, err := loadConfig()
 		if err != nil {
 			return err
@@ -48,7 +53,7 @@ var serviceAddCmd = &cobra.Command{
 		return withApp(cfg, cmd.ErrOrStderr(), func(a *app) error {
 			s := inventory.Service{
 				Name: args[0], CatalogEntry: serviceCatalogEntry, Destination: serviceDestination,
-				Params: params, Containers: containers,
+				Params: params, Containers: containers, Secrets: secrets,
 			}
 			if err := a.ops.PutService(cmd.Context(), s); err != nil {
 				return err
@@ -111,6 +116,8 @@ func registerServiceCommands(root *cobra.Command) {
 	serviceAddCmd.Flags().StringVar(&serviceDestination, "destination", "", "destination to back up to (required)")
 	serviceAddCmd.Flags().StringArrayVar(&serviceParams, "param", nil, "catalog parameter as key=value (repeatable)")
 	serviceAddCmd.Flags().StringArrayVar(&serviceContainers, "container", nil, "detected container as key=value (repeatable)")
+	serviceAddCmd.Flags().StringArrayVar(&serviceSecrets, "secret", nil,
+		"catalog {{ .Secrets.NAME }} reference as name=credential-file-name (repeatable); leave the value empty (name=) to use the default file name, then set it with `ballast secret set`")
 	_ = serviceAddCmd.MarkFlagRequired("catalog")
 	_ = serviceAddCmd.MarkFlagRequired("destination")
 

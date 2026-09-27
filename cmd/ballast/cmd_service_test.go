@@ -45,6 +45,25 @@ func TestServiceAddListRemove(t *testing.T) {
 	}
 }
 
+// TestServiceAddSecretFlag checks that `--secret name=` pre-declares
+// a catalog {{ .Secrets.<name> }} reference (with the credential file
+// name defaulted, since the value is empty) without needing an
+// existing credential file yet — `ballast secret set` fills the value
+// in afterwards.
+func TestServiceAddSecretFlag(t *testing.T) {
+	withStubRestic(t)
+	cliEnv(t, &spyRunner{})
+	addLocalDestination(t)
+
+	if _, err := execCLI(t, "service", "add", "mysql", "--catalog", "folder", "--destination", "local",
+		"--param", "path=/tmp", "--secret", "db_password="); err != nil {
+		t.Fatalf("service add --secret: %v", err)
+	}
+	if _, err := execCLI(t, "secret", "set", "mysql", "db_password", "--value", "hunter2"); err != nil {
+		t.Fatalf("secret set: %v", err)
+	}
+}
+
 func TestServiceAddRequiresCatalogAndDestination(t *testing.T) {
 	cliEnv(t, &spyRunner{})
 	if _, err := execCLI(t, "service", "add", "docs"); err == nil {

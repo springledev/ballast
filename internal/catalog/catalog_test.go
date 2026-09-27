@@ -267,6 +267,76 @@ func TestResolveUnknownParamReference(t *testing.T) {
 	}
 }
 
+// TestResolveSecrets checks that {{ .Secrets.NAME }} placeholders in
+// backup.dumps[].secretEnv resolve to the given plaintext values,
+// leave the rest of the entry (and dumps with no secretEnv) alone,
+// and that Resolve itself never needs or accepts a Secrets value —
+// only ResolveSecrets does.
+func TestResolveSecrets(t *testing.T) {
+	yaml := strings.Replace(validEntry,
+		"      format: sql\n",
+		"      format: sql\n      secretEnv:\n        MYSQL_PWD: \"{{ .Secrets.db_password }}\"\n", 1)
+	entry, err := Load([]byte(yaml))
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	deep := entry.DeepCopy()
+	if err := deep.Resolve(TemplateContext{
+		Params:   map[string]string{"library_dir": "/srv/immich/library"},
+		Services: map[string]string{"database": "immich-db-1"},
+	}); err != nil {
+		t.Fatalf("Resolve() error = %v, want nil (Resolve must not need secrets)", err)
+	}
+	if err := deep.ResolveSecrets(map[string]string{"db_password": "hunter2"}); err != nil {
+		t.Fatalf("ResolveSecrets() error = %v, want nil", err)
+	}
+	if got := deep.Backup.Dumps[0].SecretEnv["MYSQL_PWD"]; got != "hunter2" {
+		t.Errorf("secretEnv[MYSQL_PWD] = %q, want hunter2", got)
+	}
+	// The original entry's secretEnv template must be untouched.
+	if got := entry.Backup.Dumps[0].SecretEnv["MYSQL_PWD"]; got != "{{ .Secrets.db_password }}" {
+		t.Errorf("original entry mutated; secretEnv = %q", got)
+	}
+}
+
+// TestResolveSecretsUnknownSecret checks that an unresolvable
+// {{ .Secrets.* }} reference is a loud error, not a silent pass-through.
+func TestResolveSecretsUnknownSecret(t *testing.T) {
+	yaml := strings.Replace(validEntry,
+		"      format: sql\n",
+		"      format: sql\n      secretEnv:\n        MYSQL_PWD: \"{{ .Secrets.db_password }}\"\n", 1)
+	entry, err := Load([]byte(yaml))
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	err = entry.ResolveSecrets(map[string]string{"other": "x"})
+	if err == nil || !strings.Contains(err.Error(), `unknown secret "db_password"`) {
+		t.Fatalf("ResolveSecrets(missing secret) error = %v, want unknown-secret error", err)
+	}
+}
+
+// TestResolveRejectsSecretsOutsideSecretEnv checks that {{ .Secrets.* }}
+// used anywhere other than secretEnv (command, container, path, verify
+// image) is rejected by Resolve itself — the same guard that already
+// rejects any other unsupported table name — so a secret value can
+// never reach argv, a container name, or a file path.
+func TestResolveRejectsSecretsOutsideSecretEnv(t *testing.T) {
+	yaml := strings.Replace(validEntry,
+		`container: "{{ .Services.database }}"`,
+		`container: "{{ .Secrets.db_password }}"`, 1)
+	entry, err := Load([]byte(yaml))
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	err = entry.Resolve(TemplateContext{
+		Params:   map[string]string{"library_dir": "/x"},
+		Services: map[string]string{"database": "db"},
+	})
+	if err == nil || !strings.Contains(err.Error(), "unsupported template expression") {
+		t.Fatalf("Resolve(secret outside secretEnv) error = %v, want unsupported-template-expression refusal", err)
+	}
+}
+
 func TestResolveRejectsUnsafeExpressions(t *testing.T) {
 	yaml := strings.Replace(validEntry,
 		"path: \"{{ .Params.library_dir }}\"",

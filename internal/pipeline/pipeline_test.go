@@ -215,6 +215,23 @@ verify:
   method: archive-integrity
 `
 
+const dumpSecretEntryYAML = `
+apiVersion: ballast.dev/v1
+service: dumpsecret
+version: 1
+backup:
+  strategy: dump
+  dumps:
+    - name: data
+      container: mycontainer
+      command: ["mydump"]
+      format: sql
+      secretEnv:
+        DB_PASSWORD: "{{ .Secrets.db_password }}"
+verify:
+  method: archive-integrity
+`
+
 func yamlf(tmpl, arg string) string {
 	return strings.ReplaceAll(tmpl, "%q", `"`+arg+`"`)
 }
@@ -573,6 +590,77 @@ func TestRunNotifiesOnOutcomes(t *testing.T) {
 			t.Errorf("jobFailures = %d, want 0 (this is a verification failure, not a plain job failure)", n.jobFailures)
 		}
 	})
+}
+
+// TestRunResolvesCatalogSecretEnv checks the spec §14 step 15 path
+// end to end: a service's Secrets map points at a root-only
+// credential file, catalog.Entry.ResolveSecrets fills the dump's
+// {{ .Secrets.NAME }} secretEnv placeholder with its plaintext value,
+// the value is forwarded into the container via `docker exec -e KEY`
+// (never argv), the run still succeeds, and the plaintext value never
+// appears in the pipeline's own log output.
+func TestRunResolvesCatalogSecretEnv(t *testing.T) {
+	h := newHarness(t)
+	credName := "ballast-secret.dumpsecret.db_password"
+	if err := os.WriteFile(filepath.Join(h.credDir, credName), []byte("hunter2\n"), 0o600); err != nil {
+		t.Fatalf("writing secret credential file: %v", err)
+	}
+	if err := inventory.PutService(h.db, inventory.Service{
+		Name: "dumpsecret", CatalogEntry: "dumpsecret", Destination: "local",
+		Secrets: map[string]string{"db_password": ""},
+	}); err != nil {
+		t.Fatalf("PutService: %v", err)
+	}
+
+	var logBuf strings.Builder
+	p := h.pipeline()
+	p.Catalog = registryWith(t, map[string]string{"dumpsecret.yaml": dumpSecretEntryYAML})
+	p.Log = &logBuf
+
+	state, err := p.Run(context.Background(), "dumpsecret")
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if state != engine.SUCCESS {
+		t.Fatalf("state = %s, want SUCCESS", state)
+	}
+
+	dockerLog, err := os.ReadFile(h.dockerLog)
+	if err != nil {
+		t.Fatalf("reading docker log: %v", err)
+	}
+	if !strings.Contains(string(dockerLog), "-e DB_PASSWORD") {
+		t.Errorf("docker invocations = %q, want -e DB_PASSWORD forwarded", dockerLog)
+	}
+	if strings.Contains(string(dockerLog), "hunter2") {
+		t.Errorf("docker argv leaked the secret value: %q", dockerLog)
+	}
+	if strings.Contains(logBuf.String(), "hunter2") {
+		t.Errorf("pipeline log leaked the secret value: %q", logBuf.String())
+	}
+}
+
+// TestRunUnknownCatalogSecretFails checks that a service whose
+// Secrets map is missing an entry the catalog's secretEnv references
+// fails the run loudly (via ResolveSecrets), rather than running the
+// dump with an empty/unsubstituted placeholder.
+func TestRunUnknownCatalogSecretFails(t *testing.T) {
+	h := newHarness(t)
+	if err := inventory.PutService(h.db, inventory.Service{
+		Name: "dumpsecret", CatalogEntry: "dumpsecret", Destination: "local",
+	}); err != nil {
+		t.Fatalf("PutService: %v", err)
+	}
+	p := h.pipeline()
+	p.Catalog = registryWith(t, map[string]string{"dumpsecret.yaml": dumpSecretEntryYAML})
+
+	state, err := p.Run(context.Background(), "dumpsecret")
+	if err == nil || !strings.Contains(err.Error(), "db_password") {
+		t.Fatalf("Run error = %v, want it to name the unresolved secret db_password", err)
+	}
+	if state != "" {
+		t.Errorf("state = %q, want empty (no run created for a config error)", state)
+	}
 }
 
 func TestEnsureServiceContext(t *testing.T) {

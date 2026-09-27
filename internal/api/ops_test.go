@@ -297,6 +297,106 @@ func TestOpsServiceCRUD(t *testing.T) {
 	}
 }
 
+// TestOpsSetSecret checks the spec §14 step 15 credential store path:
+// a first call defaults the credential file name, writes it 0600 into
+// CredentialsDir, records the name (never the value) against the
+// service, and redacts the value; a second call rotates the value in
+// place (no O_EXCL — unlike a destination's generated repo password,
+// this is a user-supplied secret the operator may legitimately
+// change); an explicit credential name is honoured instead of the
+// default.
+func TestOpsSetSecret(t *testing.T) {
+	h := newHarness(t)
+	h.addDestination("local")
+	svc := inventory.Service{Name: "svc", CatalogEntry: "folder", Destination: "local", Params: map[string]string{"path": "/x"}}
+	if err := h.ops.PutService(context.Background(), svc); err != nil {
+		t.Fatalf("PutService: %v", err)
+	}
+	h.ops.Redact = secretpkg.NewSet()
+
+	if err := h.ops.SetSecret(context.Background(), "svc", "db_password", "hunter2"); err != nil {
+		t.Fatalf("SetSecret: %v", err)
+	}
+	got, err := h.ops.GetService(context.Background(), "svc")
+	if err != nil {
+		t.Fatalf("GetService: %v", err)
+	}
+	credName := got.Secrets["db_password"]
+	if credName != "ballast-secret.svc.db_password" {
+		t.Errorf("Secrets[db_password] = %q, want the default name", credName)
+	}
+	path := filepath.Join(h.credDir, credName)
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatalf("stat secret file: %v", err)
+	}
+	if perm := info.Mode().Perm(); perm != 0o600 {
+		t.Errorf("secret file permissions = %04o, want 0600", perm)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil || strings.TrimSpace(string(data)) != "hunter2" {
+		t.Errorf("secret file contents = %q, %v, want hunter2", data, err)
+	}
+	if !strings.Contains(h.ops.Redact.Redact("password is hunter2"), "[redacted]") {
+		t.Error("SetSecret did not register the value with Ops.Redact")
+	}
+
+	// Rotation: same name, new value, file overwritten in place.
+	if err := h.ops.SetSecret(context.Background(), "svc", "db_password", "new-value"); err != nil {
+		t.Fatalf("SetSecret (rotate): %v", err)
+	}
+	data, err = os.ReadFile(path)
+	if err != nil || strings.TrimSpace(string(data)) != "new-value" {
+		t.Errorf("secret file after rotation = %q, %v, want new-value", data, err)
+	}
+	got, err = h.ops.GetService(context.Background(), "svc")
+	if err != nil || got.Secrets["db_password"] != credName {
+		t.Errorf("credential file name changed across rotation: %v (%v)", got.Secrets, err)
+	}
+
+	if err := h.ops.SetSecret(context.Background(), "svc", "api_key", ""); err == nil {
+		t.Error("SetSecret(empty value) = nil error, want error")
+	}
+	if err := h.ops.SetSecret(context.Background(), "nope", "x", "y"); !errors.Is(err, inventory.ErrNotFound) {
+		t.Errorf("SetSecret(unknown service) = %v, want ErrNotFound", err)
+	}
+}
+
+// TestOpsSetSecretNeverShadowsOperatorCredential checks that SetSecret
+// refuses to write a credential file when one of the same name already
+// exists in a different, higher-priority search directory (e.g. an
+// operator's systemd LoadCredential= file): FindCredentialDir/
+// resolveSecrets would keep resolving to the operator's file regardless
+// of what Ballast wrote, so silently accepting the value here would
+// look like it worked while having no effect on the next run.
+func TestOpsSetSecretNeverShadowsOperatorCredential(t *testing.T) {
+	h := newHarness(t)
+	h.addDestination("local")
+	svc := inventory.Service{Name: "svc", CatalogEntry: "folder", Destination: "local", Params: map[string]string{"path": "/x"}}
+	if err := h.ops.PutService(context.Background(), svc); err != nil {
+		t.Fatalf("PutService: %v", err)
+	}
+
+	operatorDir := t.TempDir()
+	operatorFile := filepath.Join(operatorDir, "ballast-secret.svc.db_password")
+	if err := os.WriteFile(operatorFile, []byte("operator-value\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	h.ops.CredentialSearchDirs = []string{operatorDir, h.credDir}
+
+	err := h.ops.SetSecret(context.Background(), "svc", "db_password", "hunter2")
+	if err == nil || !strings.Contains(err.Error(), "already exists") {
+		t.Fatalf("SetSecret error = %v, want a refusal naming the existing operator credential", err)
+	}
+	if _, err := os.Stat(filepath.Join(h.credDir, "ballast-secret.svc.db_password")); err == nil {
+		t.Error("SetSecret wrote a shadow file into the writable credential dir despite refusing")
+	}
+	data, err := os.ReadFile(operatorFile)
+	if err != nil || strings.TrimSpace(string(data)) != "operator-value" {
+		t.Errorf("operator credential file changed: %q, %v", data, err)
+	}
+}
+
 func TestOpsDestinationCRUDAndInit(t *testing.T) {
 	h := newHarness(t)
 	if err := os.WriteFile(filepath.Join(h.credDir, "ballast-restic-password.local"), []byte("pw\n"), 0o600); err != nil {

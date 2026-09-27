@@ -66,7 +66,14 @@
               "name": { "type": "string" },
               "container": { "type": "string" },
               "command": { "type": "array", "minItems": 1, "items": { "type": "string" } },
-              "format": { "type": "string" }
+              "format": { "type": "string" },
+              "secretEnv": {
+                "type": "object",
+                "additionalProperties": false,
+                "patternProperties": {
+                  "^[A-Za-z_][A-Za-z0-9_]*$": { "type": "string" }
+                }
+              }
             }
           }
         },
