@@ -522,7 +522,7 @@
 
  | Integration (Docker) | Real Postgres container: dump → throwaway restore → assert; stop-start strategy against a real container; cleanup-on-failure (kill mid-job, assert container restarted) |
 
- | restic | Test repo on local disk  MinIO (S3-compatible) for backend coverage; snapshot read-back assertions |
+ | restic | Test repo on local disk  SeaweedFS (S3-compatible; replaced MinIO, whose community edition is no longer maintained) for backend coverage; snapshot read-back assertions |
 
  | E2E | **No E2E test may pass without a job reaching `VERIFYING → SUCCESS`.** Wizard flow test: fresh state → configured Immich-ish service (fixture container) → verified backup < 15 min (relaxed in CI, strict locally) |
 

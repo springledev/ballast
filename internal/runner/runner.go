@@ -31,6 +31,7 @@ import (
 	"os/exec"
 	"runtime"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -68,6 +69,15 @@ type Command struct {
 	Args []string // arguments, excluding argv[0]
 	Env  []string // extra KEY=VALUE entries; override BaseEnv duplicates
 	Dir  string   // working directory; empty means current directory
+
+	// AbortOn, when set, is called with each complete stderr line as
+	// the command runs. Returning true stops the whole pipeline at
+	// once and makes it fail with an *AbortError. It exists for tools
+	// that retry a failure no retry can fix (restic retries a rejected
+	// S3 key for 15 minutes) — it only ever turns a certain failure
+	// into an early one, never a failure into success. Lines are raw
+	// (unredacted): the predicate must not log or keep them.
+	AbortOn func(line string) bool
 }
 
 // Result describes how one command finished.
@@ -127,6 +137,19 @@ func (r *Runner) Pipeline(ctx context.Context, stdin io.Reader, stdout io.Writer
 		stderrCap = defaultStderrCap
 	}
 
+	// abortCtx is canceled when a stage's AbortOn predicate matches;
+	// it kills the pipeline exactly like ctx itself does.
+	abortCtx, abortCancel := context.WithCancel(ctx)
+	defer abortCancel()
+	var abortOnce sync.Once
+	aborted := -1
+	abortStage := func(i int) {
+		abortOnce.Do(func() {
+			aborted = i
+			abortCancel()
+		})
+	}
+
 	cmds := make([]*exec.Cmd, len(stages))
 	tails := make([]*tailBuffer, len(stages))
 	for i, c := range stages {
@@ -144,6 +167,9 @@ func (r *Runner) Pipeline(ctx context.Context, stdin io.Reader, stdout io.Writer
 		setParentDeathSignal(cmd)
 		tails[i] = &tailBuffer{cap: stderrCap}
 		cmd.Stderr = tails[i]
+		if c.AbortOn != nil {
+			cmd.Stderr = io.MultiWriter(tails[i], &lineWatcher{match: c.AbortOn, hit: func() { abortStage(i) }})
+		}
 		cmds[i] = cmd
 	}
 
@@ -263,7 +289,7 @@ func (r *Runner) Pipeline(ctx context.Context, stdin io.Reader, stdout io.Writer
 	}()
 
 	// Cancellation kills the whole pipeline.
-	stop := context.AfterFunc(ctx, func() {
+	stop := context.AfterFunc(abortCtx, func() {
 		for _, cmd := range cmds {
 			if cmd.Process != nil {
 				// A stage that already exited returns
@@ -309,7 +335,50 @@ func (r *Runner) Pipeline(ctx context.Context, stdin io.Reader, stdout io.Writer
 		results[last].Stdout = outBuf.Bytes()
 	}
 
+	// Every stage is reaped, so every stderr write (and with it every
+	// abortStage call) has happened; abortOnce orders the read.
+	abortOnce.Do(func() {})
+	if aborted >= 0 && ctx.Err() == nil {
+		return results, &AbortError{Cmd: stages[aborted].Name, Stderr: stderrLine(results[aborted].Stderr)}
+	}
 	return results, classify(stages, waitErrs, results, stdinErr, outErr, ctx.Err())
+}
+
+// lineWatcher splits a stderr stream into lines and reports the first
+// one match accepts. Partial lines are buffered up to a bound, so a
+// stream without newlines cannot grow memory without limit.
+type lineWatcher struct {
+	match func(string) bool
+	hit   func()
+	buf   []byte
+	done  bool
+}
+
+// maxWatchedLine bounds a buffered partial stderr line.
+const maxWatchedLine = 16 << 10
+
+func (w *lineWatcher) Write(p []byte) (int, error) {
+	if w.done {
+		return len(p), nil
+	}
+	w.buf = append(w.buf, p...)
+	for {
+		i := bytes.IndexByte(w.buf, '\n')
+		if i < 0 {
+			break
+		}
+		line := string(w.buf[:i])
+		w.buf = w.buf[i+1:]
+		if w.match(line) {
+			w.done, w.buf = true, nil
+			w.hit()
+			return len(p), nil
+		}
+	}
+	if len(w.buf) > maxWatchedLine {
+		w.buf = w.buf[len(w.buf)-maxWatchedLine:]
+	}
+	return len(p), nil
 }
 
 // classify applies the pipefail/SIGPIPE priority order documented on

@@ -2,6 +2,7 @@ import { apiToken, clearApiToken } from "./auth";
 import type {
   ApiErrorBody,
   CatalogSummary,
+  CreateDestinationRequest,
   Destination,
   DetectResult,
   NotificationSettings,
@@ -145,8 +146,8 @@ export const api = {
   listDestinations(): Promise<Destination[]> {
     return request("GET", `${base}/destinations`);
   },
-  createDestination(d: Destination, init: boolean): Promise<Destination> {
-    return request("POST", `${base}/destinations`, { ...d, init });
+  createDestination(req: CreateDestinationRequest): Promise<Destination> {
+    return request("POST", `${base}/destinations`, req);
   },
   deleteDestination(name: string): Promise<void> {
     return request("DELETE", `${base}/destinations/${encodeURIComponent(name)}`);

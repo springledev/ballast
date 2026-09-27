@@ -9,9 +9,11 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
+	"github.com/springledev/ballast/internal/backend"
 	"github.com/springledev/ballast/internal/inventory"
 	"github.com/springledev/ballast/internal/notify"
 )
@@ -492,6 +494,28 @@ func TestHTTPGolden(t *testing.T) {
 			},
 		},
 		{
+			// Init=false so no restic call is made; this case exists to
+			// prove the response never echoes the posted credentials
+			// back (spec rule 2), which the golden file itself
+			// demonstrates and TestHTTPGoldenDestinationCreateWithCredentialsNoLeak
+			// asserts explicitly.
+			name: "destinations_create_with_credentials",
+			req: func(h *harness) *http.Request {
+				body := createDestinationBody{
+					Destination: inventory.Destination{
+						Name: "aws", Type: backend.S3,
+						Settings:  backend.Settings{Endpoint: "s3.amazonaws.com", Bucket: "my-bucket", Region: "us-east-1"},
+						KeepDaily: 7,
+					},
+					Credentials: backend.Credentials{AccessKeyID: "AKIAEXAMPLE", SecretAccessKey: "topsecretkey"},
+					Init:        false,
+				}
+				r := httptest.NewRequest(http.MethodPost, "/api/v1/destinations", jsonBody(t, body))
+				r.Header.Set("Content-Type", "application/json")
+				return r
+			},
+		},
+		{
 			name:    "destinations_test",
 			arrange: func(t *testing.T, h *harness) { h.addDestination("local") },
 			req: func(h *harness) *http.Request {
@@ -525,5 +549,38 @@ func TestHTTPGolden(t *testing.T) {
 	}
 	for _, tc := range cases {
 		runGolden(t, tc)
+	}
+}
+
+// TestDestinationsCreateWithCredentialsNoLeak makes the same request
+// as the "destinations_create_with_credentials" golden case directly
+// (not through the golden-file comparison) and asserts explicitly that
+// the secret access key never appears in the response body — the
+// golden file passing already proves this by construction, but this
+// spells it out (spec rule 2: secrets never appear in an API
+// response).
+func TestDestinationsCreateWithCredentialsNoLeak(t *testing.T) {
+	h := newHarness(t)
+	body := createDestinationBody{
+		Destination: inventory.Destination{
+			Name: "aws", Type: backend.S3,
+			Settings:  backend.Settings{Endpoint: "s3.amazonaws.com", Bucket: "my-bucket", Region: "us-east-1"},
+			KeepDaily: 7,
+		},
+		Credentials: backend.Credentials{AccessKeyID: "AKIAEXAMPLE", SecretAccessKey: "topsecretkey"},
+		Init:        false,
+	}
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/destinations", jsonBody(t, body))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+testAPIToken)
+
+	rec := httptest.NewRecorder()
+	NewHandler(h.ops, testAPIToken).ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("status = %d, want 201 (body %s)", rec.Code, rec.Body.String())
+	}
+	if strings.Contains(rec.Body.String(), "topsecretkey") {
+		t.Errorf("response body leaks the secret access key: %s", rec.Body.String())
 	}
 }

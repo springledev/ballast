@@ -53,4 +53,49 @@ describe("api client", () => {
 
     await expect(api.deleteService("x")).resolves.toBeUndefined();
   });
+
+  it("sends the typed destination request body as-is", async () => {
+    const body = {
+      name: "b2-bucket",
+      type: "b2" as const,
+      settings: { endpoint: "s3.us-west-004.backblazeb2.com", bucket: "my-bucket" },
+      keep_daily: 7,
+      keep_weekly: 4,
+      keep_monthly: 6,
+      init: true,
+      credentials: { access_key_id: "id", secret_access_key: "secret" },
+    };
+    const fetchMock = vi.fn().mockResolvedValue(
+      jsonResponse(201, {
+        name: "b2-bucket",
+        type: "b2",
+        settings: body.settings,
+        location: "s3:https://s3.us-west-004.backblazeb2.com/my-bucket",
+        password_credential: "ballast-restic-password.b2-bucket",
+        backend_credential: "ballast-dest-keys.b2-bucket",
+        keep_daily: 7,
+        keep_weekly: 4,
+        keep_monthly: 6,
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const saved = await api.createDestination(body);
+
+    expect(saved.location).toBe("s3:https://s3.us-west-004.backblazeb2.com/my-bucket");
+    expect(saved).not.toHaveProperty("credentials");
+    const [url, init] = fetchMock.mock.calls[0];
+    expect(url).toBe("/api/v1/destinations");
+    expect(JSON.parse(init.body as string)).toEqual(body);
+  });
+
+  it("tests a destination by name", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse(200, { ok: true }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(api.testDestination("nas")).resolves.toEqual({ ok: true });
+    const [url, init] = fetchMock.mock.calls[0];
+    expect(url).toBe("/api/v1/destinations/nas/test");
+    expect(init.method).toBe("POST");
+  });
 });

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -779,6 +780,67 @@ func TestVersionAndWarning(t *testing.T) {
 	}
 }
 
+// TestExtendedOptionsEmittedBeforeSubcommand: restic's `-o key=value`
+// backend options must precede the subcommand on the command line
+// (restic itself only accepts them there), and every configured option
+// is emitted. Built directly via the unexported command() builder
+// (this test file is in package restic) rather than through the stub,
+// since the stub's argv dispatch only understands bare subcommands.
+func TestExtendedOptionsEmittedBeforeSubcommand(t *testing.T) {
+	repo := &Repository{
+		Location:        "/srv/backups",
+		Runner:          &runner.Runner{},
+		ExtendedOptions: []string{"sftp.args=-i /key", "b2.key=val"},
+	}
+	cmd := repo.command("init")
+	want := []string{"-o", "sftp.args=-i /key", "-o", "b2.key=val", "init"}
+	if strings.Join(cmd.Args, " ") != strings.Join(want, " ") {
+		t.Errorf("argv = %v, want %v (extended options before the subcommand)", cmd.Args, want)
+	}
+}
+
+// TestOpenRejectsInvalidExtendedOption: an option without "key=value"
+// shape is refused up front, before restic ever runs.
+func TestOpenRejectsInvalidExtendedOption(t *testing.T) {
+	ok := &runner.Runner{}
+	_, err := Open("/srv/backups", Options{Runner: ok, ExtendedOptions: []string{"no-equals-sign"}})
+	if err == nil {
+		t.Fatal("Open with a malformed extended option = nil error, want failure")
+	}
+	if !strings.Contains(err.Error(), "key=value") {
+		t.Errorf("error = %q, want it to name the key=value shape", err)
+	}
+}
+
+// TestBackendHint pins the well-known storage-provider phrases that get
+// a plain-English hint prepended, and confirms unrelated stderr gets
+// none (spec §10 beginner requirement, spec §8: never changes the
+// underlying decision, only adds explanatory text).
+func TestBackendHint(t *testing.T) {
+	tests := []struct {
+		name   string
+		stderr string
+		want   string
+	}{
+		{"invalid access key id", "Fatal: InvalidAccessKeyId: the key does not exist", "does not recognize the access key ID"},
+		{"signature mismatch", "Fatal: SignatureDoesNotMatch", "secret access key (application key) is wrong"},
+		{"no such bucket", "Fatal: NoSuchBucket: the bucket does not exist", "bucket does not exist"},
+		{"publickey rejected", "Permission denied (publickey).", "rejected the SSH key"},
+		{"no match", "Fatal: something else entirely went wrong", ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := backendHint(tt.stderr); got == "" && tt.want != "" {
+				t.Errorf("backendHint(%q) = %q, want it to contain %q", tt.stderr, got, tt.want)
+			} else if tt.want == "" && got != "" {
+				t.Errorf("backendHint(%q) = %q, want empty (no match)", tt.stderr, got)
+			} else if tt.want != "" && !strings.Contains(got, tt.want) {
+				t.Errorf("backendHint(%q) = %q, want substring %q", tt.stderr, got, tt.want)
+			}
+		})
+	}
+}
+
 // ---------------------------------------------------------------------------
 // Integration tests against a real restic binary and a local-disk
 // repository (spec §13: "restic: Test repo on local disk … snapshot
@@ -984,5 +1046,29 @@ func TestIntegrationWrongPassword(t *testing.T) {
 		t.Fatal("Snapshots with wrong password = nil error, want failure")
 	} else if !strings.Contains(err.Error(), "password") {
 		t.Errorf("error = %q, want the plain-English password hint", err)
+	}
+}
+
+// TestIsBucketMissing checks that only an early-stopped "bucket does
+// not exist" retry counts as a missing bucket, so setup tries restic
+// init (which creates it) and nothing else is mistaken for one.
+func TestIsBucketMissing(t *testing.T) {
+	tests := []struct {
+		name string
+		err  error
+		want bool
+	}{
+		{"minio wording", &runner.AbortError{Cmd: "restic", Stderr: "Stat(<config/>) returned error, retrying after 1s: Stat: The specified bucket does not exist"}, true},
+		{"aws code", fmt.Errorf("wrapped: %w", &runner.AbortError{Cmd: "restic", Stderr: "... NoSuchBucket ..."}), true},
+		{"bad key abort", &runner.AbortError{Cmd: "restic", Stderr: "SignatureDoesNotMatch"}, false},
+		{"exit error with same text", &runner.ExitError{Cmd: "restic", Code: 1, Stderr: "NoSuchBucket"}, false},
+		{"nil", nil, false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := IsBucketMissing(tt.err); got != tt.want {
+				t.Errorf("IsBucketMissing = %v, want %v", got, tt.want)
+			}
+		})
 	}
 }

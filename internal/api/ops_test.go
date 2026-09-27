@@ -12,6 +12,7 @@ import (
 	"testing/fstest"
 	"time"
 
+	"github.com/springledev/ballast/internal/backend"
 	"github.com/springledev/ballast/internal/catalog"
 	"github.com/springledev/ballast/internal/engine"
 	"github.com/springledev/ballast/internal/inventory"
@@ -686,7 +687,7 @@ func TestOpsPutDestinationInitFailureCleansUp(t *testing.T) {
 
 // TestOpsEnsureLocalPasswordNeverOverwrites: if the credential file
 // already exists — created by an operator, or by a concurrent
-// PutDestination call that won a creation race — ensureLocalPassword
+// PutDestination call that won a creation race — ensurePassword
 // must report "nothing generated" and leave its contents untouched,
 // never silently replace it (review finding A: a TOCTOU stat-then-
 // write could otherwise clobber a password restic init already used).
@@ -699,12 +700,12 @@ func TestOpsEnsureLocalPasswordNeverOverwrites(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	got, err := h.ops.ensureLocalPassword(dest)
+	got, err := h.ops.ensurePassword(dest)
 	if err != nil {
-		t.Fatalf("ensureLocalPassword: %v", err)
+		t.Fatalf("ensurePassword: %v", err)
 	}
 	if got != "" {
-		t.Errorf("ensureLocalPassword returned path %q, want \"\" (nothing generated) for a pre-existing file", got)
+		t.Errorf("ensurePassword returned path %q, want \"\" (nothing generated) for a pre-existing file", got)
 	}
 	after, err := os.ReadFile(path)
 	if err != nil {
@@ -1245,14 +1246,222 @@ func TestOpsEnsureLocalPasswordRespectsSearchDirs(t *testing.T) {
 	h.ops.CredentialSearchDirs = []string{provided, h.credDir}
 	dest := inventory.Destination{Name: "local", Location: "/stub-repo", PasswordCredential: "ballast-restic-password.local"}
 
-	got, err := h.ops.ensureLocalPassword(dest)
+	got, err := h.ops.ensurePassword(dest)
 	if err != nil {
-		t.Fatalf("ensureLocalPassword: %v", err)
+		t.Fatalf("ensurePassword: %v", err)
 	}
 	if got != "" {
 		t.Errorf("generated %q although the operator provided a password", got)
 	}
 	if _, err := os.Stat(filepath.Join(h.credDir, "ballast-restic-password.local")); err == nil {
 		t.Error("a password file was written to Ballast's own directory")
+	}
+}
+
+// s3Dest builds an unsaved S3 destination for SetupDestination tests.
+func s3Dest(name string) inventory.Destination {
+	return inventory.Destination{
+		Name: name, Type: backend.S3,
+		Settings:  backend.Settings{Endpoint: "s3.amazonaws.com", Bucket: "my-bucket", Region: "us-east-1"},
+		KeepDaily: 7,
+	}
+}
+
+// TestOpsSetupDestinationWritesCredentials: SetupDestination saves the
+// given backend credentials to a 0600 file and registers the secret
+// value for redaction immediately.
+func TestOpsSetupDestinationWritesCredentials(t *testing.T) {
+	h := newHarness(t)
+	h.ops.Redact = secretpkg.NewSet()
+	req := DestinationSetup{
+		Destination: s3Dest("aws"),
+		Credentials: backend.Credentials{AccessKeyID: "AKIAEXAMPLE", SecretAccessKey: "topsecretkey"},
+	}
+	if err := h.ops.SetupDestination(context.Background(), req); err != nil {
+		t.Fatalf("SetupDestination: %v", err)
+	}
+
+	saved, err := h.ops.GetDestination(context.Background(), "aws")
+	if err != nil {
+		t.Fatalf("GetDestination: %v", err)
+	}
+	path := filepath.Join(h.credDir, saved.BackendCredential)
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatalf("stat credential file: %v", err)
+	}
+	if perm := info.Mode().Perm(); perm != 0o600 {
+		t.Errorf("credential file mode = %o, want 0600", perm)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := "[default]\naws_access_key_id = AKIAEXAMPLE\naws_secret_access_key = topsecretkey\n"
+	if string(data) != want {
+		t.Errorf("credential file contents = %q, want %q", data, want)
+	}
+	if got := h.ops.redact("leaked topsecretkey here"); strings.Contains(got, "topsecretkey") {
+		t.Errorf("redact(...) = %q, want the secret access key redacted", got)
+	}
+}
+
+// TestOpsSetupDestinationOperatorCredentialConflict: a credential file
+// of the same name already provided elsewhere (e.g. systemd's
+// LoadCredential=) always wins, so writing one here would silently do
+// nothing — SetupDestination must refuse loudly instead.
+func TestOpsSetupDestinationOperatorCredentialConflict(t *testing.T) {
+	h := newHarness(t)
+	operatorDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(operatorDir, "ballast-dest-keys.aws"), []byte("operator-provided\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	h.ops.CredentialSearchDirs = []string{operatorDir, h.credDir}
+
+	req := DestinationSetup{
+		Destination: s3Dest("aws"),
+		Credentials: backend.Credentials{AccessKeyID: "AKIAEXAMPLE", SecretAccessKey: "topsecretkey"},
+	}
+	err := h.ops.SetupDestination(context.Background(), req)
+	if !errors.Is(err, ErrValidation) {
+		t.Fatalf("SetupDestination = %v, want ErrValidation", err)
+	}
+	if _, statErr := os.Stat(filepath.Join(h.credDir, "ballast-dest-keys.aws")); !os.IsNotExist(statErr) {
+		t.Error("a credential file was written to Ballast's own directory despite the operator-provided one")
+	}
+}
+
+// TestOpsSetupDestinationInitRequiresCredentials: Init=true against an
+// S3 destination with no credentials given, and no pre-existing
+// credential file, is a loud ErrValidation naming what is missing —
+// never a raw restic auth failure deep into setup.
+func TestOpsSetupDestinationInitRequiresCredentials(t *testing.T) {
+	h := newHarness(t)
+	req := DestinationSetup{Destination: s3Dest("aws"), Init: true}
+	err := h.ops.SetupDestination(context.Background(), req)
+	if !errors.Is(err, ErrValidation) {
+		t.Fatalf("SetupDestination = %v, want ErrValidation", err)
+	}
+	if !strings.Contains(err.Error(), "access key ID and secret access key") {
+		t.Errorf("error = %q, want it to explain which credentials are missing", err)
+	}
+	if _, statErr := inventory.GetDestination(h.ops.DB, "aws"); statErr == nil {
+		t.Error("destination was saved despite the missing credentials")
+	}
+}
+
+// TestOpsSetupDestinationInitFailureRemovesNewCredentialFile: when
+// Init fails, a credential file SetupDestination itself just wrote for
+// a brand-new destination is removed again (nothing half-made is left
+// behind), and the new destination row is removed too.
+func TestOpsSetupDestinationInitFailureRemovesNewCredentialFile(t *testing.T) {
+	h := newHarness(t)
+	if err := os.WriteFile(filepath.Join(h.credDir, "ballast-restic-password.aws"), []byte("pw\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("STUB_FAIL_CMD", "snapshots")
+	t.Setenv("STUB_FAIL_CODE", "1")
+
+	req := DestinationSetup{
+		Destination: s3Dest("aws"),
+		Credentials: backend.Credentials{AccessKeyID: "AKIAEXAMPLE", SecretAccessKey: "topsecretkey"},
+		Init:        true,
+	}
+	err := h.ops.SetupDestination(context.Background(), req)
+	if err == nil {
+		t.Fatal("SetupDestination = nil, want the init failure")
+	}
+	if _, statErr := os.Stat(filepath.Join(h.credDir, "ballast-dest-keys.aws")); !os.IsNotExist(statErr) {
+		t.Error("the newly written credential file was not removed after the init failure")
+	}
+	if _, getErr := inventory.GetDestination(h.ops.DB, "aws"); getErr == nil {
+		t.Error("the half-created destination row was not removed after the init failure")
+	}
+}
+
+// TestOpsSetupDestinationInitFailureRestoresExistingCredentialFile: for
+// an existing destination being updated, a credential file that
+// already had contents keeps its original contents after a failed
+// Init, rather than being left holding the new, unproven value or
+// being deleted outright.
+func TestOpsSetupDestinationInitFailureRestoresExistingCredentialFile(t *testing.T) {
+	h := newHarness(t)
+	dest := s3Dest("aws")
+	if err := os.WriteFile(filepath.Join(h.credDir, "ballast-restic-password.aws"), []byte("pw\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	const previous = "[default]\naws_access_key_id = OLDKEY\naws_secret_access_key = oldsecret\n"
+	if err := inventory.PutDestination(h.ops.DB, dest); err != nil {
+		t.Fatal(err)
+	}
+	saved, err := inventory.GetDestination(h.ops.DB, "aws")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(h.credDir, saved.BackendCredential), []byte(previous), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	t.Setenv("STUB_FAIL_CMD", "snapshots")
+	t.Setenv("STUB_FAIL_CODE", "1")
+	req := DestinationSetup{
+		Destination: dest,
+		Credentials: backend.Credentials{AccessKeyID: "NEWKEY", SecretAccessKey: "newsecret"},
+		Init:        true,
+	}
+	if err := h.ops.SetupDestination(context.Background(), req); err == nil {
+		t.Fatal("SetupDestination = nil, want the init failure")
+	}
+	data, err := os.ReadFile(filepath.Join(h.credDir, saved.BackendCredential))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(data) != previous {
+		t.Errorf("credential file after failed init = %q, want the previous contents %q restored", data, previous)
+	}
+}
+
+// TestOpsEnsurePasswordGeneratesForNonLocalTypes: ensurePassword's
+// automatic repository-password generation (spec §5.3.6) applies to
+// every backend type, not just local disk — a beginner adding a B2 or
+// S3 destination should not have to invent a password either.
+func TestOpsEnsurePasswordGeneratesForNonLocalTypes(t *testing.T) {
+	h := newHarness(t)
+	dest := s3Dest("aws")
+	if err := dest.Normalize(); err != nil {
+		t.Fatalf("Normalize: %v", err)
+	}
+	got, err := h.ops.ensurePassword(dest)
+	if err != nil {
+		t.Fatalf("ensurePassword: %v", err)
+	}
+	if got == "" {
+		t.Fatal("ensurePassword generated nothing for a non-local destination type")
+	}
+	data, err := os.ReadFile(got)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(strings.TrimSpace(string(data))) == 0 {
+		t.Error("generated repository password is empty")
+	}
+}
+
+// TestOpsTestDestinationRepoMissing: TestDestination against a
+// destination whose repository was never initialized gives a message
+// explaining that Ballast reached the destination but found no
+// repository there yet, not a raw restic error.
+func TestOpsTestDestinationRepoMissing(t *testing.T) {
+	h := newHarness(t)
+	h.addDestination("local")
+	t.Setenv("STUB_FAIL_CMD", "snapshots")
+	t.Setenv("STUB_FAIL_CODE", "10")
+
+	err := h.ops.TestDestination(context.Background(), "local")
+	if err == nil {
+		t.Fatal("TestDestination = nil, want an error (no repository initialized yet)")
+	}
+	if !strings.Contains(err.Error(), "no backup repository there yet") {
+		t.Errorf("error = %q, want it to say there is no backup repository there yet", err)
 	}
 }

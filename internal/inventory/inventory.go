@@ -9,7 +9,8 @@
 // only that file's *name* (Destination.PasswordCredential), resolved
 // against the credential directory at run time by the caller — never
 // the password itself, and a destination's Location must not embed
-// backend credentials as URL userinfo either.
+// backend credentials as URL userinfo either: backend secrets live in
+// their own credential file (Destination.BackendCredential).
 package inventory
 
 import (
@@ -19,8 +20,10 @@ import (
 	"fmt"
 	"path/filepath"
 	"regexp"
+	"strings"
 	"time"
 
+	"github.com/springledev/ballast/internal/backend"
 	"github.com/springledev/ballast/internal/restic"
 	"github.com/springledev/ballast/internal/store"
 )
@@ -52,16 +55,30 @@ func ValidateName(name string) error {
 //
 // JSON tags make this struct directly usable as an API response/
 // request shape (spec §14 step 11 D3: snake_case, stable field
-// names) without a separate DTO layer.
+// names) without a separate DTO layer. It holds no secrets: backend
+// credentials are only ever referenced by credential file name.
 type Destination struct {
-	Name     string `json:"name"`
-	Location string `json:"location"` // restic repository URL/path; no embedded credentials
+	Name string `json:"name"`
+	// Type is the storage backend (spec §17.1). Empty on input means
+	// "infer from Location" (an absolute path is local, anything else
+	// a custom restic repository string), for older callers.
+	Type backend.Type `json:"type"`
+	// Settings are the backend's non-secret settings (bucket, host...).
+	Settings backend.Settings `json:"settings"`
+	// Location is the restic repository string PutDestination
+	// generates from Type and Settings. On input it is only read when
+	// Settings is empty (the pre-typed "--location" shape).
+	Location string `json:"location"`
 	// PasswordCredential is the file NAME (not path) inside the
 	// credential directory holding the repository password.
 	PasswordCredential string `json:"password_credential"`
-	KeepDaily          int    `json:"keep_daily"`
-	KeepWeekly         int    `json:"keep_weekly"`
-	KeepMonthly        int    `json:"keep_monthly"`
+	// BackendCredential is the file NAME holding the backend's own
+	// credentials (access key pair or SSH key); empty when the type
+	// needs none.
+	BackendCredential string `json:"backend_credential,omitempty"`
+	KeepDaily         int    `json:"keep_daily"`
+	KeepWeekly        int    `json:"keep_weekly"`
+	KeepMonthly       int    `json:"keep_monthly"`
 }
 
 // Retention returns d's restic retention policy.
@@ -69,33 +86,68 @@ func (d Destination) Retention() restic.RetentionPolicy {
 	return restic.RetentionPolicy{KeepDaily: d.KeepDaily, KeepWeekly: d.KeepWeekly, KeepMonthly: d.KeepMonthly}
 }
 
-// locationUserinfoRE matches a URL scheme followed by embedded
-// userinfo ("scheme://user:pass@..."), the shape a credential leaked
-// into Location would take.
-var locationUserinfoRE = regexp.MustCompile(`://[^/@]*@`)
+// Target returns what backend.Resolver needs to open d's repository.
+func (d Destination) Target() backend.Target {
+	return backend.Target{
+		Name:               d.Name,
+		Type:               d.Type,
+		Settings:           d.Settings,
+		Location:           d.Location,
+		PasswordCredential: d.PasswordCredential,
+		BackendCredential:  d.BackendCredential,
+	}
+}
 
-// PutDestination inserts or updates a destination. name is validated;
-// Location must not embed backend credentials; PasswordCredential
-// defaults to "ballast-restic-password.<name>" when empty; the
-// retention policy must keep at least one snapshot somewhere (all-zero
-// would mean every backup is forgotten, which is never what a
-// retention setting means — restic.Repository.Forget rejects the same
-// shape).
-func PutDestination(db *sql.DB, d Destination) error {
+// Normalize validates d and fills everything PutDestination derives:
+// the inferred Type, Settings from a bare Location, the generated
+// Location, and default credential file names. It never touches the
+// database, so callers can validate a destination before saving it.
+func (d *Destination) Normalize() error {
 	if err := ValidateName(d.Name); err != nil {
 		return fmt.Errorf("destination: %w", err)
 	}
-	if d.Location == "" {
-		return fmt.Errorf("destination %s: location must not be empty", d.Name)
+	if d.Type == "" {
+		if d.Location == "" {
+			return fmt.Errorf("destination %s: choose a destination type (%s)", d.Name, typeNames())
+		}
+		d.Type = backend.Custom
+		if strings.HasPrefix(d.Location, "/") {
+			d.Type = backend.Local
+		}
 	}
-	if locationUserinfoRE.MatchString(d.Location) {
-		return fmt.Errorf("destination %s: location must not embed credentials (found user:pass@ in the URL); put backend credentials in a credential file instead", d.Name)
+	if d.Settings == (backend.Settings{}) {
+		switch d.Type {
+		case backend.Local:
+			d.Settings.Path = d.Location
+		case backend.Custom:
+			d.Settings.URL = d.Location
+		}
 	}
+	loc, err := backend.Location(d.Type, d.Settings)
+	if err != nil {
+		return fmt.Errorf("destination %s: %w", d.Name, err)
+	}
+	d.Location = loc
 	if d.PasswordCredential == "" {
 		d.PasswordCredential = "ballast-restic-password." + d.Name
 	}
 	if filepath.Base(d.PasswordCredential) != d.PasswordCredential {
 		return fmt.Errorf("destination %s: password credential file name %q must be a plain file name (no path separators)", d.Name, d.PasswordCredential)
+	}
+	if d.Type.CredentialKind() == backend.NoCredential {
+		if d.BackendCredential != "" {
+			return fmt.Errorf("destination %s: a %s destination does not use a backend credential file", d.Name, d.Type)
+		}
+	} else {
+		if d.BackendCredential == "" {
+			d.BackendCredential = d.Type.DefaultCredentialName(d.Name)
+		}
+		if filepath.Base(d.BackendCredential) != d.BackendCredential {
+			return fmt.Errorf("destination %s: backend credential file name %q must be a plain file name (no path separators)", d.Name, d.BackendCredential)
+		}
+		if d.BackendCredential == d.PasswordCredential {
+			return fmt.Errorf("destination %s: the backend credential file and the repository password file must be different files", d.Name)
+		}
 	}
 	if d.KeepDaily < 0 || d.KeepWeekly < 0 || d.KeepMonthly < 0 {
 		return fmt.Errorf("destination %s: retention counts must not be negative", d.Name)
@@ -103,19 +155,47 @@ func PutDestination(db *sql.DB, d Destination) error {
 	if d.KeepDaily == 0 && d.KeepWeekly == 0 && d.KeepMonthly == 0 {
 		return fmt.Errorf("destination %s: retention policy must keep at least one snapshot (keep_daily, keep_weekly and keep_monthly are all zero)", d.Name)
 	}
+	return nil
+}
 
+func typeNames() string {
+	names := make([]string, len(backend.Types))
+	for i, t := range backend.Types {
+		names[i] = string(t)
+	}
+	return strings.Join(names, ", ")
+}
+
+// PutDestination inserts or updates a destination after Normalize:
+// the name is validated, the restic repository string is generated
+// from Type and Settings (which rejects embedded credentials),
+// credential file names get their defaults, and the retention policy
+// must keep at least one snapshot somewhere (all-zero would mean every
+// backup is forgotten, which is never what a retention setting means —
+// restic.Repository.Forget rejects the same shape).
+func PutDestination(db *sql.DB, d Destination) error {
+	if err := d.Normalize(); err != nil {
+		return err
+	}
+	settings, err := json.Marshal(d.Settings)
+	if err != nil {
+		return fmt.Errorf("destination %s: encoding settings: %w", d.Name, err)
+	}
 	now := time.Now().UTC().Format(time.RFC3339Nano)
-	_, err := db.Exec(`
-		INSERT INTO destinations (name, location, password_credential, keep_daily, keep_weekly, keep_monthly, created_at, updated_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+	_, err = db.Exec(`
+		INSERT INTO destinations (name, type, settings_json, location, password_credential, backend_credential, keep_daily, keep_weekly, keep_monthly, created_at, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(name) DO UPDATE SET
+			type = excluded.type,
+			settings_json = excluded.settings_json,
 			location = excluded.location,
 			password_credential = excluded.password_credential,
+			backend_credential = excluded.backend_credential,
 			keep_daily = excluded.keep_daily,
 			keep_weekly = excluded.keep_weekly,
 			keep_monthly = excluded.keep_monthly,
 			updated_at = excluded.updated_at`,
-		d.Name, d.Location, d.PasswordCredential, d.KeepDaily, d.KeepWeekly, d.KeepMonthly, now, now,
+		d.Name, string(d.Type), string(settings), d.Location, d.PasswordCredential, d.BackendCredential, d.KeepDaily, d.KeepWeekly, d.KeepMonthly, now, now,
 	)
 	if err != nil {
 		return fmt.Errorf("saving destination %s: %w", d.Name, err)
@@ -123,13 +203,26 @@ func PutDestination(db *sql.DB, d Destination) error {
 	return nil
 }
 
+const destinationColumns = `name, type, settings_json, location, password_credential, backend_credential, keep_daily, keep_weekly, keep_monthly`
+
+type rowScanner interface{ Scan(dest ...any) error }
+
+func scanDestination(row rowScanner) (Destination, error) {
+	var d Destination
+	var typ, settings string
+	if err := row.Scan(&d.Name, &typ, &settings, &d.Location, &d.PasswordCredential, &d.BackendCredential, &d.KeepDaily, &d.KeepWeekly, &d.KeepMonthly); err != nil {
+		return Destination{}, err
+	}
+	d.Type = backend.Type(typ)
+	if err := json.Unmarshal([]byte(settings), &d.Settings); err != nil {
+		return Destination{}, fmt.Errorf("destination %s: decoding settings: %w", d.Name, err)
+	}
+	return d, nil
+}
+
 // GetDestination returns the named destination, or ErrNotFound.
 func GetDestination(db *sql.DB, name string) (Destination, error) {
-	var d Destination
-	err := db.QueryRow(`
-		SELECT name, location, password_credential, keep_daily, keep_weekly, keep_monthly
-		FROM destinations WHERE name = ?`, name,
-	).Scan(&d.Name, &d.Location, &d.PasswordCredential, &d.KeepDaily, &d.KeepWeekly, &d.KeepMonthly)
+	d, err := scanDestination(db.QueryRow(`SELECT `+destinationColumns+` FROM destinations WHERE name = ?`, name))
 	if errors.Is(err, sql.ErrNoRows) {
 		return Destination{}, fmt.Errorf("destination %s: %w", name, ErrNotFound)
 	}
@@ -141,9 +234,7 @@ func GetDestination(db *sql.DB, name string) (Destination, error) {
 
 // ListDestinations returns every configured destination, ordered by name.
 func ListDestinations(db *sql.DB) ([]Destination, error) {
-	rows, err := db.Query(`
-		SELECT name, location, password_credential, keep_daily, keep_weekly, keep_monthly
-		FROM destinations ORDER BY name`)
+	rows, err := db.Query(`SELECT ` + destinationColumns + ` FROM destinations ORDER BY name`)
 	if err != nil {
 		return nil, fmt.Errorf("listing destinations: %w", err)
 	}
@@ -155,8 +246,8 @@ func ListDestinations(db *sql.DB) ([]Destination, error) {
 	// on every "no destinations yet" case.
 	out := []Destination{}
 	for rows.Next() {
-		var d Destination
-		if err := rows.Scan(&d.Name, &d.Location, &d.PasswordCredential, &d.KeepDaily, &d.KeepWeekly, &d.KeepMonthly); err != nil {
+		d, err := scanDestination(rows)
+		if err != nil {
 			return nil, fmt.Errorf("listing destinations: %w", err)
 		}
 		out = append(out, d)

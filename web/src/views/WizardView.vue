@@ -125,10 +125,15 @@ async function start() {
     let dest = destExisting.value;
     if (destMode.value === "new") {
       const cred = `ballast-restic-password.${destName.value}`;
-      await api.createDestination(
-        { name: destName.value, location: destLocation.value, password_credential: cred, keep_daily: 7, keep_weekly: 4, keep_monthly: 6 },
-        true,
-      );
+      await api.createDestination({
+        name: destName.value,
+        type: "local",
+        settings: { path: destLocation.value },
+        keep_daily: 7,
+        keep_weekly: 4,
+        keep_monthly: 6,
+        init: true,
+      });
       createdPasswordFile.value = cred;
       destMode.value = "existing";
       destExisting.value = destName.value;

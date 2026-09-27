@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 
+	"github.com/springledev/ballast/internal/backend"
 	"github.com/springledev/ballast/internal/inventory"
 	"github.com/springledev/ballast/internal/notify"
 	"github.com/springledev/ballast/internal/scheduler"
@@ -430,9 +431,15 @@ func (h *handler) listDestinations(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, list)
 }
 
+// createDestinationBody is POST /api/v1/destinations' request shape:
+// the destination, write-only backend credentials, and whether to set
+// the repository up now.
 type createDestinationBody struct {
 	inventory.Destination
-	Init bool `json:"init"`
+	// Credentials are saved to a root-only credential file and never
+	// echoed back (spec rule 2).
+	Credentials backend.Credentials `json:"credentials"`
+	Init        bool                `json:"init"`
 }
 
 func (h *handler) createDestination(w http.ResponseWriter, r *http.Request) {
@@ -441,11 +448,20 @@ func (h *handler) createDestination(w http.ResponseWriter, r *http.Request) {
 		h.writeErr(w, err, http.StatusBadRequest)
 		return
 	}
-	if err := h.ops.PutDestination(r.Context(), body.Destination, body.Init); err != nil {
+	req := DestinationSetup{Destination: body.Destination, Credentials: body.Credentials, Init: body.Init}
+	if err := h.ops.SetupDestination(r.Context(), req); err != nil {
 		h.writeErr(w, err, http.StatusInternalServerError)
 		return
 	}
-	writeJSON(w, http.StatusCreated, body.Destination)
+	// Respond with what was saved (generated location, default
+	// credential file names), never the request body: that would echo
+	// the credentials straight back.
+	saved, err := h.ops.GetDestination(r.Context(), body.Name)
+	if err != nil {
+		h.writeErr(w, err, http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, http.StatusCreated, saved)
 }
 
 func (h *handler) deleteDestination(w http.ResponseWriter, r *http.Request) {

@@ -11,6 +11,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"github.com/springledev/ballast/internal/backend"
 	"io"
 	"os"
 	"path/filepath"
@@ -51,6 +52,10 @@ type Pipeline struct {
 	// WorkRoot is the parent of each service's stable per-run work
 	// directory (<WorkRoot>/<service>), typically <DataDir>/work.
 	WorkRoot string
+	// KnownHostsFile is where SFTP destinations' server host keys are
+	// remembered (backend.Resolver.KnownHostsFile), typically
+	// <DataDir>/ssh/known_hosts.
+	KnownHostsFile string
 	// Notifier delivers run-outcome notifications; nil disables them.
 	Notifier engine.Notifier
 	// Log receives one plain-English line per notable event. Nil
@@ -65,6 +70,18 @@ type Pipeline struct {
 	// binaries; empty resolves against $PATH. Tests point these at
 	// stubs.
 	ResticBin, DockerBin, PctBin string
+}
+
+// Resolver returns the backend.Resolver this pipeline opens
+// destination repositories with.
+func (p *Pipeline) Resolver() backend.Resolver {
+	return backend.Resolver{
+		CredDirs:       []string{p.CredDir, p.OwnCredDir},
+		Runner:         p.Runner,
+		ResticBin:      p.ResticBin,
+		Redact:         p.Redact,
+		KnownHostsFile: p.KnownHostsFile,
+	}
 }
 
 // Run backs up service: PREPARING → DUMPING → UPLOADING → VERIFYING →
@@ -157,15 +174,10 @@ func (p *Pipeline) Run(ctx context.Context, service string) (engine.State, error
 	if err != nil {
 		return fail(err)
 	}
-	pwFile := filepath.Join(runner.FindCredentialDir(dest.PasswordCredential, p.CredDir, p.OwnCredDir), dest.PasswordCredential)
-	// Read fresh for every run: a destination added, or a password
-	// file replaced, after Ballast started must still be redacted.
-	p.Redact.AddFile(pwFile)
-	repo, err := restic.Open(dest.Location, restic.Options{
-		Runner:       p.Runner,
-		PasswordFile: pwFile,
-		ResticBin:    p.ResticBin,
-	})
+	// Credential files are read fresh for every run (inside Open): a
+	// destination added, or a key file replaced, after Ballast started
+	// must still be redacted.
+	repo, err := p.Resolver().Open(dest.Target())
 	if err != nil {
 		return fail(err)
 	}

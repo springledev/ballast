@@ -232,6 +232,87 @@ func TestOpenRejectsQuestionMarkInPath(t *testing.T) {
 	}
 }
 
+// TestMigration007DestinationBackends exercises migration 007 in
+// isolation: a `destinations` table shaped exactly as migrations
+// 001-006 left it (006 only touched `services`, so 005's shape is
+// still current) gets two pre-existing rows — one with an absolute
+// local path, one with a raw restic repository string — and then the
+// 007 SQL itself is applied directly. store.Open always migrates a
+// fresh DB straight to the latest version, so there is no supported
+// way to stop it at 006; running the literal migration SQL against a
+// table in that shape is the simplest faithful reproduction.
+func TestMigration007DestinationBackends(t *testing.T) {
+	db, err := sql.Open("sqlite", filepath.Join(t.TempDir(), "mig007.db")+"?_pragma=foreign_keys(1)")
+	if err != nil {
+		t.Fatalf("opening sqlite: %v", err)
+	}
+	defer db.Close()
+
+	// The pre-007 (== post-005) destinations shape.
+	if _, err := db.Exec(`CREATE TABLE destinations (
+		name                TEXT PRIMARY KEY,
+		location            TEXT NOT NULL,
+		password_credential TEXT NOT NULL,
+		keep_daily   INTEGER NOT NULL DEFAULT 7,
+		keep_weekly  INTEGER NOT NULL DEFAULT 4,
+		keep_monthly INTEGER NOT NULL DEFAULT 6,
+		created_at TEXT NOT NULL,
+		updated_at TEXT NOT NULL
+	)`); err != nil {
+		t.Fatalf("creating pre-migration destinations table: %v", err)
+	}
+
+	now := "2024-01-01T00:00:00Z"
+	if _, err := db.Exec(
+		`INSERT INTO destinations (name, location, password_credential, created_at, updated_at) VALUES (?, ?, ?, ?, ?)`,
+		"local1", "/srv/b", "pw.local1", now, now,
+	); err != nil {
+		t.Fatalf("inserting local destination: %v", err)
+	}
+	if _, err := db.Exec(
+		`INSERT INTO destinations (name, location, password_credential, created_at, updated_at) VALUES (?, ?, ?, ?, ?)`,
+		"custom1", "rest:http://x/", "pw.custom1", now, now,
+	); err != nil {
+		t.Fatalf("inserting custom destination: %v", err)
+	}
+
+	sqlBytes, err := migrationsFS.ReadFile("migrations/007_destination_backends.sql")
+	if err != nil {
+		t.Fatalf("reading migration 007: %v", err)
+	}
+	if _, err := db.Exec(string(sqlBytes)); err != nil {
+		t.Fatalf("applying migration 007: %v", err)
+	}
+
+	tests := []struct {
+		name         string
+		wantType     string
+		wantSettings string
+	}{
+		{"local1", "local", `{"path":"/srv/b"}`},
+		{"custom1", "custom", `{"url":"rest:http://x/"}`},
+	}
+	for _, tt := range tests {
+		var typ, settings string
+		if err := db.QueryRow(`SELECT type, settings_json FROM destinations WHERE name = ?`, tt.name).Scan(&typ, &settings); err != nil {
+			t.Fatalf("querying %s: %v", tt.name, err)
+		}
+		if typ != tt.wantType {
+			t.Errorf("%s: type = %q, want %q", tt.name, typ, tt.wantType)
+		}
+		if settings != tt.wantSettings {
+			t.Errorf("%s: settings_json = %q, want %q", tt.name, settings, tt.wantSettings)
+		}
+		var backendCred string
+		if err := db.QueryRow(`SELECT backend_credential FROM destinations WHERE name = ?`, tt.name).Scan(&backendCred); err != nil {
+			t.Fatalf("querying %s backend_credential: %v", tt.name, err)
+		}
+		if backendCred != "" {
+			t.Errorf("%s: backend_credential = %q, want empty default", tt.name, backendCred)
+		}
+	}
+}
+
 func TestRollbackOnError(t *testing.T) {
 	boom := errors.New("boom")
 	tests := []struct {

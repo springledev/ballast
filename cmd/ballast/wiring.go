@@ -129,9 +129,11 @@ func openApp(cfg config.Config, logw io.Writer) (*app, error) {
 		CredDir:    cfg.CredentialsDir,
 		OwnCredDir: cfg.WritableCredentialsDir,
 		WorkRoot:   filepath.Join(cfg.DataDir, "work"),
-		Notifier:   adapter,
-		Log:        logw,
-		Redact:     secrets,
+
+		KnownHostsFile: filepath.Join(cfg.DataDir, "ssh", "known_hosts"),
+		Notifier:       adapter,
+		Log:            logw,
+		Redact:         secrets,
 	}
 
 	realRunner := scheduler.Runner(pl)
@@ -150,13 +152,14 @@ func openApp(cfg config.Config, logw io.Writer) (*app, error) {
 		Redact:      secrets,
 	}
 
+	resolver := pl.Resolver()
+	resolver.CredDirs = credDirs
 	repoFor := func(dest inventory.Destination) (*restic.Repository, error) {
-		pwFile := filepath.Join(execrunner.FindCredentialDir(dest.PasswordCredential, credDirs...), dest.PasswordCredential)
-		// Re-read on every use, not only at startup: a destination
-		// added (or a password file replaced) while `ballast serve`
-		// runs must be redacted before restic ever sees it.
-		secrets.AddFile(pwFile)
-		return restic.Open(dest.Location, restic.Options{Runner: r, PasswordFile: pwFile})
+		// Credential files are re-read on every use (inside Open), not
+		// only at startup: a destination added (or a key file replaced)
+		// while `ballast serve` runs must be redacted before restic
+		// ever sees it.
+		return resolver.Open(dest.Target())
 	}
 	ops := &api.Ops{DB: st.DB(), Catalog: reg, Coord: coord, Repo: repoFor, DestinationLocks: scheduler.FileLocker{Dir: filepath.Join(cfg.DataDir, "locks", "destinations")}, Runner: r, DockerBin: pl.DockerBin, CredentialsDir: cfg.WritableCredentialsDir, CredentialSearchDirs: credDirs, Redact: secrets, WorkRoot: pl.WorkRoot}
 

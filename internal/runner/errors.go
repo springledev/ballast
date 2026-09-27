@@ -26,6 +26,18 @@ func (e *ExitError) Error() string {
 	return fmt.Sprintf("%s exited with status %d: %s", e.Cmd, e.Code, e.Stderr)
 }
 
+// AbortError reports a command stopped early because its own stderr
+// showed a failure that retrying cannot fix (Command.AbortOn).
+type AbortError struct {
+	Cmd    string // program name
+	Stderr string // redacted stderr tail
+}
+
+// Error describes the failure in plain English.
+func (e *AbortError) Error() string {
+	return fmt.Sprintf("%s was stopped early because it reported a problem that retrying will not fix: %s", e.Cmd, e.Stderr)
+}
+
 // SignalError reports a command killed by a signal other than SIGPIPE
 // (a SIGPIPE death is the BrokenPipeError case instead).
 type SignalError struct {

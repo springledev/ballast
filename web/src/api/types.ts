@@ -26,13 +26,60 @@ export interface Service {
   containers?: Record<string, string>;
 }
 
+/** Which storage backend a destination uses. */
+export type DestinationType = "local" | "b2" | "s3" | "r2" | "sftp" | "custom";
+
+/**
+ * A destination's non-secret backend settings. Which fields apply
+ * depends on its type; the server rejects any others being sent.
+ */
+export interface DestinationSettings {
+  path?: string;
+  endpoint?: string;
+  bucket?: string;
+  region?: string;
+  account_id?: string;
+  host?: string;
+  port?: number;
+  user?: string;
+  url?: string;
+}
+
 export interface Destination {
   name: string;
+  type: DestinationType;
+  settings: DestinationSettings;
+  /** The restic repository string, derived from type + settings. */
   location: string;
   password_credential: string;
+  /** The credential file holding the backend's own key/secret, when it needs one. */
+  backend_credential?: string;
   keep_daily: number;
   keep_weekly: number;
   keep_monthly: number;
+}
+
+/**
+ * Credentials typed into a destination form. Write-only: the server
+ * never returns these, and leaving them empty on an update keeps
+ * whatever was already saved.
+ */
+export interface DestinationCredentials {
+  access_key_id?: string;
+  secret_access_key?: string;
+  ssh_private_key?: string;
+}
+
+/** POST /api/v1/destinations request body. */
+export interface CreateDestinationRequest {
+  name: string;
+  type: DestinationType;
+  settings: DestinationSettings;
+  keep_daily?: number;
+  keep_weekly?: number;
+  keep_monthly?: number;
+  init: boolean;
+  credentials?: DestinationCredentials;
 }
 
 export interface ScheduledJob {

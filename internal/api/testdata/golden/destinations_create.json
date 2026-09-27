@@ -6,6 +6,10 @@
     "keep_weekly": 0,
     "location": "/stub-repo",
     "name": "local",
-    "password_credential": ""
+    "password_credential": "ballast-restic-password.local",
+    "settings": {
+      "path": "/stub-repo"
+    },
+    "type": "local"
   }
 }

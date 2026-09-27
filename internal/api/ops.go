@@ -20,6 +20,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/springledev/ballast/internal/backend"
 	"github.com/springledev/ballast/internal/catalog"
 	"github.com/springledev/ballast/internal/detect"
 	"github.com/springledev/ballast/internal/engine"
@@ -66,12 +67,12 @@ type Ops struct {
 	ResticBin string
 
 	// CredentialSearchDirs lists every directory a credential file may
-	// already be in (config.Config.CredentialDirs). ensureLocalPassword
+	// already be in (config.Config.CredentialDirs). ensurePassword
 	// never generates a password that exists in any of them. Nil
 	// checks CredentialsDir only.
 	CredentialSearchDirs []string
 
-	// CredentialsDir is where PutDestination's ensureLocalPassword
+	// CredentialsDir is where PutDestination's ensurePassword
 	// writes a freshly generated repository password for a brand-new
 	// local-disk destination (spec §5.3.6). Empty disables
 	// auto-generation: PutDestination then behaves exactly as before,
@@ -678,7 +679,7 @@ func (o *Ops) SetSecret(ctx context.Context, service, name, value string) error 
 	// pipeline.Pipeline.resolveSecrets both search o.CredentialsDir
 	// last. Writing to it anyway would silently do nothing — the run
 	// would keep using the operator's value — so this fails loudly
-	// instead, the same guard PutDestination's ensureLocalPassword
+	// instead, the same guard PutDestination's ensurePassword
 	// already applies to a generated repository password.
 	for _, dir := range o.CredentialSearchDirs {
 		if dir == o.CredentialsDir {
@@ -721,38 +722,94 @@ func (o *Ops) ListDestinations(ctx context.Context) ([]inventory.Destination, er
 	return inventory.ListDestinations(o.DB)
 }
 
-// PutDestination configures a destination. When init is true, it also
-// initializes the restic repository at d.Location (`ballast
-// destination add --init`, or first-time API setup).
+// GetDestination returns one configured destination.
+func (o *Ops) GetDestination(ctx context.Context, name string) (inventory.Destination, error) {
+	d, err := inventory.GetDestination(o.DB, name)
+	if err != nil {
+		return inventory.Destination{}, wrapf("destination "+name, err)
+	}
+	return d, nil
+}
+
+// PutDestination configures a destination with no new backend
+// credentials (see SetupDestination). When init is true, it also
+// initializes the restic repository (`ballast destination add
+// --init`, or first-time API setup).
+func (o *Ops) PutDestination(ctx context.Context, d inventory.Destination, init bool) error {
+	return o.SetupDestination(ctx, DestinationSetup{Destination: d, Init: init})
+}
+
+// DestinationSetup is one "save destination" request: the non-secret
+// destination itself, plus the backend credentials the user typed
+// into the form, if any.
+type DestinationSetup struct {
+	Destination inventory.Destination
+	// Credentials are write-only: saved straight to the destination's
+	// root-only backend credential file (spec rule 2), never stored in
+	// the database and never returned. Empty keeps the existing file.
+	Credentials backend.Credentials
+	// Init also creates the restic repository when none exists yet,
+	// which proves the credentials and password work end to end.
+	Init bool
+}
+
+// SetupDestination saves a destination and, when req.Credentials is
+// set, its backend credential file; with req.Init it then makes sure
+// the repository exists, which is also the moment any bad key, wrong
+// bucket or unreachable server fails loudly.
 //
 // A failed init leaves nothing half-made behind: a destination that
-// did not exist before is removed again, and a repository password
+// did not exist before is removed again, a repository password
 // generated for it is deleted — otherwise a retry would silently
-// reuse a password that never opened anything.
-func (o *Ops) PutDestination(ctx context.Context, d inventory.Destination, init bool) (err error) {
+// reuse a password that never opened anything — and a credential file
+// written by this call is removed (or its previous contents restored).
+func (o *Ops) SetupDestination(ctx context.Context, req DestinationSetup) (err error) {
+	d := req.Destination
 	unlock, err := o.lockDestination(ctx, d.Name)
 	if err != nil {
 		return err
 	}
 	defer unlock()
 
+	if err := d.Normalize(); err != nil {
+		return fmt.Errorf("%w: %w", ErrValidation, wrapf("destination "+d.Name, err))
+	}
 	_, getErr := inventory.GetDestination(o.DB, d.Name)
 	if getErr != nil && !errors.Is(getErr, inventory.ErrNotFound) {
 		return wrapf("destination "+d.Name, getErr)
 	}
 	isNew := getErr != nil
 
-	if err := inventory.PutDestination(o.DB, d); err != nil {
-		return fmt.Errorf("%w: %w", ErrValidation, wrapf("destination "+d.Name, err))
+	var restoreCred func() error
+	if !req.Credentials.Empty() {
+		restoreCred, err = o.saveBackendCredential(d, req.Credentials)
+		if err != nil {
+			return o.redactErr(wrapf("destination "+d.Name, err))
+		}
+	} else if req.Init && d.BackendCredential != "" && !o.credentialExists(d.BackendCredential) {
+		return fmt.Errorf("destination %s: %w: %s", d.Name, ErrValidation, missingCredentialHelp(d.Type))
 	}
-	if !init {
+	undoCred := func() error {
+		if restoreCred == nil {
+			return nil
+		}
+		return restoreCred()
+	}
+
+	if err := inventory.PutDestination(o.DB, d); err != nil {
+		if uErr := undoCred(); uErr != nil {
+			err = errors.Join(err, uErr)
+		}
+		return o.redactErr(fmt.Errorf("%w: %w", ErrValidation, wrapf("destination "+d.Name, err)))
+	}
+	if !req.Init {
 		return nil
 	}
 	got, err := inventory.GetDestination(o.DB, d.Name)
 	if err != nil {
 		return wrapf("destination "+d.Name, err)
 	}
-	generated, err := o.ensureLocalPassword(got)
+	generated, err := o.ensurePassword(got)
 	if err != nil {
 		return wrapf("destination "+d.Name, err)
 	}
@@ -771,6 +828,9 @@ func (o *Ops) PutDestination(ctx context.Context, d inventory.Destination, init 
 			} else if rmErr := os.Remove(generated); rmErr != nil && !os.IsNotExist(rmErr) {
 				cleanup = append(cleanup, fmt.Errorf("removing the unused password file %s: %w", generated, rmErr))
 			}
+		}
+		if uErr := undoCred(); uErr != nil {
+			cleanup = append(cleanup, uErr)
 		}
 		if isNew {
 			if delErr := inventory.DeleteDestination(o.DB, d.Name); delErr != nil {
@@ -791,7 +851,7 @@ func (o *Ops) PutDestination(ctx context.Context, d inventory.Destination, init 
 		if generated != "" && restic.IsWrongPassword(err) {
 			otherRepo = true
 			return o.redactErr(fmt.Errorf(
-				"destination %s: there is already a backup repository in %s, but Ballast does not have its password. "+
+				"destination %s: there is already a backup repository at %s, but Ballast does not have its password. "+
 					"Put that repository's original password in %s and try again, or choose an empty folder for a new repository: %w",
 				d.Name, got.Location, generated, err))
 		}
@@ -800,8 +860,115 @@ func (o *Ops) PutDestination(ctx context.Context, d inventory.Destination, init 
 	return nil
 }
 
-// ensureLocalPassword generates and saves a repository password for a
-// brand-new local-disk destination when its credential file does not
+// missingCredentialHelp explains, per backend, which credentials a
+// destination still needs.
+func missingCredentialHelp(t backend.Type) string {
+	switch t.CredentialKind() {
+	case backend.SSHCredential:
+		return "an SFTP destination needs an SSH private key; paste one into the form (or use --ssh-key-file on the command line)"
+	case backend.AWSCredential:
+		return "this destination needs an access key ID and secret access key from your storage provider; enter them in the form (or use --access-key-id on the command line)"
+	}
+	return "credentials are missing"
+}
+
+// credentialExists reports whether a credential file named name is in
+// any credential directory.
+func (o *Ops) credentialExists(name string) bool {
+	dirs := o.CredentialSearchDirs
+	if len(dirs) == 0 {
+		dirs = []string{o.CredentialsDir}
+	}
+	for _, dir := range dirs {
+		if dir == "" {
+			continue
+		}
+		if _, err := os.Lstat(filepath.Join(dir, name)); err == nil {
+			return true
+		}
+	}
+	return false
+}
+
+// saveBackendCredential renders creds for d's backend and writes them
+// to d's backend credential file (0600) in the writable credential
+// directory, registering every secret with Redact first. The user
+// typed these values, so replacing an existing file is expected
+// (rotating a key), unlike a generated repository password. It
+// returns a func that undoes the write: removing a new file, or
+// restoring the previous contents.
+func (o *Ops) saveBackendCredential(d inventory.Destination, creds backend.Credentials) (func() error, error) {
+	data, secrets, err := backend.RenderCredentials(d.Type.CredentialKind(), creds)
+	if err != nil {
+		return nil, fmt.Errorf("%w: %w", ErrValidation, err)
+	}
+	o.Redact.Add(secrets...)
+	if o.CredentialsDir == "" {
+		return nil, fmt.Errorf("%w: no writable credential directory is configured", ErrValidation)
+	}
+	// An operator-provided file of the same name (e.g. LoadCredential=)
+	// always wins over one saved here, so saving would silently do
+	// nothing — fail loudly instead, like SetSecret does.
+	for _, dir := range o.CredentialSearchDirs {
+		if dir == o.CredentialsDir {
+			continue
+		}
+		if _, err := os.Lstat(filepath.Join(dir, d.BackendCredential)); err == nil {
+			return nil, fmt.Errorf("%w: a credential file named %q already exists in %s (likely provided by the operator); it takes precedence over anything Ballast saves itself, so edit or replace that file directly instead", ErrValidation, d.BackendCredential, dir)
+		}
+	}
+	if err := os.MkdirAll(o.CredentialsDir, 0o700); err != nil {
+		return nil, fmt.Errorf("creating credential directory %s: %w", o.CredentialsDir, err)
+	}
+	path := filepath.Join(o.CredentialsDir, d.BackendCredential)
+	prev, readErr := os.ReadFile(path)
+	existed := readErr == nil
+	if readErr != nil && !os.IsNotExist(readErr) {
+		return nil, fmt.Errorf("reading existing credential file %s: %w", path, readErr)
+	}
+	if err := writePrivateFile(path, data); err != nil {
+		return nil, fmt.Errorf("saving credentials to %s: %w", path, err)
+	}
+	return func() error {
+		if existed {
+			if err := writePrivateFile(path, prev); err != nil {
+				return fmt.Errorf("restoring the previous credential file %s: %w", path, err)
+			}
+			return nil
+		}
+		if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+			return fmt.Errorf("removing the unused credential file %s: %w", path, err)
+		}
+		return nil
+	}, nil
+}
+
+// writePrivateFile writes data to path atomically (temp file +
+// rename) with 0600 permissions, so a reader never sees a half-written
+// key file and an existing file's looser mode is never inherited.
+func writePrivateFile(path string, data []byte) error {
+	f, err := os.CreateTemp(filepath.Dir(path), "."+filepath.Base(path)+".tmp-*")
+	if err != nil {
+		return err
+	}
+	tmp := f.Name()
+	defer os.Remove(tmp)
+	if err := f.Chmod(0o600); err != nil {
+		f.Close()
+		return err
+	}
+	if _, err := f.Write(data); err != nil {
+		f.Close()
+		return err
+	}
+	if err := f.Close(); err != nil {
+		return err
+	}
+	return os.Rename(tmp, path)
+}
+
+// ensurePassword generates and saves a repository password for a
+// brand-new destination when its credential file does not
 // exist yet, so neither the CLI wizard nor the GUI wizard/Destinations
 // page ever asks a first-time user to invent or paste a secret for
 // the common case (spec §5.3.6, spec rule 2: it is written straight
@@ -810,13 +977,12 @@ func (o *Ops) PutDestination(ctx context.Context, d inventory.Destination, init 
 // genuine gap. It returns the path of the file it wrote, or "" when
 // it wrote nothing.
 //
-// It only applies to local filesystem destinations (an absolute
-// path): a remote backend (s3:, b2:, sftp:, ...) is inherently an
-// advanced setup that already requires provider-specific credentials
-// the operator must supply themselves, so a missing file there stays
-// exactly the loud, actionable error it was before.
-func (o *Ops) ensureLocalPassword(d inventory.Destination) (string, error) {
-	if !filepath.IsAbs(d.Location) || o.CredentialsDir == "" || d.PasswordCredential == "" {
+// This applies to every backend type: a beginner adding a B2 bucket
+// from the web UI should no more have to invent a repository password
+// than one adding a local folder (spec §17 acceptance: "install → B2
+// destination → ... entirely in the UI").
+func (o *Ops) ensurePassword(d inventory.Destination) (string, error) {
+	if o.CredentialsDir == "" || d.PasswordCredential == "" {
 		return "", nil
 	}
 	// A password the operator already provided in any credential
@@ -889,7 +1055,8 @@ func ensureRepoInitialized(ctx context.Context, repo *restic.Repository) error {
 	switch {
 	case err == nil:
 		return nil
-	case restic.IsRepoMissing(err):
+	case restic.IsRepoMissing(err), restic.IsBucketMissing(err):
+		// restic init also creates a bucket that does not exist yet.
 		return repo.Init(ctx)
 	case restic.IsWrongPassword(err):
 		return err
@@ -924,7 +1091,7 @@ func (o *Ops) repoMayHoldData(dest inventory.Destination) bool {
 	probeCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 	_, err = repo.Snapshots(probeCtx, restic.SnapshotFilter{Latest: 1})
-	return !restic.IsRepoMissing(err)
+	return !restic.IsRepoMissing(err) && !restic.IsBucketMissing(err)
 }
 
 // DeleteDestination removes a configured destination (ErrInUse if a
@@ -936,7 +1103,8 @@ func (o *Ops) DeleteDestination(ctx context.Context, name string) error {
 	return nil
 }
 
-// TestDestination checks that a destination is reachable, for the
+// TestDestination checks that a destination is reachable and that its
+// credentials and repository password work, for the
 // GUI/CLI "Test connection" action (spec §10).
 func (o *Ops) TestDestination(ctx context.Context, name string) error {
 	dest, err := inventory.GetDestination(o.DB, name)
@@ -947,8 +1115,14 @@ func (o *Ops) TestDestination(ctx context.Context, name string) error {
 	if err != nil {
 		return wrapf("destination "+name, err)
 	}
+	// A read of the repository itself, not a mere ping: it needs the
+	// backend credentials and the repository password to both work
+	// (spec §17.1 "validates credentials, not just reachability").
 	if _, err := repo.Snapshots(ctx, restic.SnapshotFilter{Latest: 1}); err != nil {
-		return o.redactErr(fmt.Errorf("could not reach destination %s: %w", name, err))
+		if restic.IsRepoMissing(err) {
+			return o.redactErr(fmt.Errorf("destination %s: Ballast reached %s and was let in, but there is no backup repository there yet — save the destination with \"set up the repository\" ticked (or run `ballast destination add --init`) to create it: %w", name, dest.Location, err))
+		}
+		return o.redactErr(fmt.Errorf("could not use destination %s: %w", name, err))
 	}
 	return nil
 }

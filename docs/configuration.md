@@ -109,7 +109,7 @@ startup — never what's inside any file.
 
 ### Credential file names
 
-Each file holds exactly one secret as plain text (a trailing newline
+Each file holds one secret as plain text (a trailing newline
 is fine). `<service>` and `<destination>` below are the names you gave
 those things (`ballast service add <service>`, `ballast destination
 add <destination>`).
@@ -118,6 +118,8 @@ add <destination>`).
 |---|---|---|
 | `ballast-api-token` | The bearer token `ballast serve`'s REST API (and the web UI) requires on every request. | You. Generate one yourself — see [systemd.md](systemd.md). |
 | `ballast-restic-password.<destination>` | The restic repository password for that destination. | Either. The wizard and `ballast destination add` generate and save one automatically if none exists; you can provide your own instead by placing a file of this name first. |
+| `ballast-dest-keys.<destination>` | The access key pair for a Backblaze B2, S3 or Cloudflare R2 destination, as an AWS-style credentials file (`[default]`, `aws_access_key_id = …`, `aws_secret_access_key = …`). For B2 that's the application key ID and application key. | Either. The web UI's destination form and `ballast destination add --access-key-id` write it for you; you can provide your own instead. |
+| `ballast-dest-ssh-key.<destination>` | The SSH private key (no passphrase) Ballast logs in to an SFTP destination with. Add its public key to the server's `~/.ssh/authorized_keys`. The server's host key is remembered in `<data dir>/ssh/known_hosts` the first time Ballast connects. | Either. The web UI's form and `ballast destination add --ssh-key-file` save it for you. |
 | `ballast-ntfy-topic.<service>` | The full ntfy URL to POST alerts to for that service (e.g. `https://ntfy.sh/my-secret-topic`, not just the topic name). | Either. The wizard writes one when you paste a link into it. |
 | `ballast-ntfy-topic` | Same, but used for any service that has no per-service file. | You. |
 | `ballast-webhook-url.<service>` | The webhook URL to POST alert JSON to for that service. | You. |

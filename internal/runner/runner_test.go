@@ -118,6 +118,11 @@ func TestHelperProcess(t *testing.T) {
 			fmt.Fprintln(os.Stdout, os.Getenv(k))
 		}
 		os.Exit(0)
+	case "retrier": // retrier <msg>: print "try N: <msg>" to stderr every 50ms, forever
+		for i := 0; ; i++ {
+			fmt.Fprintf(os.Stderr, "try %d: %s\n", i, args[0])
+			time.Sleep(50 * time.Millisecond)
+		}
 	case "bigerr": // bigerr <n>: write numbered lines to stderr, exit 1
 		n := helperInt(args[0])
 		for i := 0; i < n; i++ {
@@ -629,5 +634,76 @@ func TestPipelineRejectsEmptyName(t *testing.T) {
 	r := &Runner{}
 	if _, err := r.Pipeline(context.Background(), nil, nil, Command{Name: ""}); err == nil {
 		t.Error("empty program name must be rejected")
+	}
+}
+
+// TestAbortOn checks that a matching stderr line stops a command that
+// would otherwise run forever (restic retrying a rejected key), that a
+// non-matching command is left alone, and that the caller's own
+// cancellation is still reported as cancellation, not an abort.
+func TestAbortOn(t *testing.T) {
+	tests := []struct {
+		name      string
+		cmd       Command
+		timeout   time.Duration
+		wantAbort bool
+		wantCtx   bool
+		wantOK    bool
+	}{
+		{
+			name:      "matching line aborts",
+			cmd:       helperCommand("retrier", "SignatureDoesNotMatch"),
+			timeout:   20 * time.Second,
+			wantAbort: true,
+		},
+		{
+			name:    "no match runs until canceled",
+			cmd:     helperCommand("retrier", "temporary glitch"),
+			timeout: 400 * time.Millisecond,
+			wantCtx: true,
+		},
+		{
+			name:    "successful command unaffected",
+			cmd:     helperCommand("err", "SignatureDoesNotMatch-but-no-retry"),
+			timeout: 20 * time.Second,
+			wantOK:  true,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ctx, cancel := context.WithTimeout(context.Background(), tt.timeout)
+			defer cancel()
+			c := tt.cmd
+			c.AbortOn = func(line string) bool {
+				return strings.Contains(line, "try 2:") && strings.Contains(line, "SignatureDoesNotMatch")
+			}
+			r := &Runner{Redact: secret.NewSet("SignatureDoesNotMatch")}
+			start := time.Now()
+			_, err := r.Run(ctx, nil, nil, c)
+			var ab *AbortError
+			switch {
+			case tt.wantAbort:
+				if !errors.As(err, &ab) {
+					t.Fatalf("want *AbortError, got %v", err)
+				}
+				if time.Since(start) > 10*time.Second {
+					t.Fatalf("abort took %v", time.Since(start))
+				}
+				if !strings.Contains(ab.Stderr, "try 2:") {
+					t.Errorf("abort error lacks the matching stderr line: %q", ab.Stderr)
+				}
+				if strings.Contains(ab.Error(), "SignatureDoesNotMatch") {
+					t.Errorf("abort error is not redacted: %q", ab.Error())
+				}
+			case tt.wantCtx:
+				if errors.As(err, &ab) || !errors.Is(err, context.DeadlineExceeded) {
+					t.Fatalf("want context deadline error, got %v", err)
+				}
+			case tt.wantOK:
+				if err != nil {
+					t.Fatalf("want success, got %v", err)
+				}
+			}
+		})
 	}
 }

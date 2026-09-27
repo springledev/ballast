@@ -88,6 +88,11 @@ type Repository struct {
 	// Plaintext secrets must never be placed here.
 	Env []string
 
+	// ExtendedOptions are restic `-o key=value` backend options (e.g.
+	// "sftp.args=-i /path/to/key") passed ahead of every subcommand.
+	// Like Env they carry file paths and settings, never secrets.
+	ExtendedOptions []string
+
 	// Runner executes restic. Required.
 	Runner *runner.Runner
 
@@ -107,6 +112,9 @@ type Options struct {
 
 	// Env is extra non-secret environment (credential file paths).
 	Env []string
+
+	// ExtendedOptions are restic `-o key=value` backend options.
+	ExtendedOptions []string
 
 	// ResticBin overrides the restic binary (tests).
 	ResticBin string
@@ -134,12 +142,18 @@ func Open(location string, opts Options) (*Repository, error) {
 			return nil, fmt.Errorf("restic: environment entries must be in KEY=VALUE form (got an entry without a key)")
 		}
 	}
+	for _, o := range opts.ExtendedOptions {
+		if k, _, ok := strings.Cut(o, "="); !ok || k == "" {
+			return nil, fmt.Errorf("restic: backend options must be in key=value form (got %q)", o)
+		}
+	}
 	return &Repository{
-		Location:     location,
-		PasswordFile: opts.PasswordFile,
-		Env:          opts.Env,
-		Runner:       opts.Runner,
-		ResticBin:    opts.ResticBin,
+		Location:        location,
+		PasswordFile:    opts.PasswordFile,
+		Env:             opts.Env,
+		ExtendedOptions: opts.ExtendedOptions,
+		Runner:          opts.Runner,
+		ResticBin:       opts.ResticBin,
 	}, nil
 }
 
@@ -193,7 +207,45 @@ func (r *Repository) command(args ...string) runner.Command {
 	if r.PasswordFile != "" {
 		env = append(env, "RESTIC_PASSWORD_FILE="+r.PasswordFile)
 	}
-	return runner.Command{Name: r.bin(), Args: args, Env: env}
+	full := make([]string, 0, 2*len(r.ExtendedOptions)+len(args))
+	for _, o := range r.ExtendedOptions {
+		full = append(full, "-o", o)
+	}
+	full = append(full, args...)
+	return runner.Command{Name: r.bin(), Args: full, Env: env, AbortOn: permanentBackendError}
+}
+
+// permanentBackendRetry are storage-provider errors restic keeps
+// retrying (for up to 15 minutes) although no retry can fix them: a
+// rejected key or a missing bucket. restic prints each retry to
+// stderr as "<op> returned error, retrying after <d>: <error>".
+var permanentBackendRetry = []string{
+	"signature we calculated does not match",
+	"SignatureDoesNotMatch",
+	"InvalidAccessKeyId",
+	"Access Key Id you provided does not exist",
+	"AccessDenied",
+	"Access Denied",
+	"NoSuchBucket",
+	"bucket does not exist",
+}
+
+// permanentBackendError reports whether a restic stderr line is a
+// retry of a failure that retrying cannot fix, so the command is
+// stopped at once instead of making a beginner with a mistyped key
+// wait 15 minutes for the same answer. It only ever shortens a
+// failure: it matches retry lines only, and the command fails either
+// way (spec §8: never decide success from parsed text).
+func permanentBackendError(line string) bool {
+	if !strings.Contains(line, "returned error, retrying after") {
+		return false
+	}
+	for _, p := range permanentBackendRetry {
+		if strings.Contains(line, p) {
+			return true
+		}
+	}
+	return false
 }
 
 // run executes one restic command to completion, capturing stdout.
@@ -218,6 +270,13 @@ func (r *Repository) explain(op string, err error) error {
 	if errors.Is(err, exec.ErrNotFound) {
 		return fmt.Errorf("%s: restic is not installed, or not on $PATH — install it from https://restic.readthedocs.io/en/stable/020_installation.html and try again: %w", op, err)
 	}
+	var ab *runner.AbortError
+	if errors.As(err, &ab) {
+		if hint := backendHint(ab.Stderr); hint != "" {
+			return fmt.Errorf("%s for repository %s: %s: %w", op, r.Location, hint, err)
+		}
+		return fmt.Errorf("%s for repository %s: %w", op, r.Location, err)
+	}
 	var ee *runner.ExitError
 	if !errors.As(err, &ee) {
 		return fmt.Errorf("%s for repository %s: %w", op, r.Location, err)
@@ -230,8 +289,40 @@ func (r *Repository) explain(op string, err error) error {
 	case exitWrongPassword:
 		return fmt.Errorf("%s: the repository password for %s is wrong (check the password file's contents; the file path is logged, its contents never are): %w", op, r.Location, err)
 	default:
+		if hint := backendHint(ee.Stderr); hint != "" {
+			return fmt.Errorf("%s for repository %s: %s: %w", op, r.Location, hint, err)
+		}
 		return fmt.Errorf("%s for repository %s: %w", op, r.Location, err)
 	}
+}
+
+// backendHints maps well-known storage-provider error phrases in
+// restic's stderr onto a plain-English likely cause. They only add an
+// explanation in front of the original error, which is always kept in
+// full — no decision is ever made from this text (spec §8).
+var backendHints = []struct{ needle, hint string }{
+	{"InvalidAccessKeyId", "the storage provider does not recognize the access key ID — check it was copied completely"},
+	{"Access Key Id you provided does not exist", "the storage provider does not recognize the access key ID — check it was copied completely"},
+	{"signature we calculated does not match", "the secret access key (application key) is wrong — check it was copied completely"},
+	{"SignatureDoesNotMatch", "the secret access key (application key) is wrong — check it was copied completely"},
+	{"NoSuchBucket", "the bucket does not exist — check its name and the endpoint/region"},
+	{"specified bucket does not exist", "the bucket does not exist — check its name and the endpoint/region"},
+	{"AccessDenied", "the key was accepted but is not allowed to use this bucket — check the key's permissions"},
+	{"Permission denied (publickey", "the SFTP server rejected the SSH key — add its public key to the server's authorized_keys"},
+	{"Host key verification failed", "the SFTP server's host key changed since Ballast first connected — if that is expected, remove its line from Ballast's known_hosts file"},
+	{"Could not resolve hostname", "the server name could not be found — check the host name"},
+	{"no such host", "the server name could not be found — check the host name or endpoint"},
+	{"connection refused", "nothing is accepting connections at that address — check the host, port or endpoint"},
+}
+
+// backendHint returns the first matching hint for stderr, or "".
+func backendHint(stderr string) string {
+	for _, h := range backendHints {
+		if strings.Contains(stderr, h.needle) {
+			return h.hint
+		}
+	}
+	return ""
 }
 
 // IsRepoMissing reports whether err is restic's own "repository does
@@ -246,6 +337,21 @@ func (r *Repository) explain(op string, err error) error {
 func IsRepoMissing(err error) bool {
 	var ee *runner.ExitError
 	return errors.As(err, &ee) && ee.Code == exitRepoMissing
+}
+
+// IsBucketMissing reports whether err is an S3-compatible backend
+// saying the repository's bucket does not exist (restic retries this,
+// so it arrives as the early-stop *runner.AbortError). restic init
+// creates a missing bucket itself, so setup treats this like
+// IsRepoMissing. It is only ever used to decide to *try* init, which
+// fails loudly on its own if the bucket cannot be created — never to
+// decide success from parsed text (spec §8).
+func IsBucketMissing(err error) bool {
+	var ab *runner.AbortError
+	if !errors.As(err, &ab) {
+		return false
+	}
+	return strings.Contains(ab.Stderr, "NoSuchBucket") || strings.Contains(ab.Stderr, "bucket does not exist")
 }
 
 // IsWrongPassword reports whether err is restic's "wrong password"

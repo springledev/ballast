@@ -239,7 +239,7 @@ func createLocalDestination(ctx context.Context, a *app, in *bufio.Reader, out i
 
 	// PutDestination itself generates and saves a repository password
 	// when this is a new local-disk destination with no credential
-	// file yet (internal/api.Ops.ensureLocalPassword) — shared with the
+	// file yet (internal/api.Ops.ensurePassword) — shared with the
 	// GUI wizard and the plain "add destination" form, so a beginner is
 	// never asked to invent or paste a secret through any of them.
 	credName := "ballast-restic-password." + name

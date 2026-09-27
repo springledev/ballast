@@ -65,8 +65,11 @@ func resetCLIFlags() {
 	serviceCatalogEntry, serviceDestination = "", ""
 	serviceParams, serviceContainers, serviceSecrets = nil, nil, nil
 
-	destLocation, destPasswordCredential, destInit = "", "", false
+	destLocation, destType, destPasswordCredential, destInit = "", "", "", false
 	destKeepDaily, destKeepWeekly, destKeepMonthly = 7, 4, 6
+	destPath, destEndpoint, destBucket, destRegion = "", "", "", ""
+	destAccountID, destHost, destPort, destUser, destURL = "", "", 0, "", ""
+	destAccessKeyID, destSSHKeyFile = "", ""
 
 	notifyEnabled, notifyMaxAgeHours, notifyHeartbeat = true, 0, false
 
