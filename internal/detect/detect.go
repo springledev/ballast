@@ -12,6 +12,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/springledev/ballast/internal/dockerhost"
 	"os/exec"
 	"regexp"
 	"sort"
@@ -33,16 +34,16 @@ type Container struct {
 // reachable) is the caller's to report — detection is always a
 // best-effort convenience, never a hard requirement (a service can
 // always be added manually).
-func ListRunning(ctx context.Context, r *runner.Runner) ([]Container, error) {
-	res, err := r.Run(ctx, nil, nil, runner.Command{
-		Name: "docker",
-		Args: []string{"ps", "--format", "{{.Names}}\t{{.Image}}"},
-	})
+func ListRunning(ctx context.Context, r *runner.Runner, d dockerhost.Docker) ([]Container, error) {
+	res, err := r.Run(ctx, nil, nil, d.Command(nil, "ps", "--format", "{{.Names}}\t{{.Image}}"))
 	if err != nil {
 		if errors.Is(err, exec.ErrNotFound) {
 			return nil, fmt.Errorf("docker is not installed, or not on $PATH: %w", err)
 		}
-		return nil, fmt.Errorf("listing running Docker containers: %w", err)
+		if hint := dockerhost.Hint(err, res.Stderr); hint != "" {
+			return nil, fmt.Errorf("listing running Docker containers on host %s: %s: %w", d.Name(), hint, err)
+		}
+		return nil, fmt.Errorf("listing running Docker containers on host %s: %w", d.Name(), err)
 	}
 	out := []Container{}
 	for _, line := range strings.Split(strings.TrimRight(string(res.Stdout), "\n"), "\n") {
@@ -73,15 +74,12 @@ func ListRunning(ctx context.Context, r *runner.Runner) ([]Container, error) {
 // than one match is ambiguous. Both are hard errors — resolution
 // failure MUST fail the job loudly, and Ballast MUST NOT silently fall
 // back past the entry's own declared fallback (spec §6.1).
-func ResolveDiscovery(ctx context.Context, r *runner.Runner, dockerBin string, discovery map[string]catalog.DiscoveryRule, params map[string]string) (map[string]string, error) {
+func ResolveDiscovery(ctx context.Context, r *runner.Runner, d dockerhost.Docker, discovery map[string]catalog.DiscoveryRule, params map[string]string) (map[string]string, error) {
 	if len(discovery) == 0 {
 		return nil, nil
 	}
 	if r == nil {
 		return nil, fmt.Errorf("container discovery is unavailable: no command runner is configured")
-	}
-	if dockerBin == "" {
-		dockerBin = "docker"
 	}
 	names := make([]string, 0, len(discovery))
 	for name := range discovery {
@@ -98,7 +96,7 @@ func ResolveDiscovery(ctx context.Context, r *runner.Runner, dockerBin string, d
 		if rule.Match == "" {
 			return nil, fmt.Errorf("discovery %q: match must not be empty", name)
 		}
-		matches, err := matchByLabel(ctx, r, dockerBin, rule.Match)
+		matches, err := matchByLabel(ctx, r, d, rule.Match)
 		if err != nil {
 			return nil, fmt.Errorf("discovery %q: %w", name, err)
 		}
@@ -131,8 +129,8 @@ func ResolveDiscovery(ctx context.Context, r *runner.Runner, dockerBin string, d
 // stopped), it resolves every rule from its declared fallback alone.
 // If any rule has no usable fallback, the original Docker error is
 // returned.
-func ResolveDiscoveryOffline(ctx context.Context, r *runner.Runner, dockerBin string, discovery map[string]catalog.DiscoveryRule, params map[string]string) (map[string]string, error) {
-	out, liveErr := ResolveDiscovery(ctx, r, dockerBin, discovery, params)
+func ResolveDiscoveryOffline(ctx context.Context, r *runner.Runner, d dockerhost.Docker, discovery map[string]catalog.DiscoveryRule, params map[string]string) (map[string]string, error) {
+	out, liveErr := ResolveDiscovery(ctx, r, d, discovery, params)
 	if liveErr == nil {
 		return out, nil
 	}
@@ -152,16 +150,13 @@ func ResolveDiscoveryOffline(ctx context.Context, r *runner.Runner, dockerBin st
 
 // matchByLabel lists the names of running containers whose labels
 // match a "label=value" `docker ps --filter` expression.
-func matchByLabel(ctx context.Context, r *runner.Runner, dockerBin, match string) ([]string, error) {
-	res, err := r.Run(ctx, nil, nil, runner.Command{
-		Name: dockerBin,
-		Args: []string{"ps", "--filter", "label=" + match, "--format", "{{.Names}}"},
-	})
+func matchByLabel(ctx context.Context, r *runner.Runner, d dockerhost.Docker, match string) ([]string, error) {
+	res, err := r.Run(ctx, nil, nil, d.Command(nil, "ps", "--filter", "label="+match, "--format", "{{.Names}}"))
 	if err != nil {
 		if errors.Is(err, exec.ErrNotFound) {
 			return nil, fmt.Errorf("docker is not installed, or not on $PATH: %w", err)
 		}
-		return nil, fmt.Errorf("listing containers matching label %q: %w", match, err)
+		return nil, fmt.Errorf("listing containers matching label %q on Docker host %s: %w", match, d.Name(), err)
 	}
 	var out []string
 	for _, line := range strings.Split(strings.TrimRight(string(res.Stdout), "\n"), "\n") {

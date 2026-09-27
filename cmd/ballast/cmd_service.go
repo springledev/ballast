@@ -11,6 +11,7 @@ import (
 var (
 	serviceCatalogEntry string
 	serviceDestination  string
+	serviceDockerHost   string
 	serviceParams       []string
 	serviceContainers   []string
 	serviceSecrets      []string
@@ -52,13 +53,16 @@ var serviceAddCmd = &cobra.Command{
 		}
 		return withApp(cfg, cmd.ErrOrStderr(), func(a *app) error {
 			s := inventory.Service{
-				Name: args[0], CatalogEntry: serviceCatalogEntry, Destination: serviceDestination,
+				Name: args[0], CatalogEntry: serviceCatalogEntry, Destination: serviceDestination, DockerHost: serviceDockerHost,
 				Params: params, Containers: containers, Secrets: secrets,
 			}
 			if err := a.ops.PutService(cmd.Context(), s); err != nil {
 				return err
 			}
 			cmd.Printf("%s: configured (catalog entry %s, destination %s)\n", args[0], serviceCatalogEntry, serviceDestination)
+			if serviceDockerHost != "" {
+				cmd.Printf("  Docker host: %s\n", serviceDockerHost)
+			}
 			return nil
 		})
 	},
@@ -82,7 +86,7 @@ var serviceListCmd = &cobra.Command{
 				return nil
 			}
 			for _, s := range list {
-				cmd.Printf("%s\tcatalog=%s\tdestination=%s\n", s.Name, s.CatalogEntry, s.Destination)
+				cmd.Printf("%s\tcatalog=%s\tdestination=%s\thost=%s\n", s.Name, s.CatalogEntry, s.Destination, s.DockerHost)
 			}
 			return nil
 		})
@@ -114,6 +118,7 @@ var serviceRemoveCmd = &cobra.Command{
 func registerServiceCommands(root *cobra.Command) {
 	serviceAddCmd.Flags().StringVar(&serviceCatalogEntry, "catalog", "", "catalog entry to back this service with (required)")
 	serviceAddCmd.Flags().StringVar(&serviceDestination, "destination", "", "destination to back up to (required)")
+	serviceAddCmd.Flags().StringVar(&serviceDockerHost, "host", "", "Docker host this service's containers run on (default: local)")
 	serviceAddCmd.Flags().StringArrayVar(&serviceParams, "param", nil, "catalog parameter as key=value (repeatable)")
 	serviceAddCmd.Flags().StringArrayVar(&serviceContainers, "container", nil, "detected container as key=value (repeatable)")
 	serviceAddCmd.Flags().StringArrayVar(&serviceSecrets, "secret", nil,

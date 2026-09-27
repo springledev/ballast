@@ -3,8 +3,12 @@ import type {
   ApiErrorBody,
   CatalogSummary,
   CreateDestinationRequest,
+  CreateDockerHostRequest,
+  CreateDockerHostResponse,
   Destination,
   DetectResult,
+  DockerHost,
+  DockerHostTestResult,
   NotificationSettings,
   PreflightResult,
   ScheduledJob,
@@ -83,8 +87,8 @@ export const api = {
   catalog(): Promise<CatalogSummary[]> {
     return request("GET", `${base}/catalog`);
   },
-  detect(): Promise<DetectResult> {
-    return request("GET", `${base}/detect`);
+  detect(host?: string): Promise<DetectResult> {
+    return request("GET", `${base}/detect${host ? `?host=${encodeURIComponent(host)}` : ""}`);
   },
   preflight(): Promise<PreflightResult> {
     return request("GET", `${base}/preflight`);
@@ -154,5 +158,19 @@ export const api = {
   },
   testDestination(name: string): Promise<{ ok: boolean }> {
     return request("POST", `${base}/destinations/${encodeURIComponent(name)}/test`);
+  },
+
+  // --- docker hosts ---
+  listDockerHosts(): Promise<DockerHost[]> {
+    return request("GET", `${base}/docker-hosts`);
+  },
+  createDockerHost(req: CreateDockerHostRequest): Promise<CreateDockerHostResponse> {
+    return request("POST", `${base}/docker-hosts`, req);
+  },
+  deleteDockerHost(name: string): Promise<void> {
+    return request("DELETE", `${base}/docker-hosts/${encodeURIComponent(name)}`);
+  },
+  testDockerHost(name: string): Promise<DockerHostTestResult> {
+    return request("POST", `${base}/docker-hosts/${encodeURIComponent(name)}/test`);
   },
 };

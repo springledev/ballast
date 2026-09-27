@@ -2,7 +2,7 @@
 import { computed, onMounted, onUnmounted, reactive, ref } from "vue";
 
 import { api } from "@/api/client";
-import type { CatalogSummary, Destination, DetectResult, PreflightResult, ServiceStatus } from "@/api/types";
+import type { CatalogSummary, Destination, DetectResult, DockerHost, PreflightResult, ServiceStatus } from "@/api/types";
 import { schedulePresets } from "@/lib/schedule";
 import { describeCheck, describeTier } from "@/lib/status";
 
@@ -22,6 +22,8 @@ const preflight = ref<PreflightResult | null>(null);
 const catalog = ref<CatalogSummary[]>([]);
 const detected = ref<DetectResult>({ containers: [], suggestions: [] });
 const destinations = ref<Destination[]>([]);
+const dockerHosts = ref<DockerHost[]>([]);
+const chosenHost = ref("local");
 
 const chosenEntry = ref("");
 const serviceName = ref("");
@@ -44,6 +46,9 @@ const timedOut = ref(false);
 let cancelled = false;
 onUnmounted(() => (cancelled = true));
 
+// Most people only ever have "local"; don't show a picker for a
+// choice that isn't really a choice yet.
+const showHostPicker = computed(() => dockerHosts.value.length > 1);
 const selectedEntry = computed(() => catalog.value.find((c) => c.service === chosenEntry.value));
 const suggestion = computed(() => detected.value.suggestions[0]);
 const resticBlocked = computed(() => !!preflight.value?.restic_error);
@@ -55,13 +60,14 @@ const scheduleLabel = computed(
 
 onMounted(async () => {
   try {
-    [preflight.value, catalog.value, destinations.value] = await Promise.all([
+    [preflight.value, catalog.value, destinations.value, dockerHosts.value] = await Promise.all([
       api.preflight(),
       api.catalog(),
       api.listDestinations(),
+      api.listDockerHosts(),
     ]);
     try {
-      detected.value = await api.detect();
+      detected.value = await api.detect(chosenHost.value);
     } catch {
       // Detection is best-effort (Docker may not be reachable); the
       // wizard still works with a manual pick.
@@ -77,6 +83,15 @@ onMounted(async () => {
     loading.value = false;
   }
 });
+
+async function onHostChange() {
+  try {
+    detected.value = await api.detect(chosenHost.value);
+  } catch {
+    detected.value = { containers: [], suggestions: [] };
+  }
+  chooseEntry(suggestion.value?.service || "folder");
+}
 
 function chooseEntry(id: string) {
   chosenEntry.value = id;
@@ -139,7 +154,13 @@ async function start() {
       destExisting.value = destName.value;
       dest = destName.value;
     }
-    const svc = { name: serviceName.value, catalog_entry: chosenEntry.value, destination: dest, params: { ...params } };
+    const svc = {
+      name: serviceName.value,
+      catalog_entry: chosenEntry.value,
+      destination: dest,
+      docker_host: chosenHost.value,
+      params: { ...params },
+    };
     if (serviceSaved.value) {
       await api.updateService(serviceSaved.value, svc);
     } else {
@@ -220,6 +241,16 @@ const resultLight = computed(() => {
     <!-- 1. What -->
     <form v-if="step === 'what'" class="panel" @submit.prevent="next">
       <h3>What do you want to back up?</h3>
+      <div v-if="showHostPicker" class="field">
+        <label for="wiz-host">Docker host</label>
+        <select id="wiz-host" v-model="chosenHost" @change="onHostChange">
+          <option v-for="h in dockerHosts" :key="h.name" :value="h.name">{{ h.name }}</option>
+        </select>
+        <p class="hint">
+          Which machine to look for containers on. Add more machines on
+          <router-link to="/docker-hosts">Docker hosts</router-link>.
+        </p>
+      </div>
       <p v-if="suggestion" class="notice">
         Found <strong>{{ suggestion.containers.map((c) => c.name).join(", ") }}</strong> running on this server. It's
         selected below.

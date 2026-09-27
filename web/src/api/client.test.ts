@@ -98,4 +98,72 @@ describe("api client", () => {
     expect(url).toBe("/api/v1/destinations/nas/test");
     expect(init.method).toBe("POST");
   });
+
+  it("lists docker hosts", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      jsonResponse(200, [{ name: "local", kind: "local", address: "" }]),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(api.listDockerHosts()).resolves.toEqual([{ name: "local", kind: "local", address: "" }]);
+    const [url] = fetchMock.mock.calls[0];
+    expect(url).toBe("/api/v1/docker-hosts");
+  });
+
+  it("creates a docker host with the typed request body", async () => {
+    const body = {
+      name: "nas",
+      kind: "remote-ssh" as const,
+      address: "ballast@192.168.1.20",
+      credentials: { ssh_private_key: "KEY" },
+    };
+    const fetchMock = vi.fn().mockResolvedValue(
+      jsonResponse(201, {
+        host: { name: "nas", kind: "remote-ssh", address: "ballast@192.168.1.20", credential: "ballast-dockerhost-ssh.nas" },
+        test: { server_version: "27.1.0" },
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const res = await api.createDockerHost(body);
+
+    expect(res.host.name).toBe("nas");
+    expect(res.test?.server_version).toBe("27.1.0");
+    expect(res).not.toHaveProperty("credentials");
+    const [url, init] = fetchMock.mock.calls[0];
+    expect(url).toBe("/api/v1/docker-hosts");
+    expect(JSON.parse(init.body as string)).toEqual(body);
+  });
+
+  it("deletes a docker host by name", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response(null, { status: 204 }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(api.deleteDockerHost("nas")).resolves.toBeUndefined();
+    const [url, init] = fetchMock.mock.calls[0];
+    expect(url).toBe("/api/v1/docker-hosts/nas");
+    expect(init.method).toBe("DELETE");
+  });
+
+  it("tests a docker host by name", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse(200, { server_version: "27.1.0" }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(api.testDockerHost("nas")).resolves.toEqual({ server_version: "27.1.0" });
+    const [url, init] = fetchMock.mock.calls[0];
+    expect(url).toBe("/api/v1/docker-hosts/nas/test");
+    expect(init.method).toBe("POST");
+  });
+
+  it("passes the host query param on detect when given", async () => {
+    const fetchMock = vi.fn().mockImplementation(() => Promise.resolve(jsonResponse(200, { containers: [], suggestions: [] })));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await api.detect("nas");
+    expect(fetchMock.mock.calls[0][0]).toBe("/api/v1/detect?host=nas");
+
+    fetchMock.mockClear();
+    await api.detect();
+    expect(fetchMock.mock.calls[0][0]).toBe("/api/v1/detect");
+  });
 });

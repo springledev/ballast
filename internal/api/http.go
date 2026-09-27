@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/springledev/ballast/internal/dockerhost"
 	"net/http"
 
 	"github.com/springledev/ballast/internal/backend"
@@ -59,6 +60,12 @@ func NewHandler(ops *Ops, apiToken string) http.Handler {
 	protected.HandleFunc("POST /api/v1/destinations", h.createDestination)
 	protected.HandleFunc("DELETE /api/v1/destinations/{name}", h.deleteDestination)
 	protected.HandleFunc("POST /api/v1/destinations/{name}/test", h.testDestination)
+
+	protected.HandleFunc("GET /api/v1/docker-hosts", h.listDockerHosts)
+	protected.HandleFunc("POST /api/v1/docker-hosts", h.createDockerHost)
+	protected.HandleFunc("GET /api/v1/docker-hosts/{name}", h.getDockerHost)
+	protected.HandleFunc("DELETE /api/v1/docker-hosts/{name}", h.deleteDockerHost)
+	protected.HandleFunc("POST /api/v1/docker-hosts/{name}/test", h.testDockerHost)
 
 	mux := http.NewServeMux()
 	mux.Handle("/api/v1/", withAuth(protected, apiToken))
@@ -130,7 +137,7 @@ func (h *handler) catalog(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *handler) detect(w http.ResponseWriter, r *http.Request) {
-	res, err := h.ops.DetectServices(r.Context())
+	res, err := h.ops.DetectServices(r.Context(), r.URL.Query().Get("host"))
 	if err != nil {
 		h.writeErr(w, err, http.StatusInternalServerError)
 		return
@@ -164,6 +171,9 @@ func (h *handler) createService(w http.ResponseWriter, r *http.Request) {
 		h.writeErr(w, err, http.StatusBadRequest)
 		return
 	}
+	if s.DockerHost == "" {
+		s.DockerHost = dockerhost.LocalName
+	}
 	if err := h.ops.PutService(r.Context(), s); err != nil {
 		h.writeErr(w, err, http.StatusInternalServerError)
 		return
@@ -187,6 +197,9 @@ func (h *handler) putService(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.Name = pathName(r)
+	if s.DockerHost == "" {
+		s.DockerHost = dockerhost.LocalName
+	}
 	if err := h.ops.PutService(r.Context(), s); err != nil {
 		h.writeErr(w, err, http.StatusInternalServerError)
 		return
@@ -478,4 +491,70 @@ func (h *handler) testDestination(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
+}
+
+// --- docker hosts --------------------------------------------------------
+
+func (h *handler) listDockerHosts(w http.ResponseWriter, r *http.Request) {
+	list, err := h.ops.ListDockerHosts(r.Context())
+	if err != nil {
+		h.writeErr(w, err, http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, http.StatusOK, list)
+}
+
+func (h *handler) getDockerHost(w http.ResponseWriter, r *http.Request) {
+	host, err := h.ops.GetDockerHost(r.Context(), pathName(r))
+	if err != nil {
+		h.writeErr(w, err, http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, http.StatusOK, host)
+}
+
+// createDockerHostBody is POST /api/v1/docker-hosts' request shape:
+// the host, write-only credentials, and whether to skip the
+// connection test.
+type createDockerHostBody struct {
+	dockerhost.Host
+	// Credentials are saved to root-only credential file(s) and never
+	// echoed back (spec rule 2).
+	Credentials dockerhost.Credentials `json:"credentials"`
+	SkipTest    bool                   `json:"skip_test"`
+}
+
+func (h *handler) createDockerHost(w http.ResponseWriter, r *http.Request) {
+	var body createDockerHostBody
+	if err := decodeJSON(r, &body); err != nil {
+		h.writeErr(w, err, http.StatusBadRequest)
+		return
+	}
+	req := DockerHostSetup{Host: body.Host, Credentials: body.Credentials, SkipTest: body.SkipTest}
+	// Respond with what SetupDockerHost actually saved and found,
+	// never the request body: that would echo the credentials
+	// straight back.
+	res, err := h.ops.SetupDockerHost(r.Context(), req)
+	if err != nil {
+		h.writeErr(w, err, http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, http.StatusCreated, res)
+}
+
+func (h *handler) deleteDockerHost(w http.ResponseWriter, r *http.Request) {
+	if err := h.ops.DeleteDockerHost(r.Context(), pathName(r)); err != nil {
+		h.writeErr(w, err, http.StatusInternalServerError)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (h *handler) testDockerHost(w http.ResponseWriter, r *http.Request) {
+	tr, err := h.ops.TestDockerHost(r.Context(), pathName(r))
+	if err != nil {
+		h.writeErr(w, err, http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, http.StatusOK, tr)
 }

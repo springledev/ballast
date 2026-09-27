@@ -12,6 +12,7 @@ import (
 	"database/sql"
 	"fmt"
 	"github.com/springledev/ballast/internal/backend"
+	"github.com/springledev/ballast/internal/dockerhost"
 	"io"
 	"os"
 	"path/filepath"
@@ -66,6 +67,11 @@ type Pipeline struct {
 	// to Runner.Redact and scheduler.Coordinator.Redact.
 	Redact *secret.Set
 
+	// DockerStateDir holds the per-host ssh wrappers remote-ssh Docker
+	// hosts use (dockerhost.Resolver.StateDir), typically
+	// <DataDir>/ssh/docker-hosts.
+	DockerStateDir string
+
 	// ResticBin, DockerBin and PctBin override the restic/docker/pct
 	// binaries; empty resolves against $PATH. Tests point these at
 	// stubs.
@@ -81,6 +87,19 @@ func (p *Pipeline) Resolver() backend.Resolver {
 		ResticBin:      p.ResticBin,
 		Redact:         p.Redact,
 		KnownHostsFile: p.KnownHostsFile,
+	}
+}
+
+// DockerHosts returns the dockerhost.Resolver this pipeline reaches
+// Docker hosts with. Remote-ssh hosts share KnownHostsFile with SFTP
+// destinations: both are "machines Ballast has connected to".
+func (p *Pipeline) DockerHosts() dockerhost.Resolver {
+	return dockerhost.Resolver{
+		CredDirs:       []string{p.CredDir, p.OwnCredDir},
+		DockerBin:      p.DockerBin,
+		StateDir:       p.DockerStateDir,
+		KnownHostsFile: p.KnownHostsFile,
+		Redact:         p.Redact,
 	}
 }
 
@@ -102,6 +121,10 @@ func (p *Pipeline) Run(ctx context.Context, service string) (engine.State, error
 		return "", fmt.Errorf("service %s: %w", service, err)
 	}
 	dest, err := inventory.GetDestination(p.DB, svc.Destination)
+	if err != nil {
+		return "", fmt.Errorf("service %s: %w", service, err)
+	}
+	host, err := inventory.GetDockerHost(p.DB, svc.DockerHost)
 	if err != nil {
 		return "", fmt.Errorf("service %s: %w", service, err)
 	}
@@ -152,7 +175,13 @@ func (p *Pipeline) Run(ctx context.Context, service string) (engine.State, error
 	// the run (a stopped container, a missing or loosened credential
 	// file), not on configuration, so they fail inside the run: the
 	// service goes red and a notification fires (spec §3).
-	discovered, err := detect.ResolveDiscovery(ctx, p.Runner, p.DockerBin, entry.Discovery, entry.ParamsWithDefaults(svc.Params))
+	// The host's credential files are host state too: a missing or
+	// loosened SSH key fails the run, not the configuration.
+	docker, err := p.DockerHosts().Docker(host)
+	if err != nil {
+		return fail(err)
+	}
+	discovered, err := detect.ResolveDiscovery(ctx, p.Runner, docker, entry.Discovery, entry.ParamsWithDefaults(svc.Params))
 	if err != nil {
 		return fail(err)
 	}
@@ -166,11 +195,11 @@ func (p *Pipeline) Run(ctx context.Context, service string) (engine.State, error
 	if err := entry.ResolveSecrets(secrets); err != nil {
 		return fail(fmt.Errorf("resolving catalog entry %q: %w", svc.CatalogEntry, err))
 	}
-	strat, err := strategy.For(entry, strategy.Options{Runner: p.Runner, DockerBin: p.DockerBin, PctBin: p.PctBin})
+	strat, err := strategy.For(entry, strategy.Options{Runner: p.Runner, Docker: docker, PctBin: p.PctBin})
 	if err != nil {
 		return fail(err)
 	}
-	checker, err := verify.For(entry, verify.Options{Runner: p.Runner, DockerBin: p.DockerBin})
+	checker, err := verify.For(entry, verify.Options{Runner: p.Runner, Docker: docker})
 	if err != nil {
 		return fail(err)
 	}

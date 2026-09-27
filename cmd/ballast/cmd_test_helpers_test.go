@@ -62,7 +62,7 @@ func resetCLIFlags() {
 	snapshotsJSON = false
 	restoreSnapshot, restoreFiles, restoreTo = "", nil, ""
 
-	serviceCatalogEntry, serviceDestination = "", ""
+	serviceCatalogEntry, serviceDestination, serviceDockerHost = "", "", ""
 	serviceParams, serviceContainers, serviceSecrets = nil, nil, nil
 
 	destLocation, destType, destPasswordCredential, destInit = "", "", "", false
@@ -70,6 +70,10 @@ func resetCLIFlags() {
 	destPath, destEndpoint, destBucket, destRegion = "", "", "", ""
 	destAccountID, destHost, destPort, destUser, destURL = "", "", 0, "", ""
 	destAccessKeyID, destSSHKeyFile = "", ""
+
+	hostKind, hostAddress, hostSSHKey = "", "", ""
+	hostTLSCA, hostTLSCert, hostTLSKey = "", "", ""
+	hostSkipTest = false
 
 	notifyEnabled, notifyMaxAgeHours, notifyHeartbeat = true, 0, false
 

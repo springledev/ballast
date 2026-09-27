@@ -131,6 +131,7 @@ func openApp(cfg config.Config, logw io.Writer) (*app, error) {
 		WorkRoot:   filepath.Join(cfg.DataDir, "work"),
 
 		KnownHostsFile: filepath.Join(cfg.DataDir, "ssh", "known_hosts"),
+		DockerStateDir: filepath.Join(cfg.DataDir, "ssh", "docker-hosts"),
 		Notifier:       adapter,
 		Log:            logw,
 		Redact:         secrets,
@@ -161,7 +162,9 @@ func openApp(cfg config.Config, logw io.Writer) (*app, error) {
 		// ever sees it.
 		return resolver.Open(dest.Target())
 	}
-	ops := &api.Ops{DB: st.DB(), Catalog: reg, Coord: coord, Repo: repoFor, DestinationLocks: scheduler.FileLocker{Dir: filepath.Join(cfg.DataDir, "locks", "destinations")}, Runner: r, DockerBin: pl.DockerBin, CredentialsDir: cfg.WritableCredentialsDir, CredentialSearchDirs: credDirs, Redact: secrets, WorkRoot: pl.WorkRoot}
+	dockerHosts := pl.DockerHosts()
+	dockerHosts.CredDirs = credDirs
+	ops := &api.Ops{DB: st.DB(), Catalog: reg, Coord: coord, Repo: repoFor, DestinationLocks: scheduler.FileLocker{Dir: filepath.Join(cfg.DataDir, "locks", "destinations")}, Runner: r, DockerHosts: dockerHosts, CredentialsDir: cfg.WritableCredentialsDir, CredentialSearchDirs: credDirs, Redact: secrets, WorkRoot: pl.WorkRoot}
 
 	a := &app{cfg: cfg, store: st, ops: ops, coord: coord, notifier: notifier, apiToken: apiToken, secrets: secrets, logw: logw}
 	if cfg.WritableCredentialsDir != cfg.CredentialsDir {

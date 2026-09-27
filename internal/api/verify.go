@@ -72,11 +72,15 @@ func (o *Ops) VerifyService(ctx context.Context, service string) (VerifyReport, 
 	if !ok {
 		return rep, fmt.Errorf("service %s: catalog entry %q is not loaded", service, svc.CatalogEntry)
 	}
+	docker, err := o.dockerFor(svc.DockerHost)
+	if err != nil {
+		return rep, fmt.Errorf("service %s: %w", service, err)
+	}
 	// Re-verifying must still work while the service's container is
 	// down — that is exactly when someone wants to know the backup is
 	// restorable — so a declared fallback stands in for Docker. With no
 	// fallback either, the snapshot cannot be checked: amber, not red.
-	discovered, err := detect.ResolveDiscoveryOffline(ctx, o.Runner, o.DockerBin, entry.Discovery, entry.ParamsWithDefaults(svc.Params))
+	discovered, err := detect.ResolveDiscoveryOffline(ctx, o.Runner, docker, entry.Discovery, entry.ParamsWithDefaults(svc.Params))
 	if err != nil {
 		rep.Light = "amber"
 		rep.Checks = []VerifyCheck{{
@@ -105,7 +109,7 @@ func (o *Ops) VerifyService(ctx context.Context, service string) (VerifyReport, 
 	snap := snaps[0]
 	rep.SnapshotID = snap.ShortID
 
-	checker, err := verify.For(entry, verify.Options{Runner: o.Runner})
+	checker, err := verify.For(entry, verify.Options{Runner: o.Runner, Docker: docker})
 	if err != nil {
 		return rep, wrapf("service "+service, err)
 	}

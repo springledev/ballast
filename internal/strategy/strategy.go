@@ -26,6 +26,7 @@ package strategy
 import (
 	"context"
 	"fmt"
+	"github.com/springledev/ballast/internal/dockerhost"
 	"path/filepath"
 	"strings"
 
@@ -102,9 +103,10 @@ type Options struct {
 	// stop-start and exec (files spawns no commands).
 	Runner *runner.Runner
 
-	// DockerBin is the docker CLI to invoke; empty means "docker"
-	// resolved against $PATH. Tests point it at a stub.
-	DockerBin string
+	// Docker runs every docker command, against the service's own
+	// Docker host (spec §17.2). The zero value is the local daemon
+	// with "docker" from $PATH; tests use dockerhost.NewLocal(stub).
+	Docker dockerhost.Docker
 
 	// PctBin is the Proxmox `pct` CLI a pct-exec transport dump
 	// invokes; empty means "pct" resolved against $PATH. Tests point
@@ -115,14 +117,6 @@ type Options struct {
 	// §17.3); this is a self-contained interim implementation so the
 	// transport exists and is testable ahead of that.
 	PctBin string
-}
-
-// docker returns the configured docker binary name.
-func (o Options) docker() string {
-	if o.DockerBin != "" {
-		return o.DockerBin
-	}
-	return "docker"
 }
 
 // pct returns the configured Proxmox pct binary name.

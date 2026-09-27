@@ -24,6 +24,8 @@ export interface Service {
   destination: string;
   params?: Record<string, string>;
   containers?: Record<string, string>;
+  /** Which Docker host runs this service's containers. Defaults to "local". */
+  docker_host?: string;
 }
 
 /** Which storage backend a destination uses. */
@@ -166,4 +168,47 @@ export interface PreflightResult {
 
 export interface ApiErrorBody {
   error: string;
+}
+
+/** Which kind of Docker daemon a host entry points at. */
+export type DockerHostKind = "local" | "remote-ssh" | "remote-tls";
+
+export interface DockerHost {
+  name: string;
+  kind: DockerHostKind;
+  address: string;
+  /** The credential file holding this host's SSH key or TLS certs, when it needs one. */
+  credential?: string;
+}
+
+/**
+ * Credentials typed into a Docker host form. Write-only: the server
+ * never returns these, and leaving them empty on an update keeps
+ * whatever was already saved.
+ */
+export interface DockerHostCredentials {
+  ssh_private_key?: string;
+  ca_cert?: string;
+  client_cert?: string;
+  client_key?: string;
+}
+
+/** POST /api/v1/docker-hosts request body. */
+export interface CreateDockerHostRequest {
+  name: string;
+  kind: DockerHostKind;
+  address: string;
+  credentials?: DockerHostCredentials;
+  /** Save without testing the connection first. */
+  skip_test?: boolean;
+}
+
+export interface DockerHostTestResult {
+  server_version: string;
+}
+
+/** POST /api/v1/docker-hosts response. */
+export interface CreateDockerHostResponse {
+  host: DockerHost;
+  test?: DockerHostTestResult;
 }

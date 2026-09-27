@@ -13,6 +13,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"github.com/springledev/ballast/internal/dockerhost"
 	"os"
 	"path/filepath"
 	"sort"
@@ -56,10 +57,11 @@ type Ops struct {
 	// tool is missing).
 	Runner *runner.Runner
 
-	// DockerBin is the docker CLI used for container discovery; empty
-	// means "docker" resolved against $PATH. Wiring passes the same
-	// value the pipeline uses.
-	DockerBin string
+	// DockerHosts resolves a configured Docker host into the handle
+	// every Docker operation runs through (discovery, detection,
+	// verification drills, connection tests). Wiring passes the
+	// pipeline's own resolver, so both reach a host identically.
+	DockerHosts dockerhost.Resolver
 
 	// ResticBin overrides the restic binary CheckPreflight probes
 	// (tests only); empty resolves "restic" against $PATH, matching
@@ -616,9 +618,13 @@ func (o *Ops) PutService(ctx context.Context, s inventory.Service) error {
 	if !ok {
 		return fmt.Errorf("service %s: %w: catalog entry %q not found", s.Name, ErrValidation, s.CatalogEntry)
 	}
+	docker, err := o.dockerFor(s.DockerHost)
+	if err != nil {
+		return fmt.Errorf("service %s: %w", s.Name, err)
+	}
 	// Adding a service must not require its containers (or Docker) to
 	// be running right now; a declared fallback is enough to validate.
-	discovered, err := detect.ResolveDiscoveryOffline(ctx, o.Runner, o.DockerBin, entry.Discovery, entry.ParamsWithDefaults(s.Params))
+	discovered, err := detect.ResolveDiscoveryOffline(ctx, o.Runner, docker, entry.Discovery, entry.ParamsWithDefaults(s.Params))
 	if err != nil {
 		return fmt.Errorf("service %s: %w: %w", s.Name, ErrValidation, err)
 	}
@@ -1254,19 +1260,24 @@ type DetectResult struct {
 	Suggestions []detect.Suggestion `json:"suggestions"`
 }
 
-// DetectServices lists running Docker containers and suggests which
+// DetectServices lists running Docker containers on the named Docker
+// host ("" = the local host) and suggests which
 // catalog entries match them (spec §5.3.6: "detected Docker services
 // → pick one (Immich suggested)"). It never errors just because no
 // containers matched — an empty Suggestions slice is a normal
 // outcome — but does error if Docker itself could not be reached, so
 // the wizard can say so rather than silently show nothing.
-func (o *Ops) DetectServices(ctx context.Context) (DetectResult, error) {
+func (o *Ops) DetectServices(ctx context.Context, host string) (DetectResult, error) {
 	if o.Runner == nil {
 		return DetectResult{}, fmt.Errorf("service detection is not configured (internal wiring error)")
 	}
-	containers, err := detect.ListRunning(ctx, o.Runner)
+	docker, err := o.dockerFor(host)
 	if err != nil {
 		return DetectResult{}, err
+	}
+	containers, err := detect.ListRunning(ctx, o.Runner, docker)
+	if err != nil {
+		return DetectResult{}, o.redactErr(err)
 	}
 	return DetectResult{Containers: containers, Suggestions: detect.Suggest(o.Catalog.List(), containers)}, nil
 }
@@ -1320,7 +1331,9 @@ func (o *Ops) CheckPreflight(ctx context.Context) PreflightResult {
 		}
 	}
 
-	if _, err := detect.ListRunning(ctx, o.Runner); err != nil {
+	if docker, err := o.dockerFor(dockerhost.LocalName); err != nil {
+		res.DockerError = o.redact(err.Error())
+	} else if _, err := detect.ListRunning(ctx, o.Runner, docker); err != nil {
 		res.DockerError = o.redact(err.Error())
 	} else {
 		res.DockerInstalled = true

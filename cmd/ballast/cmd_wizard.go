@@ -151,7 +151,7 @@ func checkWizardPrerequisites(ctx context.Context, a *app, out io.Writer) error 
 // chosen by hand.
 func chooseCatalogEntry(ctx context.Context, a *app, in *bufio.Reader, out io.Writer) (*catalog.Entry, error) {
 	suggested := ""
-	if res, err := a.ops.DetectServices(ctx); err == nil && len(res.Suggestions) > 0 {
+	if res, err := a.ops.DetectServices(ctx, ""); err == nil && len(res.Suggestions) > 0 {
 		suggested = res.Suggestions[0].Service
 		names := make([]string, len(res.Suggestions[0].Containers))
 		for i, c := range res.Suggestions[0].Containers {

@@ -2,22 +2,28 @@
 import { computed, onMounted, reactive, ref } from "vue";
 
 import { api } from "@/api/client";
-import type { CatalogSummary, Destination, Service } from "@/api/types";
+import type { CatalogSummary, Destination, DockerHost, Service } from "@/api/types";
 
 const services = ref<Service[]>([]);
 const catalog = ref<CatalogSummary[]>([]);
 const destinations = ref<Destination[]>([]);
+const dockerHosts = ref<DockerHost[]>([]);
 const loading = ref(true);
 const error = ref("");
 const saved = ref("");
 const saving = ref(false);
 const showForm = ref(false);
 
+// Most people only ever have "local"; don't show a picker for a
+// choice that isn't really a choice yet.
+const showHostPicker = computed(() => dockerHosts.value.length > 1);
+
 const editingName = ref<string | null>(null);
 const form = reactive({
   name: "",
   catalog_entry: "",
   destination: "",
+  docker_host: "local",
   params: {} as Record<string, string>,
 });
 
@@ -31,10 +37,11 @@ async function load() {
   loading.value = true;
   error.value = "";
   try {
-    [services.value, catalog.value, destinations.value] = await Promise.all([
+    [services.value, catalog.value, destinations.value, dockerHosts.value] = await Promise.all([
       api.listServices(),
       api.catalog(),
       api.listDestinations(),
+      api.listDockerHosts(),
     ]);
   } catch (e) {
     error.value = (e as Error).message;
@@ -48,6 +55,7 @@ function openAdd() {
   form.name = "";
   form.catalog_entry = "";
   form.destination = destinations.value[0]?.name ?? "";
+  form.docker_host = "local";
   form.params = {};
   saved.value = "";
   showForm.value = true;
@@ -58,6 +66,7 @@ function startEdit(s: Service) {
   form.name = s.name;
   form.catalog_entry = s.catalog_entry;
   form.destination = s.destination;
+  form.docker_host = s.docker_host ?? "local";
   form.params = { ...(s.params ?? {}) };
   saved.value = "";
   showForm.value = true;
@@ -90,6 +99,7 @@ async function submit() {
     name: form.name,
     catalog_entry: form.catalog_entry,
     destination: form.destination,
+    docker_host: form.docker_host,
     params: { ...form.params },
   };
   try {
@@ -194,6 +204,16 @@ onMounted(load);
         <div v-for="p in selectedEntry.parameters ?? []" :key="p.name" class="field">
           <label :for="`param-${p.name}`">{{ p.prompt || p.name }}<span v-if="!p.required" class="muted"> (optional)</span></label>
           <input :id="`param-${p.name}`" v-model="form.params[p.name]" />
+        </div>
+        <div v-if="showHostPicker" class="field">
+          <label for="svc-host">Docker host</label>
+          <select id="svc-host" v-model="form.docker_host">
+            <option v-for="h in dockerHosts" :key="h.name" :value="h.name">{{ h.name }}</option>
+          </select>
+          <p class="hint">
+            Which machine runs this container. Add more machines on
+            <router-link to="/docker-hosts">Docker hosts</router-link>.
+          </p>
         </div>
         <div class="field">
           <label for="svc-dest">Where should backups go?</label>

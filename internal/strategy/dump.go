@@ -131,7 +131,7 @@ func (s *Dump) dumpCommand(d catalog.Dump, env []string) runner.Command {
 	}
 	args = append(args, d.Container)
 	args = append(args, d.Command...)
-	return runner.Command{Name: s.opts.docker(), Args: args, Env: env}
+	return s.opts.Docker.Command(env, args...)
 }
 
 // artifactFileName derives the artifact's file name from the dump's

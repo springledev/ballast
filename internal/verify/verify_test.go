@@ -1,6 +1,7 @@
 package verify
 
 import (
+	"github.com/springledev/ballast/internal/dockerhost"
 	"os"
 	"path/filepath"
 	"strings"
@@ -91,7 +92,7 @@ func stubSetup(t *testing.T) (opts Options, logPath string, withEnv func(...stri
 		t.Fatalf("writing docker stub: %v", err)
 	}
 	r := &runner.Runner{BaseEnv: append(os.Environ(), "STUB_LOG="+logPath)}
-	return Options{Runner: r, DockerBin: bin}, logPath, func(extra ...string) {
+	return Options{Runner: r, Docker: dockerhost.NewLocal(bin)}, logPath, func(extra ...string) {
 		r.BaseEnv = append(append([]string(nil), r.BaseEnv...), extra...)
 	}
 }
@@ -226,10 +227,10 @@ func TestForValidation(t *testing.T) {
 // TestDockerBinaryDefault mirrors the strategy package's check: the
 // docker CLI name defaults to "docker" and honours the override.
 func TestDockerBinaryDefault(t *testing.T) {
-	if got := (Options{}).docker(); got != "docker" {
-		t.Errorf("default docker binary = %q, want %q", got, "docker")
+	if got := (Options{}).Docker.Bin(); got != "docker" {
+		t.Errorf("default docker = %q, want docker", got)
 	}
-	if got := (Options{DockerBin: "/stub/docker"}).docker(); got != "/stub/docker" {
-		t.Errorf("overridden docker binary = %q, want %q", got, "/stub/docker")
+	if got := (Options{Docker: dockerhost.NewLocal("/stub/docker")}).Docker.Bin(); got != "/stub/docker" {
+		t.Errorf("docker = %q, want /stub/docker", got)
 	}
 }

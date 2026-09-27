@@ -1,6 +1,7 @@
 package strategy
 
 import (
+	"github.com/springledev/ballast/internal/dockerhost"
 	"os"
 	"path/filepath"
 	"strings"
@@ -256,11 +257,11 @@ func TestForValidation(t *testing.T) {
 // TestDockerBinaryDefault checks the docker CLI name defaults to
 // "docker" and honours the override (used by tests to inject stubs).
 func TestDockerBinaryDefault(t *testing.T) {
-	if got := (Options{}).docker(); got != "docker" {
-		t.Errorf("default docker binary = %q, want %q", got, "docker")
+	if got := (Options{}).Docker.Bin(); got != "docker" {
+		t.Errorf("default docker = %q, want docker", got)
 	}
-	if got := (Options{DockerBin: "/stub/docker"}).docker(); got != "/stub/docker" {
-		t.Errorf("overridden docker binary = %q, want %q", got, "/stub/docker")
+	if got := (Options{Docker: dockerhost.NewLocal("/stub/docker")}).Docker.Bin(); got != "/stub/docker" {
+		t.Errorf("docker = %q, want /stub/docker", got)
 	}
 }
 

@@ -81,7 +81,7 @@ func (s *StopStart) Backup(ctx context.Context, req Request) (res *Result, retEr
 
 // dockerCmd builds a docker CLI invocation.
 func (s *StopStart) dockerCmd(args ...string) runner.Command {
-	return runner.Command{Name: s.opts.docker(), Args: args}
+	return s.opts.Docker.Command(nil, args...)
 }
 
 // startAll starts every container, attempting each even when others

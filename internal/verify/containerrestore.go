@@ -9,7 +9,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/springledev/ballast/internal/runner"
 	"github.com/springledev/ballast/internal/strategy"
 )
 
@@ -229,11 +228,7 @@ func (c *ContainerRestore) imageDriftWarning(ctx context.Context, source string,
 	if source == "" {
 		return ""
 	}
-	out, err := c.opts.Runner.Run(ctx, nil, nil, runner.Command{
-		Name: c.opts.docker(),
-		Args: []string{"inspect", "--format", "{{.Image}}", source},
-		Env:  env,
-	})
+	out, err := c.opts.Runner.Run(ctx, nil, nil, c.opts.Docker.Command(env, "inspect", "--format", "{{.Image}}", source))
 	if err != nil {
 		return "could not compare " + source + "'s image with the test-restore image " + c.image + ": " + err.Error()
 	}
@@ -258,7 +253,7 @@ func (c *ContainerRestore) startContainer(ctx context.Context, name string, d re
 	args := []string{"run", "--detach", "--network", "none", "--name", name}
 	args = append(args, d.extraRun...)
 	args = append(args, c.image)
-	_, err := c.opts.Runner.Run(ctx, nil, nil, runner.Command{Name: c.opts.docker(), Args: args, Env: env})
+	_, err := c.opts.Runner.Run(ctx, nil, nil, c.opts.Docker.Command(env, args...))
 	if err != nil {
 		return fmt.Errorf("starting %s: %w", c.image, err)
 	}
@@ -284,7 +279,7 @@ func (c *ContainerRestore) waitReady(ctx context.Context, name string, d restore
 		timeout = defaultReadyTimeout
 	}
 	deadline := time.Now().Add(timeout)
-	probe := runner.Command{Name: c.opts.docker(), Args: append([]string{"exec", name}, d.readyArgs...), Env: env}
+	probe := c.opts.Docker.Command(env, append([]string{"exec", name}, d.readyArgs...)...)
 	for {
 		if _, err := c.opts.Runner.Run(ctx, nil, nil, probe); err == nil {
 			if err := sleepOrDone(ctx, readySettleDelay); err != nil {
@@ -335,7 +330,7 @@ func (c *ContainerRestore) restoreOne(ctx context.Context, name string, d restor
 	}
 
 	args := append([]string{"exec", "-i", name}, d.client...)
-	out, runErr := c.opts.Runner.Run(ctx, f, nil, runner.Command{Name: c.opts.docker(), Args: args, Env: env})
+	out, runErr := c.opts.Runner.Run(ctx, f, nil, c.opts.Docker.Command(env, args...))
 	_ = f.Close()
 
 	lines := stderrLines(out.Stderr)
@@ -356,11 +351,7 @@ func (c *ContainerRestore) restoreOne(ctx context.Context, name string, d restor
 // caller-provided (detached) context so cleanup survives job
 // cancellation.
 func (c *ContainerRestore) removeContainer(ctx context.Context, name string, env []string) error {
-	_, err := c.opts.Runner.Run(ctx, nil, nil, runner.Command{
-		Name: c.opts.docker(),
-		Args: []string{"rm", "--force", name},
-		Env:  env,
-	})
+	_, err := c.opts.Runner.Run(ctx, nil, nil, c.opts.Docker.Command(env, "rm", "--force", name))
 	if err != nil {
 		return fmt.Errorf("docker rm --force %s: %w", name, err)
 	}

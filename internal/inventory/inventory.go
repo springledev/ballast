@@ -24,6 +24,7 @@ import (
 	"time"
 
 	"github.com/springledev/ballast/internal/backend"
+	"github.com/springledev/ballast/internal/dockerhost"
 	"github.com/springledev/ballast/internal/restic"
 	"github.com/springledev/ballast/internal/store"
 )
@@ -299,6 +300,10 @@ type Service struct {
 	Name         string `json:"name"`
 	CatalogEntry string `json:"catalog_entry"` // catalog.Entry.Service, e.g. "postgres"
 	Destination  string `json:"destination"`
+	// DockerHost names the Docker host every Docker operation for this
+	// service runs against (spec §17.2). Empty means the built-in
+	// "local" host.
+	DockerHost string `json:"docker_host"`
 	// Params fills {{ .Params.* }} placeholders in the catalog entry.
 	Params map[string]string `json:"params,omitempty"`
 	// Containers fills {{ .Services.* }} placeholders (detected
@@ -331,6 +336,12 @@ func PutService(db *sql.DB, s Service) error {
 	if _, err := GetDestination(db, s.Destination); err != nil {
 		return fmt.Errorf("service %s: %w", s.Name, err)
 	}
+	if s.DockerHost == "" {
+		s.DockerHost = dockerhost.LocalName
+	}
+	if _, err := GetDockerHost(db, s.DockerHost); err != nil {
+		return fmt.Errorf("service %s: %w", s.Name, err)
+	}
 	paramsJSON, err := marshalMap(s.Params)
 	if err != nil {
 		return fmt.Errorf("service %s: encoding params: %w", s.Name, err)
@@ -350,16 +361,17 @@ func PutService(db *sql.DB, s Service) error {
 
 	now := time.Now().UTC().Format(time.RFC3339Nano)
 	_, err = db.Exec(`
-		INSERT INTO services (name, catalog_entry, destination, params_json, containers_json, secrets_json, created_at, updated_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+		INSERT INTO services (name, catalog_entry, destination, docker_host, params_json, containers_json, secrets_json, created_at, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(name) DO UPDATE SET
 			catalog_entry = excluded.catalog_entry,
 			destination = excluded.destination,
+			docker_host = excluded.docker_host,
 			params_json = excluded.params_json,
 			containers_json = excluded.containers_json,
 			secrets_json = excluded.secrets_json,
 			updated_at = excluded.updated_at`,
-		s.Name, s.CatalogEntry, s.Destination, paramsJSON, containersJSON, secretsJSON, now, now,
+		s.Name, s.CatalogEntry, s.Destination, s.DockerHost, paramsJSON, containersJSON, secretsJSON, now, now,
 	)
 	if err != nil {
 		return fmt.Errorf("saving service %s: %w", s.Name, err)
@@ -372,9 +384,9 @@ func GetService(db *sql.DB, name string) (Service, error) {
 	var s Service
 	var paramsJSON, containersJSON, secretsJSON string
 	err := db.QueryRow(`
-		SELECT name, catalog_entry, destination, params_json, containers_json, secrets_json
+		SELECT name, catalog_entry, destination, docker_host, params_json, containers_json, secrets_json
 		FROM services WHERE name = ?`, name,
-	).Scan(&s.Name, &s.CatalogEntry, &s.Destination, &paramsJSON, &containersJSON, &secretsJSON)
+	).Scan(&s.Name, &s.CatalogEntry, &s.Destination, &s.DockerHost, &paramsJSON, &containersJSON, &secretsJSON)
 	if errors.Is(err, sql.ErrNoRows) {
 		return Service{}, fmt.Errorf("service %s: %w", name, ErrNotFound)
 	}
@@ -395,7 +407,7 @@ func GetService(db *sql.DB, name string) (Service, error) {
 
 // ListServices returns every configured service, ordered by name.
 func ListServices(db *sql.DB) ([]Service, error) {
-	rows, err := db.Query(`SELECT name, catalog_entry, destination, params_json, containers_json, secrets_json FROM services ORDER BY name`)
+	rows, err := db.Query(`SELECT name, catalog_entry, destination, docker_host, params_json, containers_json, secrets_json FROM services ORDER BY name`)
 	if err != nil {
 		return nil, fmt.Errorf("listing services: %w", err)
 	}
@@ -407,7 +419,7 @@ func ListServices(db *sql.DB) ([]Service, error) {
 	for rows.Next() {
 		var s Service
 		var paramsJSON, containersJSON, secretsJSON string
-		if err := rows.Scan(&s.Name, &s.CatalogEntry, &s.Destination, &paramsJSON, &containersJSON, &secretsJSON); err != nil {
+		if err := rows.Scan(&s.Name, &s.CatalogEntry, &s.Destination, &s.DockerHost, &paramsJSON, &containersJSON, &secretsJSON); err != nil {
 			return nil, fmt.Errorf("listing services: %w", err)
 		}
 		if s.Params, err = unmarshalMap(paramsJSON); err != nil {

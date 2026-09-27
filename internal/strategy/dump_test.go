@@ -3,6 +3,7 @@ package strategy
 import (
 	"context"
 	"errors"
+	"github.com/springledev/ballast/internal/dockerhost"
 	"os"
 	"path/filepath"
 	"strings"
@@ -29,7 +30,7 @@ func TestDumpContainer(t *testing.T) {
 			}},
 		},
 	}
-	s, err := For(entry, Options{Runner: stubRunner(logPath), DockerBin: dockerBin})
+	s, err := For(entry, Options{Runner: stubRunner(logPath), Docker: dockerhost.NewLocal(dockerBin)})
 	if err != nil {
 		t.Fatalf("For: %v", err)
 	}
@@ -106,7 +107,7 @@ func TestDumpSecretEnvForwarded(t *testing.T) {
 			}},
 		},
 	}
-	s, err := For(entry, Options{Runner: stubRunner(logPath), DockerBin: dockerBin})
+	s, err := For(entry, Options{Runner: stubRunner(logPath), Docker: dockerhost.NewLocal(dockerBin)})
 	if err != nil {
 		t.Fatalf("For: %v", err)
 	}
@@ -213,7 +214,7 @@ func TestDumpFailurePropagates(t *testing.T) {
 			}},
 		},
 	}
-	s, err := For(entry, Options{Runner: stubRunner(logPath), DockerBin: dockerBin})
+	s, err := For(entry, Options{Runner: stubRunner(logPath), Docker: dockerhost.NewLocal(dockerBin)})
 	if err != nil {
 		t.Fatalf("For: %v", err)
 	}
@@ -247,7 +248,7 @@ func TestDumpIncludesFilePaths(t *testing.T) {
 			Files:    []catalog.FileSpec{{Path: library}},
 		},
 	}
-	s, err := For(entry, Options{Runner: stubRunner(logPath), DockerBin: dockerBin})
+	s, err := For(entry, Options{Runner: stubRunner(logPath), Docker: dockerhost.NewLocal(dockerBin)})
 	if err != nil {
 		t.Fatalf("For: %v", err)
 	}

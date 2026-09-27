@@ -339,7 +339,7 @@ verify:
 			if !tt.noWorkRoot {
 				h.ops.WorkRoot = workRoot
 			}
-			h.ops.DockerBin = failingDocker
+			h.ops.DockerHosts.DockerBin = failingDocker
 
 			rep, err := h.ops.VerifyService(context.Background(), "svc")
 			if err != nil {

@@ -381,6 +381,7 @@ func init() {
 	rootCmd.AddCommand(serveCmd, versionCmd, runDueCmd, triggerCmd)
 	registerServiceCommands(rootCmd)
 	registerDestinationCommands(rootCmd)
+	registerHostCommands(rootCmd)
 	registerScheduleCommands(rootCmd)
 	registerNotifyCommands(rootCmd)
 	registerSecretCommands(rootCmd)

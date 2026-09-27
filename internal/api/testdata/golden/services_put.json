@@ -3,6 +3,7 @@
   "body": {
     "catalog_entry": "folder",
     "destination": "local",
+    "docker_host": "local",
     "name": "svc",
     "params": {
       "path": "/y"

@@ -1,0 +1,6 @@
+{
+  "status": 400,
+  "body": {
+    "error": "docker host local: invalid input: docker host local: the built-in local host can't be removed"
+  }
+}

@@ -30,6 +30,7 @@ package verify
 import (
 	"context"
 	"fmt"
+	"github.com/springledev/ballast/internal/dockerhost"
 	"time"
 
 	"github.com/springledev/ballast/internal/catalog"
@@ -109,17 +110,10 @@ type Options struct {
 	// container-restore (archive-integrity is pure Go).
 	Runner *runner.Runner
 
-	// DockerBin is the docker CLI to invoke; empty means "docker"
-	// resolved against $PATH. Tests point it at a stub.
-	DockerBin string
-}
-
-// docker returns the configured docker binary name.
-func (o Options) docker() string {
-	if o.DockerBin != "" {
-		return o.DockerBin
-	}
-	return "docker"
+	// Docker runs every docker command, against the service's own
+	// Docker host (spec §17.2). The zero value is the local daemon
+	// with "docker" from $PATH; tests use dockerhost.NewLocal(stub).
+	Docker dockerhost.Docker
 }
 
 // For returns the Checker implementing the entry's verify.method,

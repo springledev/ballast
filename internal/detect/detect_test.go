@@ -2,6 +2,7 @@ package detect
 
 import (
 	"context"
+	"github.com/springledev/ballast/internal/dockerhost"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -38,7 +39,7 @@ func withStubDocker(t *testing.T) *runner.Runner {
 
 func TestListRunning(t *testing.T) {
 	r := withStubDocker(t)
-	containers, err := ListRunning(context.Background(), r)
+	containers, err := ListRunning(context.Background(), r, dockerhost.Docker{})
 	if err != nil {
 		t.Fatalf("ListRunning error: %v", err)
 	}
@@ -59,7 +60,7 @@ func TestListRunning(t *testing.T) {
 
 func TestListRunning_DockerMissing(t *testing.T) {
 	t.Setenv("PATH", t.TempDir()) // no docker binary anywhere on PATH
-	_, err := ListRunning(context.Background(), &runner.Runner{})
+	_, err := ListRunning(context.Background(), &runner.Runner{}, dockerhost.Docker{})
 	if err == nil {
 		t.Fatal("ListRunning() with no docker binary: want an error")
 	}
@@ -323,7 +324,7 @@ exit 1
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			got, err := ResolveDiscovery(context.Background(), r, "", tc.discovery, tc.params)
+			got, err := ResolveDiscovery(context.Background(), r, dockerhost.Docker{}, tc.discovery, tc.params)
 			if tc.wantErr != "" {
 				if err == nil || !strings.Contains(err.Error(), tc.wantErr) {
 					t.Errorf("ResolveDiscovery() error = %v, want containing %q", err, tc.wantErr)
@@ -363,7 +364,7 @@ exit 1
 	}
 	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
 
-	got, err := ResolveDiscovery(context.Background(), &runner.Runner{}, "", map[string]catalog.DiscoveryRule{
+	got, err := ResolveDiscovery(context.Background(), &runner.Runner{}, dockerhost.Docker{}, map[string]catalog.DiscoveryRule{
 		"database": {
 			Type:  "docker-label",
 			Match: "service=database",
@@ -396,7 +397,7 @@ exit 1
 	}
 	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
 
-	_, err := ResolveDiscovery(context.Background(), &runner.Runner{}, "", map[string]catalog.DiscoveryRule{
+	_, err := ResolveDiscovery(context.Background(), &runner.Runner{}, dockerhost.Docker{}, map[string]catalog.DiscoveryRule{
 		"database": {
 			Type:  "docker-label",
 			Match: "service=ambiguous",
@@ -434,7 +435,7 @@ func TestResolveDiscoveryOffline(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got, err := ResolveDiscoveryOffline(context.Background(), &runner.Runner{}, dockerBin, tt.discovery, map[string]string{"db": "my-db"})
+			got, err := ResolveDiscoveryOffline(context.Background(), &runner.Runner{}, dockerhost.NewLocal(dockerBin), tt.discovery, map[string]string{"db": "my-db"})
 			if tt.wantErr != "" {
 				if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
 					t.Fatalf("err = %v, want containing %q", err, tt.wantErr)

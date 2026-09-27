@@ -14,9 +14,19 @@ import (
 	"time"
 
 	"github.com/springledev/ballast/internal/backend"
+	"github.com/springledev/ballast/internal/dockerhost"
 	"github.com/springledev/ballast/internal/inventory"
 	"github.com/springledev/ballast/internal/notify"
 )
+
+// fakeEd25519PrivateKey is a syntactically valid, unencrypted OpenSSH
+// private key (the shape backend.RenderCredentials checks: BEGIN/END
+// markers and a "PRIVATE KEY" body), used to exercise a docker host's
+// --ssh-key credential without depending on ssh-keygen being
+// installed. It is not a real key that connects to anything.
+const fakeEd25519PrivateKey = "-----BEGIN OPENSSH PRIVATE KEY-----\n" +
+	"ZmFrZS1rZXktY29udGVudHMtZm9yLXRlc3Rpbmc=\n" +
+	"-----END OPENSSH PRIVATE KEY-----"
 
 // -update regenerates every golden file from the handler's current
 // behavior (spec §13: "golden-file REST contract tests"). Run:
@@ -537,6 +547,81 @@ func TestHTTPGolden(t *testing.T) {
 			},
 		},
 		{
+			name: "docker_hosts_list",
+			req: func(h *harness) *http.Request {
+				return httptest.NewRequest(http.MethodGet, "/api/v1/docker-hosts", nil)
+			},
+		},
+		{
+			name: "docker_hosts_get",
+			req: func(h *harness) *http.Request {
+				return httptest.NewRequest(http.MethodGet, "/api/v1/docker-hosts/local", nil)
+			},
+		},
+		{
+			name: "docker_hosts_get_not_found",
+			req: func(h *harness) *http.Request {
+				return httptest.NewRequest(http.MethodGet, "/api/v1/docker-hosts/nope", nil)
+			},
+		},
+		{
+			// kind remote-ssh with no address credentials and
+			// skip_test: true so no connection is attempted; this
+			// case exists to prove the response never echoes the
+			// posted credentials back (spec rule 2).
+			name: "docker_hosts_create_skip_test",
+			req: func(h *harness) *http.Request {
+				body := createDockerHostBody{
+					Host:     dockerhost.Host{Name: "rpi", Kind: dockerhost.RemoteSSH, Address: "ballast@192.168.1.20"},
+					SkipTest: true,
+				}
+				r := httptest.NewRequest(http.MethodPost, "/api/v1/docker-hosts", jsonBody(t, body))
+				r.Header.Set("Content-Type", "application/json")
+				return r
+			},
+		},
+		{
+			// A real (fake) SSH private key, still with skip_test so
+			// no connection is made, exercising credential
+			// persistence; the golden file demonstrates the key never
+			// appears in the response and
+			// TestDockerHostCreateWithCredentialsNoLeak asserts it
+			// explicitly.
+			name: "docker_hosts_create_with_credentials",
+			req: func(h *harness) *http.Request {
+				body := createDockerHostBody{
+					Host:        dockerhost.Host{Name: "rpi", Kind: dockerhost.RemoteSSH, Address: "ballast@192.168.1.20"},
+					Credentials: dockerhost.Credentials{SSHPrivateKey: fakeEd25519PrivateKey},
+					SkipTest:    true,
+				}
+				r := httptest.NewRequest(http.MethodPost, "/api/v1/docker-hosts", jsonBody(t, body))
+				r.Header.Set("Content-Type", "application/json")
+				return r
+			},
+		},
+		{
+			name: "docker_hosts_delete",
+			arrange: func(t *testing.T, h *harness) {
+				if _, err := h.ops.SetupDockerHost(context.Background(), DockerHostSetup{
+					Host:     dockerhost.Host{Name: "rpi", Kind: dockerhost.RemoteSSH, Address: "ballast@192.168.1.20"},
+					SkipTest: true,
+				}); err != nil {
+					t.Fatalf("SetupDockerHost: %v", err)
+				}
+			},
+			req: func(h *harness) *http.Request {
+				return httptest.NewRequest(http.MethodDelete, "/api/v1/docker-hosts/rpi", nil)
+			},
+		},
+		{
+			// The built-in local host can never be removed (400, not
+			// 204): spec §17.2.
+			name: "docker_hosts_delete_local",
+			req: func(h *harness) *http.Request {
+				return httptest.NewRequest(http.MethodDelete, "/api/v1/docker-hosts/local", nil)
+			},
+		},
+		{
 			name:     "unauthorized",
 			req:      func(h *harness) *http.Request { return httptest.NewRequest(http.MethodGet, "/api/v1/status", nil) },
 			skipAuth: true,
@@ -582,5 +667,31 @@ func TestDestinationsCreateWithCredentialsNoLeak(t *testing.T) {
 	}
 	if strings.Contains(rec.Body.String(), "topsecretkey") {
 		t.Errorf("response body leaks the secret access key: %s", rec.Body.String())
+	}
+}
+
+// TestDockerHostCreateWithCredentialsNoLeak makes the same request as
+// the "docker_hosts_create_with_credentials" golden case directly (not
+// through the golden-file comparison) and asserts explicitly that the
+// SSH private key never appears in the response body (spec rule 2).
+func TestDockerHostCreateWithCredentialsNoLeak(t *testing.T) {
+	h := newHarness(t)
+	body := createDockerHostBody{
+		Host:        dockerhost.Host{Name: "rpi", Kind: dockerhost.RemoteSSH, Address: "ballast@192.168.1.20"},
+		Credentials: dockerhost.Credentials{SSHPrivateKey: fakeEd25519PrivateKey},
+		SkipTest:    true,
+	}
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/docker-hosts", jsonBody(t, body))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+testAPIToken)
+
+	rec := httptest.NewRecorder()
+	NewHandler(h.ops, testAPIToken).ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("status = %d, want 201 (body %s)", rec.Code, rec.Body.String())
+	}
+	if strings.Contains(rec.Body.String(), "fake-key-contents-for-testing") || strings.Contains(rec.Body.String(), fakeEd25519PrivateKey) {
+		t.Errorf("response body leaks the SSH private key: %s", rec.Body.String())
 	}
 }

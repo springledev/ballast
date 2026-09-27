@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"github.com/springledev/ballast/internal/dockerhost"
 	"os"
 	"path/filepath"
 	"strings"
@@ -74,6 +75,14 @@ if [ -n "$DOCKER_STUB_SLEEP" ]; then
   # stdout pipe open until it finishes on its own.
   exec sleep "$DOCKER_STUB_SLEEP"
 fi
+# Skip per-host connection flags (a remote Docker host).
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --host|--tlscacert|--tlscert|--tlskey) shift 2 ;;
+    --tlsverify) shift ;;
+    *) break ;;
+  esac
+done
 cmd="$1"
 case "$cmd" in
   exec)
@@ -695,5 +704,57 @@ func TestEnsureServiceContext(t *testing.T) {
 	got := ensureServiceContext("svc", other)
 	if !strings.HasPrefix(got.Error(), "service svc:") {
 		t.Errorf("ensureServiceContext = %q, want a service prefix", got.Error())
+	}
+}
+
+// TestRunRoutesDockerToServiceHost checks that every docker command a
+// run issues goes to the service's own Docker host, never the local
+// daemon, and that a host whose credential files are missing fails
+// the run (red, notified) rather than falling back to local.
+func TestRunRoutesDockerToServiceHost(t *testing.T) {
+	h := newHarness(t)
+	for _, f := range []string{"ballast-dockerhost.media.ca.pem", "ballast-dockerhost.media.cert.pem", "ballast-dockerhost.media.key.pem"} {
+		if err := os.WriteFile(filepath.Join(h.credDir, f), []byte("pem\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, host := range []dockerhost.Host{
+		{Name: "media", Kind: dockerhost.RemoteTLS, Address: "media", Credential: "ballast-dockerhost.media"},
+		{Name: "broken", Kind: dockerhost.RemoteTLS, Address: "media", Credential: "ballast-dockerhost.gone"},
+	} {
+		if _, err := inventory.PutDockerHost(h.db, host); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for svc, host := range map[string]string{"onmedia": "media", "onbroken": "broken"} {
+		if err := inventory.PutService(h.db, inventory.Service{Name: svc, CatalogEntry: "dumpsql", Destination: "local", DockerHost: host}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	p := h.pipeline()
+	p.Catalog = registryWith(t, map[string]string{"dumpsql.yaml": dumpSQLEntryYAML})
+
+	state, err := p.Run(context.Background(), "onmedia")
+	if err != nil || state != engine.SUCCESS {
+		t.Fatalf("Run = %s, %v; want SUCCESS", state, err)
+	}
+	log, err := os.ReadFile(h.dockerLog)
+	if err != nil {
+		t.Fatal(err)
+	}
+	lines := strings.Split(strings.TrimSpace(string(log)), "\n")
+	prefix := "--host tcp://media:2376 --tlsverify --tlscacert " + filepath.Join(h.credDir, "ballast-dockerhost.media.ca.pem")
+	for _, l := range lines {
+		if !strings.HasPrefix(l, prefix) {
+			t.Errorf("docker call %q did not target host media", l)
+		}
+	}
+	if !strings.Contains(string(log), " exec ") {
+		t.Errorf("no docker exec was routed to the host: %q", log)
+	}
+
+	state, err = p.Run(context.Background(), "onbroken")
+	if state != engine.FAILED || err == nil || !strings.Contains(err.Error(), "docker host broken") {
+		t.Fatalf("Run on a host without its TLS files = %s, %v; want FAILED naming the host", state, err)
 	}
 }

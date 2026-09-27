@@ -198,6 +198,11 @@ non-zero if anything failed — built for a systemd timer or cron, so backups
 keep happening even if you never run `ballast serve`. See
 [Systemd setup](systemd.md) for unit files and credential wiring.
 
+### Back up services on other machines
+
+To back up containers running on a different machine in your homelab, see
+[Docker hosts](docker-hosts.md) for setting up SSH or TLS connections.
+
 ## Worked example: backing up Immich
 
 Immich keeps two things: a Postgres database (albums, people, metadata) and

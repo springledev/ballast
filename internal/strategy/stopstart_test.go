@@ -3,6 +3,7 @@ package strategy
 import (
 	"archive/tar"
 	"context"
+	"github.com/springledev/ballast/internal/dockerhost"
 	"io"
 	"net"
 	"os"
@@ -97,7 +98,7 @@ func TestStopStartHappyPath(t *testing.T) {
 	data := stopStartFixture(t)
 	entry := stopStartEntry(data, "vw", "vw-db")
 
-	s, err := For(entry, Options{Runner: stubRunner(logPath), DockerBin: dockerBin})
+	s, err := For(entry, Options{Runner: stubRunner(logPath), Docker: dockerhost.NewLocal(dockerBin)})
 	if err != nil {
 		t.Fatalf("For: %v", err)
 	}
@@ -161,7 +162,7 @@ func TestStopStartRestartsOnArchiveFailure(t *testing.T) {
 	dockerBin, logPath := newDockerStub(t)
 	entry := stopStartEntry(filepath.Join(t.TempDir(), "missing"), "vw")
 
-	s, err := For(entry, Options{Runner: stubRunner(logPath), DockerBin: dockerBin})
+	s, err := For(entry, Options{Runner: stubRunner(logPath), Docker: dockerhost.NewLocal(dockerBin)})
 	if err != nil {
 		t.Fatalf("For: %v", err)
 	}
@@ -187,7 +188,7 @@ func TestStopStartPartialStopFailure(t *testing.T) {
 	data := stopStartFixture(t)
 	entry := stopStartEntry(data, "vw", "fail-stop", "never-reached")
 
-	s, err := For(entry, Options{Runner: stubRunner(logPath), DockerBin: dockerBin})
+	s, err := For(entry, Options{Runner: stubRunner(logPath), Docker: dockerhost.NewLocal(dockerBin)})
 	if err != nil {
 		t.Fatalf("For: %v", err)
 	}
@@ -213,7 +214,7 @@ func TestStopStartReportsRestartFailure(t *testing.T) {
 	data := stopStartFixture(t)
 	entry := stopStartEntry(data, "fail-start")
 
-	s, err := For(entry, Options{Runner: stubRunner(logPath), DockerBin: dockerBin})
+	s, err := For(entry, Options{Runner: stubRunner(logPath), Docker: dockerhost.NewLocal(dockerBin)})
 	if err != nil {
 		t.Fatalf("For: %v", err)
 	}
@@ -238,7 +239,7 @@ func TestStopStartCancelledRun(t *testing.T) {
 	data := stopStartFixture(t)
 	entry := stopStartEntry(data, "vw")
 
-	s, err := For(entry, Options{Runner: stubRunner(logPath), DockerBin: dockerBin})
+	s, err := For(entry, Options{Runner: stubRunner(logPath), Docker: dockerhost.NewLocal(dockerBin)})
 	if err != nil {
 		t.Fatalf("For: %v", err)
 	}
@@ -264,7 +265,7 @@ func TestStopStartRejectsBadConfig(t *testing.T) {
 	data := stopStartFixture(t)
 
 	t.Run("empty work dir", func(t *testing.T) {
-		s, err := For(stopStartEntry(data, "vw"), Options{Runner: stubRunner(logPath), DockerBin: dockerBin})
+		s, err := For(stopStartEntry(data, "vw"), Options{Runner: stubRunner(logPath), Docker: dockerhost.NewLocal(dockerBin)})
 		if err != nil {
 			t.Fatalf("For: %v", err)
 		}
@@ -275,7 +276,7 @@ func TestStopStartRejectsBadConfig(t *testing.T) {
 
 	t.Run("relative data path", func(t *testing.T) {
 		entry := stopStartEntry("relative/data", "vw")
-		s, err := For(entry, Options{Runner: stubRunner(logPath), DockerBin: dockerBin})
+		s, err := For(entry, Options{Runner: stubRunner(logPath), Docker: dockerhost.NewLocal(dockerBin)})
 		if err != nil {
 			t.Fatalf("For: %v", err)
 		}
