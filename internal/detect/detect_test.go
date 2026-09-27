@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -403,5 +404,49 @@ exit 1
 	}, map[string]string{})
 	if err == nil || !strings.Contains(err.Error(), "matched 2 running containers") {
 		t.Errorf("ResolveDiscovery(ambiguous) error = %v, want ambiguity error", err)
+	}
+}
+
+// TestResolveDiscoveryOffline checks that when Docker cannot be asked,
+// declared fallbacks stand in, and a rule without one returns the
+// original Docker error.
+func TestResolveDiscoveryOffline(t *testing.T) {
+	dockerBin := filepath.Join(t.TempDir(), "docker")
+	if err := os.WriteFile(dockerBin, []byte("#!/bin/sh\nexit 1\n"), 0o755); err != nil {
+		t.Fatalf("writing docker stub: %v", err)
+	}
+	tests := []struct {
+		name      string
+		discovery map[string]catalog.DiscoveryRule
+		want      map[string]string
+		wantErr   string
+	}{
+		{
+			name:      "fallback used when docker fails",
+			discovery: map[string]catalog.DiscoveryRule{"database": {Type: "docker-label", Match: "svc=db", Fallback: "{{ .Params.db }}"}},
+			want:      map[string]string{"database": "my-db"},
+		},
+		{
+			name:      "no fallback returns docker error",
+			discovery: map[string]catalog.DiscoveryRule{"database": {Type: "docker-label", Match: "svc=db"}},
+			wantErr:   "discovery \"database\"",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := ResolveDiscoveryOffline(context.Background(), &runner.Runner{}, dockerBin, tt.discovery, map[string]string{"db": "my-db"})
+			if tt.wantErr != "" {
+				if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
+					t.Fatalf("err = %v, want containing %q", err, tt.wantErr)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("ResolveDiscoveryOffline: %v", err)
+			}
+			if !reflect.DeepEqual(got, tt.want) {
+				t.Errorf("got %v, want %v", got, tt.want)
+			}
+		})
 	}
 }

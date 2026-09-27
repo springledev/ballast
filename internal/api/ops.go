@@ -55,6 +55,11 @@ type Ops struct {
 	// tool is missing).
 	Runner *runner.Runner
 
+	// DockerBin is the docker CLI used for container discovery; empty
+	// means "docker" resolved against $PATH. Wiring passes the same
+	// value the pipeline uses.
+	DockerBin string
+
 	// ResticBin overrides the restic binary CheckPreflight probes
 	// (tests only); empty resolves "restic" against $PATH, matching
 	// every other restic invocation in production.
@@ -610,7 +615,9 @@ func (o *Ops) PutService(ctx context.Context, s inventory.Service) error {
 	if !ok {
 		return fmt.Errorf("service %s: %w: catalog entry %q not found", s.Name, ErrValidation, s.CatalogEntry)
 	}
-	discovered, err := detect.ResolveDiscovery(ctx, o.Runner, "", entry.Discovery, entry.ParamsWithDefaults(s.Params))
+	// Adding a service must not require its containers (or Docker) to
+	// be running right now; a declared fallback is enough to validate.
+	discovered, err := detect.ResolveDiscoveryOffline(ctx, o.Runner, o.DockerBin, entry.Discovery, entry.ParamsWithDefaults(s.Params))
 	if err != nil {
 		return fmt.Errorf("service %s: %w: %w", s.Name, ErrValidation, err)
 	}
@@ -687,6 +694,11 @@ func (o *Ops) SetSecret(ctx context.Context, service, name, value string) error 
 	path := filepath.Join(o.CredentialsDir, cred)
 	if err := os.WriteFile(path, []byte(value+"\n"), 0o600); err != nil {
 		return fmt.Errorf("service %s: saving secret %s: %w", service, name, err)
+	}
+	// WriteFile keeps an existing file's mode; tighten it so a
+	// rotated secret never stays readable by others.
+	if err := os.Chmod(path, 0o600); err != nil {
+		return fmt.Errorf("service %s: restricting secret file %s: %w", service, name, err)
 	}
 	o.Redact.Add(value)
 

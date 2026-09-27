@@ -38,6 +38,9 @@ inside a dump's secretEnv (see the catalog contributing guide).`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		service, name := args[0], args[1]
 		value := secretValueFlag
+		if value != "" {
+			cmd.PrintErrln("warning: --value is visible in your shell history and to other users listing processes; prefer piping the secret on stdin")
+		}
 		if value == "" {
 			line, err := bufio.NewReader(cmd.InOrStdin()).ReadString('\n')
 			if err != nil && line == "" {

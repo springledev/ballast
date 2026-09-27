@@ -369,6 +369,34 @@ func TestOpsSetSecret(t *testing.T) {
 // resolveSecrets would keep resolving to the operator's file regardless
 // of what Ballast wrote, so silently accepting the value here would
 // look like it worked while having no effect on the next run.
+// TestOpsSetSecretTightensExistingFileMode checks that rotating a
+// secret whose file was loosened on disk leaves it owner-only again.
+func TestOpsSetSecretTightensExistingFileMode(t *testing.T) {
+	h := newHarness(t)
+	h.addDestination("local")
+	svc := inventory.Service{Name: "svc", CatalogEntry: "folder", Destination: "local", Params: map[string]string{"path": "/x"}}
+	if err := h.ops.PutService(context.Background(), svc); err != nil {
+		t.Fatalf("PutService: %v", err)
+	}
+	path := filepath.Join(h.credDir, "ballast-secret.svc.db_password")
+	if err := os.WriteFile(path, []byte("old\n"), 0o644); err != nil {
+		t.Fatalf("seeding loose secret file: %v", err)
+	}
+	if err := os.Chmod(path, 0o644); err != nil {
+		t.Fatalf("chmod: %v", err)
+	}
+	if err := h.ops.SetSecret(context.Background(), "svc", "db_password", "hunter2"); err != nil {
+		t.Fatalf("SetSecret: %v", err)
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatalf("stat: %v", err)
+	}
+	if info.Mode().Perm() != 0o600 {
+		t.Errorf("mode = %o, want 600", info.Mode().Perm())
+	}
+}
+
 func TestOpsSetSecretNeverShadowsOperatorCredential(t *testing.T) {
 	h := newHarness(t)
 	h.addDestination("local")

@@ -425,9 +425,10 @@ func TestDumpPctExec(t *testing.T) {
 	}
 }
 
-// TestDumpPctExecNoEnv checks that pct-exec dumps do not forward
-// environment variables like docker-exec does (pct exec has no -e flag).
-func TestDumpPctExecNoEnv(t *testing.T) {
+// TestDumpPctExecRejectsEnv checks that a pct-exec dump fails loudly
+// when given environment variables, since pct exec cannot forward
+// them and they would otherwise be silently dropped.
+func TestDumpPctExecRejectsEnv(t *testing.T) {
 	pctBin, logPath := newPctStub(t)
 	entry := &catalog.Entry{
 		Service: "svc",
@@ -445,28 +446,14 @@ func TestDumpPctExecNoEnv(t *testing.T) {
 	if err != nil {
 		t.Fatalf("For: %v", err)
 	}
-
-	_, err = s.Backup(context.Background(), Request{
-		WorkDir: t.TempDir(),
-		Env:     []string{"MYVAR=myvalue"},
-	})
-	if err != nil {
-		t.Fatalf("Backup: %v", err)
+	_, err = s.Backup(context.Background(), Request{WorkDir: t.TempDir(), Env: []string{"MYVAR=myvalue"}})
+	if err == nil || !strings.Contains(err.Error(), "cannot pass environment variables") {
+		t.Fatalf("Backup error = %v, want pct-exec env rejection", err)
 	}
-
-	// Verify that pct exec does not include -e MYVAR or the value
-	log := readStubLog(t, logPath)
-	if len(log) != 1 {
-		t.Fatalf("pct invocations = %v, want exactly one", log)
+	if strings.Contains(err.Error(), "myvalue") {
+		t.Errorf("error leaked env value: %v", err)
 	}
-	if strings.Contains(log[0], "-e") {
-		t.Errorf("pct exec invocation = %q, must not include -e flags (pct exec does not support them)", log[0])
-	}
-	if strings.Contains(log[0], "myvalue") {
-		t.Errorf("pct exec invocation leaked env value: %q", log[0])
-	}
-	want := "exec 101 -- pg_dumpall"
-	if log[0] != want {
-		t.Errorf("pct invocations = %q, want %q", log[0], want)
+	if log := readStubLog(t, logPath); len(log) != 0 {
+		t.Errorf("pct invocations = %v, want none", log)
 	}
 }

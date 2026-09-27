@@ -32,6 +32,9 @@ func TestSecretSetWritesCredentialFile(t *testing.T) {
 	if strings.Contains(out, "hunter2") {
 		t.Errorf("output leaked the secret value: %q", out)
 	}
+	if !strings.Contains(out, "warning: --value is visible") {
+		t.Errorf("output = %q, want a warning that --value is visible to others", out)
+	}
 
 	credDir := filepath.Join(os.Getenv("BALLAST_CONFIG_DIR"), "credentials")
 	path := filepath.Join(credDir, "ballast-secret.mysql.db_password")

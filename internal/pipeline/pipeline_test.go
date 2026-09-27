@@ -643,7 +643,8 @@ func TestRunResolvesCatalogSecretEnv(t *testing.T) {
 // TestRunUnknownCatalogSecretFails checks that a service whose
 // Secrets map is missing an entry the catalog's secretEnv references
 // fails the run loudly (via ResolveSecrets), rather than running the
-// dump with an empty/unsubstituted placeholder.
+// dump with an empty/unsubstituted placeholder. It is a run-time
+// failure, so a FAILED run is recorded (red status, notification).
 func TestRunUnknownCatalogSecretFails(t *testing.T) {
 	h := newHarness(t)
 	if err := inventory.PutService(h.db, inventory.Service{
@@ -658,8 +659,30 @@ func TestRunUnknownCatalogSecretFails(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "db_password") {
 		t.Fatalf("Run error = %v, want it to name the unresolved secret db_password", err)
 	}
-	if state != "" {
-		t.Errorf("state = %q, want empty (no run created for a config error)", state)
+	if state != engine.FAILED {
+		t.Errorf("state = %q, want FAILED (recorded run, so the service goes red)", state)
+	}
+}
+
+// TestRunMissingSecretFileFails checks that a declared secret whose
+// credential file is missing records a FAILED run.
+func TestRunMissingSecretFileFails(t *testing.T) {
+	h := newHarness(t)
+	if err := inventory.PutService(h.db, inventory.Service{
+		Name: "dumpsecret", CatalogEntry: "dumpsecret", Destination: "local",
+		Secrets: map[string]string{"db_password": "no-such-credential-file"},
+	}); err != nil {
+		t.Fatalf("PutService: %v", err)
+	}
+	p := h.pipeline()
+	p.Catalog = registryWith(t, map[string]string{"dumpsecret.yaml": dumpSecretEntryYAML})
+
+	state, err := p.Run(context.Background(), "dumpsecret")
+	if err == nil || !strings.Contains(err.Error(), "no-such-credential-file") {
+		t.Fatalf("Run error = %v, want it to name the missing credential file", err)
+	}
+	if state != engine.FAILED {
+		t.Errorf("state = %q, want FAILED", state)
 	}
 }
 

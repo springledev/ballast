@@ -253,3 +253,110 @@ func TestOpsVerifyAllServicesIsolatesFailures(t *testing.T) {
 		t.Errorf("bad service light = %q, want red", badLight)
 	}
 }
+
+// setupVerifyDumpService configures a dump service "svc" from
+// entryYAML whose latest snapshot holds one dump artifact under
+// workRoot, restored by the red restic stub.
+func setupVerifyDumpService(t *testing.T, h *harness, workRoot, entryYAML string) {
+	t.Helper()
+	h.addDestination("local")
+	script := strings.ReplaceAll(verifyRedResticStub, "__ARTIFACT_PATH__", filepath.Join(workRoot, "svc", "dump.tar"))
+	stubBin := filepath.Join(t.TempDir(), "restic-stub")
+	if err := os.WriteFile(stubBin, []byte(script), 0o755); err != nil {
+		t.Fatalf("writing restic stub: %v", err)
+	}
+	h.ops.Repo = func(dest inventory.Destination) (*restic.Repository, error) {
+		return restic.Open(dest.Location, restic.Options{
+			Runner:       &runner.Runner{BaseEnv: append(os.Environ(), "STUB_LOG="+filepath.Join(h.credDir, "restic.log"))},
+			PasswordFile: filepath.Join(h.credDir, dest.PasswordCredential),
+			ResticBin:    stubBin,
+		})
+	}
+	reg, err := catalog.LoadRegistry(fstest.MapFS{"svc.yaml": &fstest.MapFile{Data: []byte(entryYAML)}}, nil)
+	if err != nil {
+		t.Fatalf("LoadRegistry: %v", err)
+	}
+	h.ops.Catalog = reg
+	if err := inventory.PutService(h.ops.DB, inventory.Service{Name: "svc", CatalogEntry: "svc", Destination: "local"}); err != nil {
+		t.Fatalf("PutService: %v", err)
+	}
+}
+
+// TestOpsVerifyServiceAmberCases checks that a snapshot which cannot
+// be checked — its dump files cannot be located, or its container
+// cannot be found with no fallback — is amber, never red or green.
+func TestOpsVerifyServiceAmberCases(t *testing.T) {
+	failingDocker := filepath.Join(t.TempDir(), "docker")
+	if err := os.WriteFile(failingDocker, []byte("#!/bin/sh\nexit 1\n"), 0o755); err != nil {
+		t.Fatalf("writing docker stub: %v", err)
+	}
+	const plainEntry = `
+apiVersion: ballast.dev/v1
+service: svc
+version: 1
+backup:
+  strategy: dump
+  dumps:
+    - name: dump
+      container: stubcontainer
+      command: ["true"]
+      format: tar
+verify:
+  method: archive-integrity
+`
+	const discoveryEntry = `
+apiVersion: ballast.dev/v1
+service: svc
+version: 1
+discovery:
+  database:
+    type: docker-label
+    match: "com.docker.compose.service=database"
+backup:
+  strategy: dump
+  dumps:
+    - name: dump
+      container: "{{ .Discovery.database }}"
+      command: ["true"]
+      format: tar
+verify:
+  method: archive-integrity
+`
+	tests := []struct {
+		name       string
+		entry      string
+		noWorkRoot bool
+		wantMethod string
+	}{
+		{name: "work directory not configured", entry: plainEntry, noWorkRoot: true, wantMethod: "archive-integrity"},
+		{name: "container not found, no fallback", entry: discoveryEntry, wantMethod: "container-discovery"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			h := newHarness(t)
+			workRoot := t.TempDir()
+			setupVerifyDumpService(t, h, workRoot, tt.entry)
+			if !tt.noWorkRoot {
+				h.ops.WorkRoot = workRoot
+			}
+			h.ops.DockerBin = failingDocker
+
+			rep, err := h.ops.VerifyService(context.Background(), "svc")
+			if err != nil {
+				t.Fatalf("VerifyService: %v", err)
+			}
+			if rep.Light != "amber" {
+				t.Fatalf("Light = %q, want amber (report: %+v)", rep.Light, rep)
+			}
+			var saw bool
+			for _, c := range rep.Checks {
+				if c.Method == tt.wantMethod && !c.Passed {
+					saw = true
+				}
+			}
+			if !saw {
+				t.Errorf("checks = %+v, want an unpassed %s check explaining why", rep.Checks, tt.wantMethod)
+			}
+		})
+	}
+}

@@ -72,9 +72,19 @@ func (o *Ops) VerifyService(ctx context.Context, service string) (VerifyReport, 
 	if !ok {
 		return rep, fmt.Errorf("service %s: catalog entry %q is not loaded", service, svc.CatalogEntry)
 	}
-	discovered, err := detect.ResolveDiscovery(ctx, o.Runner, "", entry.Discovery, entry.ParamsWithDefaults(svc.Params))
+	// Re-verifying must still work while the service's container is
+	// down — that is exactly when someone wants to know the backup is
+	// restorable — so a declared fallback stands in for Docker. With no
+	// fallback either, the snapshot cannot be checked: amber, not red.
+	discovered, err := detect.ResolveDiscoveryOffline(ctx, o.Runner, o.DockerBin, entry.Discovery, entry.ParamsWithDefaults(svc.Params))
 	if err != nil {
-		return rep, fmt.Errorf("service %s: %w", service, err)
+		rep.Light = "amber"
+		rep.Checks = []VerifyCheck{{
+			Method: "container-discovery",
+			Passed: false,
+			Detail: o.redact(fmt.Sprintf("could not find this service's container, so the backup could not be checked: %v", err)),
+		}}
+		return rep, nil
 	}
 	if err := entry.Resolve(catalog.TemplateContext{Params: svc.Params, Services: svc.Containers, Discovery: discovered}); err != nil {
 		return rep, fmt.Errorf("service %s: resolving catalog entry %q: %w", service, svc.CatalogEntry, err)
@@ -142,7 +152,7 @@ func (o *Ops) VerifyService(ctx context.Context, service string) (VerifyReport, 
 		sourceContainer = entry.Backup.Dumps[0].Container
 	}
 
-	checks, unverifiable, failed := o.runVerifyChecks(ctx, service, checker, artifacts, sourceContainer, repo, snap.ID)
+	checks, unverifiable, failed := o.runVerifyChecks(ctx, service, checker, artifacts, len(entry.Backup.Dumps) > 0, sourceContainer, repo, snap.ID)
 	if ctx.Err() != nil {
 		return rep, ctx.Err()
 	}
@@ -164,8 +174,20 @@ func (o *Ops) VerifyService(ctx context.Context, service string) (VerifyReport, 
 // user decision) and restic's own read-back, redacting every result
 // (spec rule 2, last line of defence before it reaches an API
 // response or CLI output).
-func (o *Ops) runVerifyChecks(ctx context.Context, service string, checker verify.Checker, artifacts []strategy.Artifact, sourceContainer string, repo *restic.Repository, snapshotID string) (checks []VerifyCheck, unverifiable, failed bool) {
+func (o *Ops) runVerifyChecks(ctx context.Context, service string, checker verify.Checker, artifacts []strategy.Artifact, expectArtifacts bool, sourceContainer string, repo *restic.Repository, snapshotID string) (checks []VerifyCheck, unverifiable, failed bool) {
 	runDeclaredChecker := len(artifacts) > 0 || checker.Method() != "archive-integrity"
+	if expectArtifacts && len(artifacts) == 0 {
+		// A dump backup always writes its files under the work
+		// directory; finding none means they cannot be located (e.g.
+		// no work directory is configured), not that they are bad.
+		runDeclaredChecker = false
+		unverifiable = true
+		checks = append(checks, VerifyCheck{
+			Method: checker.Method(),
+			Passed: false,
+			Detail: "No database dump files were found in the latest snapshot, so the restore test could not run. Check that Ballast's work directory is configured.",
+		})
+	}
 	if runDeclaredChecker {
 		vres := checker.Check(ctx, verify.Request{Service: service, Artifacts: artifacts, SourceContainer: sourceContainer})
 		c := VerifyCheck{Method: vres.Method, Passed: vres.Passed, Warning: o.redact(vres.Warning), Detail: o.redact(vres.Detail)}

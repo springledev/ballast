@@ -158,7 +158,7 @@ func openApp(cfg config.Config, logw io.Writer) (*app, error) {
 		secrets.AddFile(pwFile)
 		return restic.Open(dest.Location, restic.Options{Runner: r, PasswordFile: pwFile})
 	}
-	ops := &api.Ops{DB: st.DB(), Catalog: reg, Coord: coord, Repo: repoFor, DestinationLocks: scheduler.FileLocker{Dir: filepath.Join(cfg.DataDir, "locks", "destinations")}, Runner: r, CredentialsDir: cfg.WritableCredentialsDir, CredentialSearchDirs: credDirs, Redact: secrets, WorkRoot: pl.WorkRoot}
+	ops := &api.Ops{DB: st.DB(), Catalog: reg, Coord: coord, Repo: repoFor, DestinationLocks: scheduler.FileLocker{Dir: filepath.Join(cfg.DataDir, "locks", "destinations")}, Runner: r, DockerBin: pl.DockerBin, CredentialsDir: cfg.WritableCredentialsDir, CredentialSearchDirs: credDirs, Redact: secrets, WorkRoot: pl.WorkRoot}
 
 	a := &app{cfg: cfg, store: st, ops: ops, coord: coord, notifier: notifier, apiToken: apiToken, secrets: secrets, logw: logw}
 	if cfg.WritableCredentialsDir != cfg.CredentialsDir {

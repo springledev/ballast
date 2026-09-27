@@ -92,21 +92,6 @@ func (p *Pipeline) Run(ctx context.Context, service string) (engine.State, error
 	if !ok {
 		return "", fmt.Errorf("service %s: catalog entry %q is not loaded", service, svc.CatalogEntry)
 	}
-	discovered, err := detect.ResolveDiscovery(ctx, p.Runner, p.DockerBin, entry.Discovery, entry.ParamsWithDefaults(svc.Params))
-	if err != nil {
-		return "", fmt.Errorf("service %s: %w", service, err)
-	}
-	if err := entry.Resolve(catalog.TemplateContext{Params: svc.Params, Services: svc.Containers, Discovery: discovered}); err != nil {
-		return "", fmt.Errorf("service %s: resolving catalog entry %q: %w", service, svc.CatalogEntry, err)
-	}
-	secrets, err := p.resolveSecrets(svc)
-	if err != nil {
-		return "", fmt.Errorf("service %s: %w", service, err)
-	}
-	if err := entry.ResolveSecrets(secrets); err != nil {
-		return "", fmt.Errorf("service %s: resolving catalog entry %q: %w", service, svc.CatalogEntry, err)
-	}
-
 	m, err := engine.StartRun(p.DB, service)
 	if err != nil {
 		return "", fmt.Errorf("service %s: %w", service, err)
@@ -145,6 +130,24 @@ func (p *Pipeline) Run(ctx context.Context, service string) (engine.State, error
 	// run lock is held for the whole call.
 	if err := m.Transition(engine.PREPARING, "preparing"); err != nil {
 		return fail(err)
+	}
+	// Discovery and secrets depend on the host's state on the day of
+	// the run (a stopped container, a missing or loosened credential
+	// file), not on configuration, so they fail inside the run: the
+	// service goes red and a notification fires (spec §3).
+	discovered, err := detect.ResolveDiscovery(ctx, p.Runner, p.DockerBin, entry.Discovery, entry.ParamsWithDefaults(svc.Params))
+	if err != nil {
+		return fail(err)
+	}
+	if err := entry.Resolve(catalog.TemplateContext{Params: svc.Params, Services: svc.Containers, Discovery: discovered}); err != nil {
+		return fail(fmt.Errorf("resolving catalog entry %q: %w", svc.CatalogEntry, err))
+	}
+	secrets, err := p.resolveSecrets(svc)
+	if err != nil {
+		return fail(err)
+	}
+	if err := entry.ResolveSecrets(secrets); err != nil {
+		return fail(fmt.Errorf("resolving catalog entry %q: %w", svc.CatalogEntry, err))
 	}
 	strat, err := strategy.For(entry, strategy.Options{Runner: p.Runner, DockerBin: p.DockerBin, PctBin: p.PctBin})
 	if err != nil {

@@ -35,6 +35,11 @@ func (s *Dump) Backup(ctx context.Context, req Request) (*Result, error) {
 	r := s.opts.runnerFor(req)
 	env := req.env()
 	for _, d := range s.entry.Backup.Dumps {
+		if d.Transport == "pct-exec" && len(env) > 0 {
+			// pct exec cannot forward environment variables into the
+			// guest, so they would be silently dropped; fail instead.
+			return nil, fmt.Errorf("service %s: dump %q: pct-exec transport cannot pass environment variables into the guest", s.entry.Service, d.Name)
+		}
 		dumpEnv, dumpRunner := withDumpSecrets(r, env, d.SecretEnv)
 		artifact, err := s.runDump(ctx, dumpRunner, dumpEnv, req.WorkDir, d)
 		if err != nil {

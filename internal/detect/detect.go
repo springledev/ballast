@@ -77,6 +77,9 @@ func ResolveDiscovery(ctx context.Context, r *runner.Runner, dockerBin string, d
 	if len(discovery) == 0 {
 		return nil, nil
 	}
+	if r == nil {
+		return nil, fmt.Errorf("container discovery is unavailable: no command runner is configured")
+	}
 	if dockerBin == "" {
 		dockerBin = "docker"
 	}
@@ -117,6 +120,32 @@ func ResolveDiscovery(ctx context.Context, r *runner.Runner, dockerBin string, d
 		default:
 			return nil, fmt.Errorf("discovery %q: label %q matched %d running containers (%s); it must match exactly one", name, rule.Match, len(matches), strings.Join(matches, ", "))
 		}
+	}
+	return out, nil
+}
+
+// ResolveDiscoveryOffline is ResolveDiscovery for callers that must
+// not depend on the service's containers being up right now — adding
+// a service, or re-verifying an existing snapshot. It tries Docker
+// first; if that fails for any reason (Docker down, container
+// stopped), it resolves every rule from its declared fallback alone.
+// If any rule has no usable fallback, the original Docker error is
+// returned.
+func ResolveDiscoveryOffline(ctx context.Context, r *runner.Runner, dockerBin string, discovery map[string]catalog.DiscoveryRule, params map[string]string) (map[string]string, error) {
+	out, liveErr := ResolveDiscovery(ctx, r, dockerBin, discovery, params)
+	if liveErr == nil {
+		return out, nil
+	}
+	out = make(map[string]string, len(discovery))
+	for name, rule := range discovery {
+		if rule.Fallback == "" {
+			return nil, liveErr
+		}
+		v, err := catalog.ResolveTemplate(rule.Fallback, catalog.TemplateContext{Params: params})
+		if err != nil || v == "" {
+			return nil, liveErr
+		}
+		out[name] = v
 	}
 	return out, nil
 }
