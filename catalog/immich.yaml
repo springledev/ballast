@@ -1,0 +1,68 @@
+# catalog/immich.yaml — Immich photo & video server (spec §5.1, §6.1).
+#
+# Two things make up an Immich backup: the Postgres database (albums,
+# people, metadata — everything that isn't a photo file) and the
+# upload/library directory holding the photos and videos themselves.
+# The database is dumped with pg_dumpall (transactionally consistent,
+# the app keeps running); the library is static files that restic
+# backs up directly.
+#
+# Verification restores the dump into a throwaway container of the
+# Immich Postgres image. It MUST be the same image your Immich stack
+# runs: Immich's database needs its vector-search extensions
+# (VectorChord / pgvecto.rs), which the plain postgres image lacks, so
+# a restore there would fail for the wrong reason (spec §7.2). Ballast
+# warns when the running database container's image differs.
+#
+# Spec deviation (deliberate): the spec §6.1 example names the
+# database container {{ .Services.database }}. Nothing in the wizard or
+# web UI can fill a detected-container role yet, so this entry asks
+# for it as an ordinary parameter with the official docker-compose
+# default instead — the same approach the generic postgres entry uses.
+apiVersion: ballast.dev/v1
+service: immich
+version: 1
+display:
+  name: Immich
+  description: Photos & videos (Postgres database + photo library)
+detect:
+  docker:
+    imagePattern: "ghcr.io/immich-app/immich-server"
+    orEnv:
+      IMMICH_VERSION: "*"
+parameters:
+  - name: library_dir
+    required: true
+    prompt: "Path to your Immich upload/library folder on this machine (UPLOAD_LOCATION in Immich's .env file)"
+  - name: db_container
+    required: true
+    default: "immich_postgres"
+    prompt: "Name of Immich's database container"
+  - name: db_user
+    required: true
+    default: "postgres"
+    prompt: "Immich's database user (DB_USERNAME in Immich's .env file)"
+  - name: db_image
+    required: true
+    default: "ghcr.io/immich-app/postgres:14-vectorchord0.4.3-pgvectors0.2.0"
+    prompt: "Image of Immich's database container, used for the test restore (copy it from Immich's docker-compose.yml)"
+backup:
+  strategy: dump
+  dumps:
+    - name: database
+      container: "{{ .Params.db_container }}"
+      # No --clean: restoring into the fresh throwaway cluster must not
+      # try to drop the role it is connected as. The only expected
+      # error is "role already exists", filtered below.
+      command: ["pg_dumpall", "-U", "{{ .Params.db_user }}"]
+      format: sql
+  files:
+    - path: "{{ .Params.library_dir }}"
+verify:
+  method: container-restore
+  image: "{{ .Params.db_image }}" # MUST match the service's extensions (pgvector/vchord)
+  filterStderr:
+    - "already exists" # benign during restore into a fresh cluster
+  restartPolicy: never # dump strategy never stops containers
+notifications:
+  failureVerbosity: full

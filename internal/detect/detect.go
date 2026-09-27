@@ -12,6 +12,7 @@ import (
 	"errors"
 	"fmt"
 	"os/exec"
+	"sort"
 	"strings"
 
 	"github.com/springledev/ballast/internal/catalog"
@@ -70,8 +71,15 @@ type Suggestion struct {
 // needed here). Entries with no detect.docker rule (e.g. the generic
 // "folder" entry) are never suggested — they are always a manual
 // pick, which is correct: nothing about a folder is auto-detectable.
+//
+// Suggestions are ordered most specific first — by the length of the
+// matching imagePattern, ties by service name — so an app-specific
+// entry ("ghcr.io/immich-app/immich-server") is offered ahead of a
+// generic engine entry ("postgres") that also matches one of the
+// app's own containers. The wizard offers the first suggestion.
 func Suggest(entries []*catalog.Entry, containers []Container) []Suggestion {
 	out := []Suggestion{}
+	patternLen := map[string]int{}
 	for _, e := range entries {
 		if e.Detect.Docker == nil || e.Detect.Docker.ImagePattern == "" {
 			continue
@@ -85,7 +93,15 @@ func Suggest(entries []*catalog.Entry, containers []Container) []Suggestion {
 		}
 		if len(matches) > 0 {
 			out = append(out, Suggestion{Service: e.Service, Containers: matches})
+			patternLen[e.Service] = len(pattern)
 		}
 	}
+	sort.SliceStable(out, func(i, j int) bool {
+		li, lj := patternLen[out[i].Service], patternLen[out[j].Service]
+		if li != lj {
+			return li > lj
+		}
+		return out[i].Service < out[j].Service
+	})
 	return out
 }

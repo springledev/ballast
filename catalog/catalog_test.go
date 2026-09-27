@@ -8,7 +8,43 @@ import (
 	"testing"
 
 	ballastcatalog "github.com/springledev/ballast/internal/catalog"
+	"github.com/springledev/ballast/internal/runner"
+	"github.com/springledev/ballast/internal/strategy"
+	"github.com/springledev/ballast/internal/verify"
 )
+
+// resolveWithDummyValues loads and resolves one bundled entry with
+// dummy parameter/service values, exactly as
+// TestBundledEntriesTemplatesRoundTrip does: every {{ .Params.* }} /
+// {{ .Services.* }} reference found in the raw YAML gets a
+// "test-<name>" value (a parameter's catalog default, when it has
+// one, is filled in automatically by Entry.Resolve for anything not
+// referenced directly here — but every bundled entry's templates
+// happen to reference every parameter, so this covers them all).
+func resolveWithDummyValues(t *testing.T, path string) *ballastcatalog.Entry {
+	t.Helper()
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("reading entry: %v", err)
+	}
+	entry, err := ballastcatalog.Load(raw)
+	if err != nil {
+		t.Fatalf("loading entry: %v", err)
+	}
+	ctx := ballastcatalog.TemplateContext{Params: map[string]string{}, Services: map[string]string{}}
+	for _, m := range refRE.FindAllStringSubmatch(string(raw), -1) {
+		table, name := m[1], m[2]
+		if table == "Params" {
+			ctx.Params[name] = "test-" + name
+		} else {
+			ctx.Services[name] = "test-" + name
+		}
+	}
+	if err := entry.Resolve(ctx); err != nil {
+		t.Fatalf("Resolve with dummy values: %v", err)
+	}
+	return entry
+}
 
 // refRE finds template references ({{ .Params.NAME }} /
 // {{ .Services.NAME }}) in raw catalog YAML.
@@ -104,6 +140,92 @@ func TestBundledEntriesTemplatesRoundTrip(t *testing.T) {
 			}
 			if strings.Contains(resolved.Verify.Image, "{{") {
 				t.Errorf("verify image still contains a placeholder: %q", resolved.Verify.Image)
+			}
+		})
+	}
+}
+
+// TestBundledEntriesAreRunnable asserts that every bundled entry is
+// not merely schema-valid but actually runnable by the implemented
+// strategy and verification code: once resolved, strategy.For and
+// verify.For (the same constructors the real pipeline calls, see
+// internal/pipeline.Pipeline.Run) must both succeed against it. A
+// catalog entry that fails here would fail every real backup run.
+func TestBundledEntriesAreRunnable(t *testing.T) {
+	for _, path := range bundledEntries(t) {
+		t.Run(path, func(t *testing.T) {
+			entry := resolveWithDummyValues(t, path)
+			opts := strategy.Options{Runner: &runner.Runner{}}
+			if _, err := strategy.For(entry, opts); err != nil {
+				t.Errorf("strategy.For(%s) = error %v, want nil", entry.Service, err)
+			}
+			vopts := verify.Options{Runner: &runner.Runner{}}
+			if _, err := verify.For(entry, vopts); err != nil {
+				t.Errorf("verify.For(%s) = error %v, want nil", entry.Service, err)
+			}
+		})
+	}
+}
+
+// TestImmichCatalogRequirements pins the Immich-specific shape the
+// container-restore verification and the dump+files backup strategy
+// depend on, so a future edit to catalog/immich.yaml cannot silently
+// drop what makes the vector-search extension restore work (see
+// internal/verify.ContainerRestore's package doc: it must start the
+// throwaway container with the image's own default command, and the
+// "role already exists" stderr from a --clean-less pg_dumpall restore
+// must be filtered as benign).
+func TestImmichCatalogRequirements(t *testing.T) {
+	entry, err := ballastcatalog.LoadFile("immich.yaml")
+	if err != nil {
+		t.Fatalf("LoadFile(immich.yaml): %v", err)
+	}
+	if entry.Verify.Method != "container-restore" {
+		t.Errorf("Verify.Method = %q, want container-restore", entry.Verify.Method)
+	}
+	found := false
+	for _, s := range entry.Verify.FilterStderr {
+		if strings.Contains(s, "already exists") {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("Verify.FilterStderr = %v, want an entry containing %q", entry.Verify.FilterStderr, "already exists")
+	}
+	if entry.Backup.Strategy != "dump" {
+		t.Errorf("Backup.Strategy = %q, want dump", entry.Backup.Strategy)
+	}
+	if len(entry.Backup.Dumps) == 0 {
+		t.Error("Backup.Dumps is empty, want a database dump")
+	}
+	if len(entry.Backup.Files) == 0 {
+		t.Error("Backup.Files is empty, want the photo/video library path")
+	}
+}
+
+// TestStopStartCatalogRequirements pins that vaultwarden and couchdb
+// use the stop-start strategy verified by archive-integrity — the
+// combination that guarantees the container is restarted and the
+// data-folder archive is read back, per catalog/vaultwarden.yaml and
+// catalog/couchdb.yaml's own doc comments.
+func TestStopStartCatalogRequirements(t *testing.T) {
+	for _, svc := range []string{"vaultwarden", "couchdb"} {
+		t.Run(svc, func(t *testing.T) {
+			entry, err := ballastcatalog.LoadFile(svc + ".yaml")
+			if err != nil {
+				t.Fatalf("LoadFile(%s.yaml): %v", svc, err)
+			}
+			if entry.Backup.Strategy != "stop-start" {
+				t.Errorf("Backup.Strategy = %q, want stop-start", entry.Backup.Strategy)
+			}
+			if entry.Verify.Method != "archive-integrity" {
+				t.Errorf("Verify.Method = %q, want archive-integrity", entry.Verify.Method)
+			}
+			if entry.Backup.StopStart == nil || len(entry.Backup.StopStart.Containers) == 0 {
+				t.Error("Backup.StopStart.Containers is empty")
+			}
+			if len(entry.Backup.Files) == 0 {
+				t.Error("Backup.Files is empty, want the service's data directory")
 			}
 		})
 	}

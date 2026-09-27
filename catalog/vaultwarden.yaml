@@ -1,0 +1,41 @@
+# catalog/vaultwarden.yaml — Vaultwarden password manager (spec §5.1).
+#
+# Vaultwarden keeps everything (SQLite database, attachments, keys) in
+# one data folder. Copying a live SQLite file can capture it
+# half-written, so the stop-start strategy stops the container, archives
+# the data folder, and always starts the container again — even when
+# the backup fails or is cancelled.
+#
+# Verification: the archive is fully read back (tar index test) and
+# restic re-reads a sample of the snapshot. A failed restart fails the
+# run. The login smoke test from spec §5.1 needs the restart-smoke
+# verification method, which is not implemented yet.
+apiVersion: ballast.dev/v1
+service: vaultwarden
+version: 1
+display:
+  name: Vaultwarden
+  description: Password manager (briefly stopped while its data folder is copied)
+detect:
+  docker:
+    imagePattern: "vaultwarden/server"
+parameters:
+  - name: container
+    required: true
+    default: "vaultwarden"
+    prompt: "Name of your Vaultwarden container"
+  - name: data_dir
+    required: true
+    prompt: "Path to Vaultwarden's data folder on this machine (the one mounted at /data)"
+backup:
+  strategy: stop-start
+  stopStart:
+    containers:
+      - "{{ .Params.container }}"
+  files:
+    - path: "{{ .Params.data_dir }}"
+verify:
+  method: archive-integrity
+  restartPolicy: always # stop-start restarts the container every run
+notifications:
+  failureVerbosity: full

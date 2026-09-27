@@ -82,6 +82,22 @@ func substitute(s string, ctx TemplateContext) (string, error) {
 	return out, nil
 }
 
+// withDefaults returns params plus the catalog default of every declared
+// parameter absent from it, without modifying params. A value the user
+// supplied — even an empty one — always wins over the default.
+func (e *Entry) withDefaults(params map[string]string) map[string]string {
+	out := make(map[string]string, len(params)+len(e.Parameters))
+	for k, v := range params {
+		out[k] = v
+	}
+	for _, p := range e.Parameters {
+		if _, ok := out[p.Name]; !ok && p.Default != "" {
+			out[p.Name] = p.Default
+		}
+	}
+	return out
+}
+
 // missingRequiredParams lists catalog-declared required parameters absent
 // from params.
 func (e *Entry) missingRequiredParams(params map[string]string) []string {
@@ -98,12 +114,14 @@ func (e *Entry) missingRequiredParams(params map[string]string) []string {
 
 // Resolve substitutes every allowed template placeholder in template-bearing
 // fields (dump containers and commands, file paths, verify image) and
-// validates that all required parameters were supplied.
+// validates that all required parameters were supplied. A parameter the
+// caller left out takes its catalog default, when it has one.
 //
 // Only simple string substitution of {{ .Params.* }} and {{ .Services.* }} is
 // supported (spec §6 schema rule); unknown expressions cause an error, never
 // Go template execution.
 func (e *Entry) Resolve(ctx TemplateContext) error {
+	ctx.Params = e.withDefaults(ctx.Params)
 	if missing := e.missingRequiredParams(ctx.Params); len(missing) > 0 {
 		return fmt.Errorf("missing required parameter(s): %s", strings.Join(missing, ", "))
 	}

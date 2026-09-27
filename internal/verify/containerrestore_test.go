@@ -53,7 +53,7 @@ func TestContainerRestorePass(t *testing.T) {
 	log := readStubLog(t, logPath)
 	name := containerName(t, log)
 	want := []string{
-		"run --detach --network none --name " + name + " -e POSTGRES_HOST_AUTH_METHOD=trust postgres:16 postgres",
+		"run --detach --network none --name " + name + " -e POSTGRES_HOST_AUTH_METHOD=trust postgres:16",
 		"exec " + name + " pg_isready -q -U postgres",
 		// waitReady re-confirms a first successful probe after a short
 		// settle delay (a real postgres/mysql image briefly runs a
@@ -103,7 +103,7 @@ func TestContainerRestoreMySQLDialect(t *testing.T) {
 	log := readStubLog(t, logPath)
 	name := containerName(t, log)
 	want := []string{
-		"run --detach --network none --name " + name + " -e MYSQL_ALLOW_EMPTY_PASSWORD=yes mariadb:11 mysqld",
+		"run --detach --network none --name " + name + " -e MYSQL_ALLOW_EMPTY_PASSWORD=yes mariadb:11",
 		"exec " + name + " mysqladmin -s ping",
 		"exec " + name + " mysqladmin -s ping",
 		"exec -i " + name + " mysql -u root",
@@ -477,23 +477,19 @@ func TestSplitFiltered(t *testing.T) {
 func TestDialectFor(t *testing.T) {
 	tests := []struct {
 		image    string
-		server   string
 		client   string
 		readyArg string
 	}{
-		{"postgres:16", "postgres", "psql", "pg_isready"},
-		{"ghcr.io/immich-app/postgres:16", "postgres", "psql", "pg_isready"},
-		{"postgres:17-alpine", "postgres", "psql", "pg_isready"},
-		{"mysql:8", "mysqld", "mysql", "mysqladmin"},
-		{"mariadb:11", "mysqld", "mysql", "mysqladmin"},
-		{"lscr.io/linuxserver/mariadb:latest", "mysqld", "mysql", "mysqladmin"},
+		{"postgres:16", "psql", "pg_isready"},
+		{"ghcr.io/immich-app/postgres:14-vectorchord0.4.3-pgvectors0.2.0", "psql", "pg_isready"},
+		{"postgres:17-alpine", "psql", "pg_isready"},
+		{"mysql:8", "mysql", "mysqladmin"},
+		{"mariadb:11", "mysql", "mysqladmin"},
+		{"lscr.io/linuxserver/mariadb:latest", "mysql", "mysqladmin"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.image, func(t *testing.T) {
 			d := dialectFor(tt.image)
-			if d.server != tt.server {
-				t.Errorf("server = %q, want %q", d.server, tt.server)
-			}
 			if d.client[0] != tt.client {
 				t.Errorf("client = %q, want %q", d.client[0], tt.client)
 			}

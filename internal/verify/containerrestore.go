@@ -29,22 +29,24 @@ const defaultReadyTimeout = 90 * time.Second
 //
 // The spec §7.2 normative MUSTs, each enforced by a test:
 //
-//   - The container is started with an explicit command of the
-//     server binary ("postgres", "mysqld"), because e.g. the
-//     postgres image's own entrypoint script only performs first-run
-//     initialization (initdb) and starts a server when the command it
-//     is given is `postgres` — any other command is just exec'd
-//     as-is. NOTE (spec deviation, flagged per AGENTS.md): spec §7.2
-//     says to "override the entrypoint explicitly"; overriding
-//     --entrypoint away from the image's own docker-entrypoint.sh
-//     instead skips that initialization entirely (confirmed against a
-//     real postgres:16 and mysql:8 image: the throwaway container
-//     never runs initdb, so the server refuses to start at all — the
-//     opposite of a working verification). Keeping the image's
-//     default entrypoint and passing the server binary name as the
-//     command is what actually makes "the command is postgres"
-//     trigger the entrypoint script's init-and-start path, which is
-//     what this MUST is actually asking for.
+//   - The container is started with the image's own entrypoint AND
+//     its own default command. NOTE (spec deviation, flagged per
+//     AGENTS.md): spec §7.2 says to "override the entrypoint
+//     explicitly" so the server actually starts; overriding
+//     --entrypoint skips the entrypoint script's first-run
+//     initialization (initdb / mysql install-db) entirely (confirmed
+//     against real postgres:16 and mysql:8 images: the server then
+//     refuses to start at all). Passing a bare server binary as the
+//     command is not safe either: it discards the image's own server
+//     arguments, and e.g. Immich's ghcr.io/immich-app/postgres image
+//     loads its vector-search extensions through
+//     `postgres -c config_file=/etc/postgresql/postgresql.conf` —
+//     restoring an Immich dump into a bare `postgres` fails with
+//     "vchord must be loaded via shared_preload_libraries" (confirmed
+//     against the real image). Every supported database image's
+//     default command already starts its server through the
+//     init-and-start path this MUST is asking for, so the restore
+//     runs the image exactly as the service's own stack does.
 //   - The container runs with --network none: it holds an
 //     empty-password / trust-local server for the check window, so
 //     it must not be reachable from other containers on the docker
@@ -186,7 +188,6 @@ func randomSuffix() string {
 
 // restoreDialect describes how one database family is restored.
 type restoreDialect struct {
-	server    string   // entrypoint override (normative MUST)
 	extraRun  []string // extra `docker run` args
 	readyArgs []string // readiness probe inside the container
 	client    []string // client command reading the dump from stdin
@@ -200,14 +201,12 @@ func dialectFor(image string) restoreDialect {
 	lower := strings.ToLower(image)
 	if strings.Contains(lower, "mysql") || strings.Contains(lower, "mariadb") {
 		return restoreDialect{
-			server:    "mysqld",
 			extraRun:  []string{"-e", "MYSQL_ALLOW_EMPTY_PASSWORD=yes"}, // no secret travels in argv
 			readyArgs: []string{"mysqladmin", "-s", "ping"},
 			client:    []string{"mysql", "-u", "root"},
 		}
 	}
 	return restoreDialect{
-		server: "postgres",
 		// POSTGRES_HOST_AUTH_METHOD=trust: the throwaway container
 		// exists only for the duration of the check (--network none
 		// keeps it unreachable from anywhere else) and no secret
@@ -246,11 +245,11 @@ func (c *ContainerRestore) imageDriftWarning(ctx context.Context, source string,
 }
 
 // startContainer creates the throwaway container with no network,
-// keeping the image's own entrypoint (docker-entrypoint.sh) so its
-// first-run initialization (initdb / mysql install-db) actually runs,
-// and passing the server binary name as the command — see the
+// keeping the image's own entrypoint and default command, so its
+// first-run initialization (initdb / mysql install-db) runs and the
+// server starts with the image's own arguments — see the
 // package-level "spec deviation" note on ContainerRestore for why
-// this is used instead of a literal --entrypoint override.
+// neither is overridden.
 func (c *ContainerRestore) startContainer(ctx context.Context, name string, d restoreDialect, env []string) error {
 	// --network none: the throwaway runs an empty-password /
 	// trust-local server, so it must not be reachable from other
@@ -258,7 +257,7 @@ func (c *ContainerRestore) startContainer(ctx context.Context, name string, d re
 	// through docker exec, which works without a network.
 	args := []string{"run", "--detach", "--network", "none", "--name", name}
 	args = append(args, d.extraRun...)
-	args = append(args, c.image, d.server)
+	args = append(args, c.image)
 	_, err := c.opts.Runner.Run(ctx, nil, nil, runner.Command{Name: c.opts.docker(), Args: args, Env: env})
 	if err != nil {
 		return fmt.Errorf("starting %s: %w", c.image, err)

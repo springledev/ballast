@@ -208,6 +208,42 @@ func TestResolveRejections(t *testing.T) {
 	}
 }
 
+// TestResolveParameterDefaults: an omitted parameter takes its catalog
+// default (so `ballast service add` need not repeat it), a supplied
+// value — even an empty one — wins, and the caller's map is untouched.
+func TestResolveParameterDefaults(t *testing.T) {
+	base, err := Load([]byte(validEntry))
+	if err != nil {
+		t.Fatal(err)
+	}
+	base.Parameters[0].Default = "/srv/default-library"
+	cases := []struct {
+		name   string
+		params map[string]string
+		want   string
+	}{
+		{name: "omitted takes default", params: map[string]string{}, want: "/srv/default-library"},
+		{name: "nil params takes default", params: nil, want: "/srv/default-library"},
+		{name: "supplied value wins", params: map[string]string{"library_dir": "/mnt/photos"}, want: "/mnt/photos"},
+		{name: "supplied empty value wins", params: map[string]string{"library_dir": ""}, want: ""},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			entry := base.DeepCopy()
+			before := len(tc.params)
+			if err := entry.Resolve(TemplateContext{Params: tc.params, Services: map[string]string{"database": "db"}}); err != nil {
+				t.Fatalf("Resolve() error = %v", err)
+			}
+			if got := entry.Backup.Files[0].Path; got != tc.want {
+				t.Errorf("file path = %q, want %q", got, tc.want)
+			}
+			if len(tc.params) != before {
+				t.Errorf("Resolve mutated the caller's params map: %v", tc.params)
+			}
+		})
+	}
+}
+
 func TestResolveUnknownParamReference(t *testing.T) {
 	base, err := Load([]byte(validEntry))
 	if err != nil {

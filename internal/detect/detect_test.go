@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	bundled "github.com/springledev/ballast/catalog"
 	"github.com/springledev/ballast/internal/catalog"
 	"github.com/springledev/ballast/internal/runner"
 )
@@ -87,6 +88,53 @@ func TestSuggest(t *testing.T) {
 	}
 	if got[1].Service != "mysql" || len(got[1].Containers) != 1 || got[1].Containers[0].Name != "mysql-db" {
 		t.Errorf("mysql suggestion = %+v, want mysql-db matched", got[1])
+	}
+}
+
+// TestSuggestBundledCatalogPrefersApps runs detection against the
+// real bundled catalog: on a host running a typical app stack, the
+// app's own entry is suggested first, never the generic database
+// entry that also matches one of its containers.
+func TestSuggestBundledCatalogPrefersApps(t *testing.T) {
+	reg, err := catalog.LoadRegistry(bundled.Bundled, nil)
+	if err != nil {
+		t.Fatalf("LoadRegistry: %v", err)
+	}
+	tests := []struct {
+		name       string
+		containers []Container
+		want       []string
+	}{
+		{
+			name: "immich compose stack",
+			containers: []Container{
+				{Name: "immich_server", Image: "ghcr.io/immich-app/immich-server:release"},
+				{Name: "immich_postgres", Image: "ghcr.io/immich-app/postgres:14-vectorchord0.4.3-pgvectors0.2.0"},
+				{Name: "immich_redis", Image: "docker.io/valkey/valkey:8-bookworm"},
+			},
+			want: []string{"immich", "postgres"},
+		},
+		{
+			name: "several apps",
+			containers: []Container{
+				{Name: "couchdb", Image: "couchdb:3"},
+				{Name: "vaultwarden", Image: "vaultwarden/server:latest"},
+				{Name: "immich_server", Image: "ghcr.io/immich-app/immich-server:release"},
+			},
+			want: []string{"immich", "vaultwarden", "couchdb"},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := Suggest(reg.List(), tt.containers)
+			var names []string
+			for _, s := range got {
+				names = append(names, s.Service)
+			}
+			if strings.Join(names, ",") != strings.Join(tt.want, ",") {
+				t.Errorf("Suggest() order = %v, want %v", names, tt.want)
+			}
+		})
 	}
 }
 

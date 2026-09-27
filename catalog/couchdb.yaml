@@ -1,0 +1,41 @@
+# catalog/couchdb.yaml — Apache CouchDB (spec §5.1), e.g. the
+# database behind Obsidian LiveSync.
+#
+# CouchDB's data files are append-only, but a copy taken while it
+# writes can still catch a database mid-compaction. The stop-start
+# strategy stops the container, archives the data folder, and always
+# starts the container again — even when the backup fails or is
+# cancelled.
+#
+# Verification: the archive is fully read back (tar index test) and
+# restic re-reads a sample of the snapshot. A failed restart fails the
+# run.
+apiVersion: ballast.dev/v1
+service: couchdb
+version: 1
+display:
+  name: CouchDB
+  description: CouchDB database (briefly stopped while its data folder is copied)
+detect:
+  docker:
+    imagePattern: "couchdb"
+parameters:
+  - name: container
+    required: true
+    default: "couchdb"
+    prompt: "Name of your CouchDB container"
+  - name: data_dir
+    required: true
+    prompt: "Path to CouchDB's data folder on this machine (the one mounted at /opt/couchdb/data)"
+backup:
+  strategy: stop-start
+  stopStart:
+    containers:
+      - "{{ .Params.container }}"
+  files:
+    - path: "{{ .Params.data_dir }}"
+verify:
+  method: archive-integrity
+  restartPolicy: always # stop-start restarts the container every run
+notifications:
+  failureVerbosity: full
