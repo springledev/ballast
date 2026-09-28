@@ -2,7 +2,7 @@
 import { computed, onMounted, reactive, ref, watch } from "vue";
 
 import { api } from "@/api/client";
-import type { Service, Snapshot } from "@/api/types";
+import type { RestoreProjectReport, Service, Snapshot } from "@/api/types";
 import { formatDateTime, formatRelative } from "@/lib/format";
 
 const services = ref<Service[]>([]);
@@ -18,12 +18,46 @@ const form = reactive({ snapshot: "", paths: "", to: "" });
 // Newest first, so the default choice is the most recent backup.
 const sorted = computed(() => [...snapshots.value].sort((a, b) => b.time.localeCompare(a.time)));
 
+// --- full-stack restore (a project's compose config + volumes + DB dumps together, spec §14 step 23) ---
+
+const projects = ref<string[]>([]);
+const projectForm = reactive({ project: "", asOf: "", to: "" });
+const projectError = ref("");
+const projectReport = ref<RestoreProjectReport | null>(null);
+const projectRestoring = ref(false);
+
+async function restoreProject() {
+  projectError.value = "";
+  projectReport.value = null;
+  if (!projectForm.to.startsWith("/")) {
+    projectError.value = "Enter a full folder path starting with /, for example /tmp/restored.";
+    return;
+  }
+  projectRestoring.value = true;
+  try {
+    // The API takes a full RFC3339 timestamp; a plain date input is
+    // extended to midnight UTC so "as of this date" reads naturally.
+    const asOf = projectForm.asOf ? `${projectForm.asOf}T00:00:00Z` : undefined;
+    projectReport.value = await api.restoreProject(projectForm.project, { as_of: asOf, to: projectForm.to });
+  } catch (e) {
+    projectError.value = (e as Error).message;
+  } finally {
+    projectRestoring.value = false;
+  }
+}
+
 onMounted(async () => {
   try {
     services.value = await api.listServices();
     if (services.value.length === 1) selectedService.value = services.value[0].name;
   } catch (e) {
     error.value = (e as Error).message;
+  }
+  try {
+    projects.value = await api.listProjects();
+    if (projects.value.length === 1) projectForm.project = projects.value[0];
+  } catch {
+    // Best-effort: the full-stack restore panel just won't offer to prefill a project.
   }
 });
 
@@ -151,4 +185,60 @@ async function restore() {
       </template>
     </template>
   </form>
+
+  <template v-if="projects.length">
+    <h2 style="margin-top: 2rem">Restore a whole stack</h2>
+    <p class="lede">
+      If you gave several services the same "project" (Services → Advanced), you can restore its Compose config,
+      volumes and database dump together, in the right order: config first, then volumes, then the database.
+    </p>
+
+    <p v-if="projectError" class="notice notice--error" role="alert">{{ projectError }}</p>
+
+    <form class="panel" @submit.prevent="restoreProject">
+      <div class="field">
+        <label for="restore-project">Which project?</label>
+        <select id="restore-project" v-model="projectForm.project">
+          <option value="" disabled>Choose…</option>
+          <option v-for="p in projects" :key="p" :value="p">{{ p }}</option>
+        </select>
+      </div>
+      <div class="field">
+        <label for="restore-project-to">Put the config and dump files in</label>
+        <input id="restore-project-to" v-model="projectForm.to" />
+        <p class="hint">A new or empty folder on the Ballast server. Volumes are restored into new Docker volumes instead.</p>
+      </div>
+      <details class="advanced">
+        <summary>Advanced: restore as of a particular date</summary>
+        <div class="advanced-body">
+          <div class="field">
+            <label for="restore-project-asof">As of</label>
+            <input id="restore-project-asof" v-model="projectForm.asOf" type="date" />
+            <p class="hint">Leave blank to use each service's most recent backup.</p>
+          </div>
+        </div>
+      </details>
+      <div class="actions" style="margin-top: 1rem">
+        <button class="btn btn-primary" type="submit" :disabled="projectRestoring || !projectForm.project">
+          {{ projectRestoring ? "Restoring…" : "Restore stack" }}
+        </button>
+      </div>
+    </form>
+
+    <div v-if="projectReport" class="panel" style="margin-top: 1rem">
+      <h3>Results for {{ projectReport.project }}</h3>
+      <ul class="list">
+        <li v-for="r in projectReport.results" :key="r.service">
+          <div class="item-title">{{ r.service }} <span class="muted">({{ r.kind }})</span></div>
+          <p v-if="r.error" class="notice notice--error" role="alert">{{ r.error }}</p>
+          <template v-else>
+            <p>Restored snapshot <code>{{ r.snapshot_id }}</code> to <code>{{ r.restored_to }}</code>.</p>
+            <p v-if="r.volumes?.length">
+              New Docker volume(s): <code>{{ r.volumes.join(", ") }}</code>
+            </p>
+          </template>
+        </li>
+      </ul>
+    </div>
+  </template>
 </template>

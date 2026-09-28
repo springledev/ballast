@@ -133,6 +133,7 @@ const form = reactive({
   catalog_entry: "",
   destination: "",
   docker_host: "local",
+  project: "",
   params: {} as Record<string, string>,
 });
 
@@ -239,6 +240,7 @@ function openAdd() {
   form.catalog_entry = "";
   form.destination = destinations.value[0]?.name ?? "";
   form.docker_host = "local";
+  form.project = "";
   form.params = {};
   saved.value = "";
   showForm.value = true;
@@ -253,6 +255,7 @@ function startEdit(s: Service) {
   form.catalog_entry = s.catalog_entry;
   form.destination = s.destination;
   form.docker_host = s.docker_host ?? "local";
+  form.project = s.project ?? "";
   form.params = { ...(s.params ?? {}) };
   saved.value = "";
   showForm.value = true;
@@ -288,6 +291,7 @@ async function submit() {
     catalog_entry: form.catalog_entry,
     destination: form.destination,
     docker_host: form.docker_host,
+    project: form.project || undefined,
     params: { ...form.params },
     retention: editingService.value?.retention,
   };
@@ -347,7 +351,10 @@ onMounted(load);
         <div class="item-head">
           <div>
             <div class="item-title">{{ s.name }}</div>
-            <div class="item-sub">{{ entryName(s.catalog_entry) }}, stored in {{ s.destination }}</div>
+            <div class="item-sub">
+              {{ entryName(s.catalog_entry) }}, stored in {{ s.destination }}
+              <span v-if="s.project"> · project: {{ s.project }}</span>
+            </div>
           </div>
           <div class="actions">
             <button class="btn" type="button" @click="toggleBackups(s.name)">
@@ -492,6 +499,21 @@ onMounted(load);
             <router-link to="/destinations">Where backups go</router-link> first.
           </p>
         </div>
+
+        <details class="advanced">
+          <summary>Advanced: part of a bigger stack?</summary>
+          <div class="advanced-body">
+            <div class="field">
+              <label for="svc-project">Project name</label>
+              <input id="svc-project" v-model="form.project" placeholder="e.g. myapp" />
+              <p class="hint">
+                If this backs up one part of a Docker Compose stack (its config, a volume, a database — each added as
+                its own service), give them all the same project name here. You'll then be able to restore the
+                whole stack together from <router-link to="/restore">Restore</router-link>.
+              </p>
+            </div>
+          </div>
+        </details>
       </template>
 
       <div class="actions">

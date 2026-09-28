@@ -254,6 +254,65 @@ func TestPutServiceSecrets(t *testing.T) {
 	}
 }
 
+// TestServiceProjectRoundTripAndListing covers spec §14 step 23:
+// services can be tagged with a project so the full-stack restore
+// wizard can find them together, an invalid project name is a loud
+// validation error (it is used the same way a service/destination
+// name is), and ListServicesByProject/ListProjects only ever surface
+// services that actually opted in.
+func TestServiceProjectRoundTripAndListing(t *testing.T) {
+	db := openDB(t).DB()
+	if err := PutDestination(db, Destination{Name: "local", Location: "/srv", KeepDaily: 7}); err != nil {
+		t.Fatalf("PutDestination: %v", err)
+	}
+
+	if err := PutService(db, Service{Name: "web-config", CatalogEntry: "docker-compose", Destination: "local", Project: "myapp"}); err != nil {
+		t.Fatalf("PutService web-config: %v", err)
+	}
+	if err := PutService(db, Service{Name: "web-db", CatalogEntry: "postgres", Destination: "local", Project: "myapp"}); err != nil {
+		t.Fatalf("PutService web-db: %v", err)
+	}
+	if err := PutService(db, Service{Name: "standalone", CatalogEntry: "folder", Destination: "local"}); err != nil {
+		t.Fatalf("PutService standalone: %v", err)
+	}
+
+	got, err := GetService(db, "web-config")
+	if err != nil {
+		t.Fatalf("GetService: %v", err)
+	}
+	if got.Project != "myapp" {
+		t.Errorf("Project = %q, want %q", got.Project, "myapp")
+	}
+
+	members, err := ListServicesByProject(db, "myapp")
+	if err != nil {
+		t.Fatalf("ListServicesByProject: %v", err)
+	}
+	if len(members) != 2 || members[0].Name != "web-config" || members[1].Name != "web-db" {
+		t.Errorf("ListServicesByProject(myapp) = %+v, want [web-config web-db]", members)
+	}
+
+	none, err := ListServicesByProject(db, "ghost")
+	if err != nil {
+		t.Fatalf("ListServicesByProject(ghost): %v", err)
+	}
+	if len(none) != 0 {
+		t.Errorf("ListServicesByProject(ghost) = %+v, want empty", none)
+	}
+
+	projects, err := ListProjects(db)
+	if err != nil {
+		t.Fatalf("ListProjects: %v", err)
+	}
+	if len(projects) != 1 || projects[0] != "myapp" {
+		t.Errorf("ListProjects = %v, want [myapp] (standalone has no project)", projects)
+	}
+
+	if err := PutService(db, Service{Name: "bad-project", CatalogEntry: "folder", Destination: "local", Project: "Not Valid!"}); err == nil {
+		t.Error("PutService with an invalid project name = nil error, want error")
+	}
+}
+
 func TestPutServiceValidation(t *testing.T) {
 	db := openDB(t).DB()
 	if err := PutDestination(db, Destination{Name: "local", Location: "/srv", KeepDaily: 7}); err != nil {

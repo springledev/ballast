@@ -600,6 +600,12 @@ func (o *Ops) ListServices(ctx context.Context) ([]inventory.Service, error) {
 	return inventory.ListServices(o.DB)
 }
 
+// ListProjects lists the distinct project names in use, for the
+// full-stack restore wizard (spec §14 step 23) to offer as choices.
+func (o *Ops) ListProjects(ctx context.Context) ([]string, error) {
+	return inventory.ListProjects(o.DB)
+}
+
 // GetService returns one configured service.
 func (o *Ops) GetService(ctx context.Context, name string) (inventory.Service, error) {
 	s, err := inventory.GetService(o.DB, name)

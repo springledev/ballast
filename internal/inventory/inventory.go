@@ -343,6 +343,12 @@ type Service struct {
 	// Retention overrides the destination's retention policy for this
 	// service alone. Nil means "same as the destination".
 	Retention *Retention `json:"retention,omitempty"`
+	// Project groups this service with others that make up one Docker
+	// Compose stack (a compose-config snapshot, its volumes, a DB
+	// dump), so the full-stack restore wizard (spec §14 step 23) can
+	// restore them together in dependency order. Empty means the
+	// service stands alone.
+	Project string `json:"project,omitempty"`
 }
 
 // EffectiveRetention is the policy applied to s's backups in d: its
@@ -378,6 +384,11 @@ func PutService(db *sql.DB, s Service) error {
 	if _, err := GetDockerHost(db, s.DockerHost); err != nil {
 		return fmt.Errorf("service %s: %w", s.Name, err)
 	}
+	if s.Project != "" {
+		if err := ValidateName(s.Project); err != nil {
+			return fmt.Errorf("service %s: project: %w", s.Name, err)
+		}
+	}
 	paramsJSON, err := marshalMap(s.Params)
 	if err != nil {
 		return fmt.Errorf("service %s: encoding params: %w", s.Name, err)
@@ -408,8 +419,8 @@ func PutService(db *sql.DB, s Service) error {
 
 	now := time.Now().UTC().Format(time.RFC3339Nano)
 	_, err = db.Exec(`
-		INSERT INTO services (name, catalog_entry, destination, docker_host, params_json, containers_json, secrets_json, retention_json, created_at, updated_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		INSERT INTO services (name, catalog_entry, destination, docker_host, params_json, containers_json, secrets_json, retention_json, project, created_at, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(name) DO UPDATE SET
 			catalog_entry = excluded.catalog_entry,
 			destination = excluded.destination,
@@ -418,8 +429,9 @@ func PutService(db *sql.DB, s Service) error {
 			containers_json = excluded.containers_json,
 			secrets_json = excluded.secrets_json,
 			retention_json = excluded.retention_json,
+			project = excluded.project,
 			updated_at = excluded.updated_at`,
-		s.Name, s.CatalogEntry, s.Destination, s.DockerHost, paramsJSON, containersJSON, secretsJSON, retentionJSON, now, now,
+		s.Name, s.CatalogEntry, s.Destination, s.DockerHost, paramsJSON, containersJSON, secretsJSON, retentionJSON, s.Project, now, now,
 	)
 	if err != nil {
 		return fmt.Errorf("saving service %s: %w", s.Name, err)
@@ -439,13 +451,13 @@ func GetService(db *sql.DB, name string) (Service, error) {
 	return s, nil
 }
 
-const serviceColumns = `name, catalog_entry, destination, docker_host, params_json, containers_json, secrets_json, retention_json`
+const serviceColumns = `name, catalog_entry, destination, docker_host, params_json, containers_json, secrets_json, retention_json, project`
 
 // scanService reads one serviceColumns row.
 func scanService(row interface{ Scan(...any) error }) (Service, error) {
 	var s Service
 	var paramsJSON, containersJSON, secretsJSON, retentionJSON string
-	if err := row.Scan(&s.Name, &s.CatalogEntry, &s.Destination, &s.DockerHost, &paramsJSON, &containersJSON, &secretsJSON, &retentionJSON); err != nil {
+	if err := row.Scan(&s.Name, &s.CatalogEntry, &s.Destination, &s.DockerHost, &paramsJSON, &containersJSON, &secretsJSON, &retentionJSON, &s.Project); err != nil {
 		return Service{}, err
 	}
 	var err error
@@ -487,6 +499,52 @@ func ListServices(db *sql.DB) ([]Service, error) {
 	}
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("listing services: %w", err)
+	}
+	return out, nil
+}
+
+// ListServicesByProject returns every service in project, ordered by
+// name, for the full-stack restore wizard (spec §14 step 23).
+func ListServicesByProject(db *sql.DB, project string) ([]Service, error) {
+	rows, err := db.Query(`SELECT `+serviceColumns+` FROM services WHERE project = ? ORDER BY name`, project)
+	if err != nil {
+		return nil, fmt.Errorf("listing services in project %s: %w", project, err)
+	}
+	defer rows.Close()
+
+	out := []Service{}
+	for rows.Next() {
+		s, err := scanService(rows)
+		if err != nil {
+			return nil, fmt.Errorf("listing services in project %s: %w", project, err)
+		}
+		out = append(out, s)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("listing services in project %s: %w", project, err)
+	}
+	return out, nil
+}
+
+// ListProjects returns the distinct, non-empty project names in use,
+// ordered alphabetically.
+func ListProjects(db *sql.DB) ([]string, error) {
+	rows, err := db.Query(`SELECT DISTINCT project FROM services WHERE project != '' ORDER BY project`)
+	if err != nil {
+		return nil, fmt.Errorf("listing projects: %w", err)
+	}
+	defer rows.Close()
+
+	out := []string{}
+	for rows.Next() {
+		var p string
+		if err := rows.Scan(&p); err != nil {
+			return nil, fmt.Errorf("listing projects: %w", err)
+		}
+		out = append(out, p)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("listing projects: %w", err)
 	}
 	return out, nil
 }

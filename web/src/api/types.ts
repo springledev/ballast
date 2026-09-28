@@ -38,6 +38,24 @@ export interface Service {
   docker_host?: string;
   /** This service's own backup-retention override. Unset: follow the destination's policy. */
   retention?: Retention | null;
+  /** Groups this service with others of the same Docker Compose stack, for the full-stack restore wizard. */
+  project?: string;
+}
+
+/** One service's outcome within a full-stack restore (`ballast restore-project`). */
+export interface RestoreProjectResult {
+  service: string;
+  kind: string;
+  snapshot_id?: string;
+  restored_to?: string;
+  volumes?: string[];
+  error?: string;
+}
+
+/** The outcome of restoring every service in a project together. */
+export interface RestoreProjectReport {
+  project: string;
+  results: RestoreProjectResult[];
 }
 
 /** Which storage backend a destination uses. */

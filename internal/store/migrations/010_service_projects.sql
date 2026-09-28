@@ -1,0 +1,10 @@
+-- Migration 010: service projects, for the full-stack restore wizard
+-- (spec §14 step 23).
+--
+-- A project groups several services that make up one Docker Compose
+-- stack (a compose-config snapshot, one or more Docker volumes, a DB
+-- dump) so they can be restored together in dependency order. project
+-- is '' for a service that stands alone (every existing service), and
+-- otherwise a free-form name shared by every service that belongs to
+-- the same stack.
+ALTER TABLE services ADD COLUMN project TEXT NOT NULL DEFAULT '';

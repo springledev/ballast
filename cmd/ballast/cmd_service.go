@@ -12,6 +12,7 @@ var (
 	serviceCatalogEntry string
 	serviceDestination  string
 	serviceDockerHost   string
+	serviceProject      string
 	serviceParams       []string
 	serviceContainers   []string
 	serviceSecrets      []string
@@ -84,7 +85,7 @@ var serviceAddCmd = &cobra.Command{
 		return withApp(cfg, cmd.ErrOrStderr(), func(a *app) error {
 			s := inventory.Service{
 				Name: args[0], CatalogEntry: serviceCatalogEntry, Destination: serviceDestination, DockerHost: serviceDockerHost,
-				Params: params, Containers: containers, Secrets: secrets,
+				Params: params, Containers: containers, Secrets: secrets, Project: serviceProject,
 			}
 			// A per-service retention override is only set when at
 			// least one --keep-* flag was actually given; unspecified
@@ -104,6 +105,9 @@ var serviceAddCmd = &cobra.Command{
 			cmd.Printf("%s: configured (catalog entry %s, destination %s)\n", args[0], serviceCatalogEntry, serviceDestination)
 			if serviceDockerHost != "" {
 				cmd.Printf("  Docker host: %s\n", serviceDockerHost)
+			}
+			if serviceProject != "" {
+				cmd.Printf("  Project: %s (see `ballast restore-project`)\n", serviceProject)
 			}
 			if s.Retention != nil {
 				cmd.Printf("  keeps %d daily, %d weekly and %d monthly backups (overrides %s)\n",
@@ -152,6 +156,9 @@ var serviceListCmd = &cobra.Command{
 			}
 			for _, s := range list {
 				cmd.Printf("%s\tcatalog=%s\tdestination=%s\thost=%s\n", s.Name, s.CatalogEntry, s.Destination, s.DockerHost)
+				if s.Project != "" {
+					cmd.Printf("  project=%s\n", s.Project)
+				}
 				if dest, ok := byName[s.Destination]; ok {
 					cmd.Printf("  %s\n", retentionLine(s, dest))
 				}
@@ -238,6 +245,7 @@ func registerServiceCommands(root *cobra.Command) {
 	serviceAddCmd.Flags().StringVar(&serviceCatalogEntry, "catalog", "", "catalog entry to back this service with (required)")
 	serviceAddCmd.Flags().StringVar(&serviceDestination, "destination", "", "destination to back up to (required)")
 	serviceAddCmd.Flags().StringVar(&serviceDockerHost, "host", "", "Docker host this service's containers run on (default: local)")
+	serviceAddCmd.Flags().StringVar(&serviceProject, "project", "", "group this service with others of the same Docker Compose stack, for `ballast restore-project`")
 	serviceAddCmd.Flags().StringArrayVar(&serviceParams, "param", nil, "catalog parameter as key=value (repeatable)")
 	serviceAddCmd.Flags().StringArrayVar(&serviceContainers, "container", nil, "detected container as key=value (repeatable)")
 	serviceAddCmd.Flags().StringArrayVar(&serviceSecrets, "secret", nil,

@@ -13,6 +13,7 @@ import type {
   DockerVolume,
   NotificationSettings,
   PreflightResult,
+  RestoreProjectReport,
   ScheduledJob,
   Service,
   ServiceStatus,
@@ -122,6 +123,14 @@ export const api = {
   },
   restore(name: string, req: { snapshot?: string; paths?: string[]; to: string }): Promise<{ restored: boolean }> {
     return request("POST", `${base}/services/${encodeURIComponent(name)}/restore`, req);
+  },
+
+  // --- full-stack restore (spec §14 step 23) ---
+  listProjects(): Promise<string[]> {
+    return request("GET", `${base}/projects`);
+  },
+  restoreProject(project: string, req: { as_of?: string; to: string }): Promise<RestoreProjectReport> {
+    return request("POST", `${base}/projects/${encodeURIComponent(project)}/restore`, req);
   },
 
   // --- schedules ---

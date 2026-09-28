@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"github.com/springledev/ballast/internal/dockerhost"
 	"net/http"
+	"time"
 
 	"github.com/springledev/ballast/internal/backend"
 	"github.com/springledev/ballast/internal/inventory"
@@ -69,6 +70,9 @@ func NewHandler(ops *Ops, apiToken string) http.Handler {
 	protected.HandleFunc("POST /api/v1/docker-hosts/{name}/test", h.testDockerHost)
 	protected.HandleFunc("GET /api/v1/docker-hosts/{name}/volumes", h.listDockerHostVolumes)
 	protected.HandleFunc("GET /api/v1/docker-hosts/{name}/compose-projects", h.listDockerHostComposeProjects)
+
+	protected.HandleFunc("GET /api/v1/projects", h.listProjects)
+	protected.HandleFunc("POST /api/v1/projects/{project}/restore", h.restoreProject)
 
 	mux := http.NewServeMux()
 	mux.Handle("/api/v1/", withAuth(protected, apiToken))
@@ -261,6 +265,50 @@ func (h *handler) restore(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]bool{"restored": true})
+}
+
+func (h *handler) listProjects(w http.ResponseWriter, r *http.Request) {
+	projects, err := h.ops.ListProjects(r.Context())
+	if err != nil {
+		h.writeErr(w, err, http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, http.StatusOK, projects)
+}
+
+type restoreProjectRequestBody struct {
+	AsOf string `json:"as_of"`
+	To   string `json:"to"`
+}
+
+// restoreProject mirrors verifyAll's status-code shape: a report is
+// returned with 200 whenever RestoreProject managed to produce one
+// (even when some of its services failed — each carries its own
+// error), and only a request that never got that far (bad project
+// name, invalid as_of, no target directory) is a 4xx/5xx.
+func (h *handler) restoreProject(w http.ResponseWriter, r *http.Request) {
+	var body restoreProjectRequestBody
+	if err := decodeJSON(r, &body); err != nil {
+		h.writeErr(w, err, http.StatusBadRequest)
+		return
+	}
+	var asOf *time.Time
+	if body.AsOf != "" {
+		t, err := time.Parse(time.RFC3339, body.AsOf)
+		if err != nil {
+			h.writeErr(w, fmt.Errorf("%w: as_of must be an RFC3339 timestamp (e.g. 2026-01-02T15:04:05Z): %v", ErrValidation, err), http.StatusBadRequest)
+			return
+		}
+		asOf = &t
+	}
+	rep, err := h.ops.RestoreProject(r.Context(), RestoreProjectRequest{
+		Project: r.PathValue("project"), AsOf: asOf, To: body.To,
+	})
+	if err != nil && rep.Results == nil {
+		h.writeErr(w, err, http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, http.StatusOK, rep)
 }
 
 func (h *handler) verifyService(w http.ResponseWriter, r *http.Request) {
