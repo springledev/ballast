@@ -271,3 +271,57 @@ func TestHTTPProxmoxConnectionLifecycle(t *testing.T) {
 		t.Fatalf("GET /api/v1/proxmox after delete = %d, want 404", rr.Code)
 	}
 }
+
+func TestBackupProxmoxGuest(t *testing.T) {
+	h := newHarness(t)
+	h.ops.Redact = secret.NewSet()
+	h.ops.Proxmox = proxmox.Resolver{CredDirs: []string{h.credDir}, Redact: h.ops.Redact}
+
+	const upid = "UPID:pve1:0001:0002:0003:vzdump:100:ballast@pve!backup:"
+	dumps := 0
+	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.URL.Path == "/api2/json/version":
+			w.Write([]byte(`{"data":{"version":"8.2.1"}}`))
+		case r.Method == http.MethodPost && r.URL.Path == "/api2/json/nodes/pve1/vzdump":
+			r.ParseForm()
+			if r.PostForm.Get("vmid") != "100" || r.PostForm.Get("storage") != "local" || r.PostForm.Get("mode") != "snapshot" {
+				t.Errorf("vzdump form = %v", r.PostForm)
+			}
+			dumps = 1
+			w.Write([]byte(`{"data":"` + upid + `"}`))
+		case strings.HasSuffix(r.URL.Path, "/status"):
+			w.Write([]byte(`{"data":{"status":"stopped","exitstatus":"OK"}}`))
+		case strings.HasSuffix(r.URL.Path, "/storage/local/content"):
+			if dumps == 0 {
+				w.Write([]byte(`{"data":[]}`))
+				return
+			}
+			w.Write([]byte(`{"data":[{"volid":"local:backup/vzdump-lxc-100-new.tar.zst","ctime":10,"size":2048,"vmid":100}]}`))
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer srv.Close()
+	if _, err := h.ops.SetupProxmoxConnection(context.Background(), ProxmoxConnectionSetup{
+		Connection:  proxmox.Connection{Host: srv.URL, TokenID: "ballast@pve!backup", Insecure: true},
+		Credentials: proxmox.Credentials{TokenSecret: "s3cr3t"},
+		SkipTest:    true,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	res, err := h.ops.BackupProxmoxGuest(context.Background(), proxmox.GuestBackupOptions{Node: "pve1", VMID: 100, Storage: "local"})
+	if err != nil {
+		t.Fatalf("BackupProxmoxGuest: %v", err)
+	}
+	if res.Volume != "local:backup/vzdump-lxc-100-new.tar.zst" || res.UPID != upid || res.Size != 2048 {
+		t.Errorf("result = %+v", res)
+	}
+
+	// Missing storage is a validation error, before any network call.
+	_, err = h.ops.BackupProxmoxGuest(context.Background(), proxmox.GuestBackupOptions{Node: "pve1", VMID: 100})
+	if !errors.Is(err, ErrValidation) {
+		t.Errorf("err = %v, want ErrValidation", err)
+	}
+}

@@ -10,12 +10,17 @@ import (
 )
 
 var (
-	proxmoxHost        string
-	proxmoxTokenID     string
-	proxmoxInsecure    bool
-	proxmoxSkipTest    bool
-	proxmoxTokenSecret string
-	proxmoxSecretFile  string
+	proxmoxHost           string
+	proxmoxTokenID        string
+	proxmoxInsecure       bool
+	proxmoxSkipTest       bool
+	proxmoxTokenSecret    string
+	proxmoxSecretFile     string
+	proxmoxBackupNode     string
+	proxmoxBackupVMID     int
+	proxmoxBackupStorage  string
+	proxmoxBackupMode     string
+	proxmoxBackupKeepLast int
 )
 
 // readProxmoxCredentials builds a proxmox.Credentials from the
@@ -125,6 +130,64 @@ var proxmoxGuestsCmd = &cobra.Command{
 	},
 }
 
+var proxmoxBackupCmd = &cobra.Command{
+	Use:   "backup",
+	Short: "Back up a Proxmox guest with vzdump",
+	Long: `Back up a Proxmox guest with vzdump to a specified storage.
+
+Example:
+
+  ballast proxmox backup --node pve --vmid 100 --storage local --mode snapshot
+
+This is a dump only and is not verified as restorable until the verification
+drill runs (spec §14 step 26). The result will include the backup volume ID,
+size, and any pruned dumps.`,
+	Args: cobra.NoArgs,
+	RunE: func(cmd *cobra.Command, args []string) error {
+		cfg, err := loadConfig()
+		if err != nil {
+			return err
+		}
+		return withApp(cfg, cmd.ErrOrStderr(), func(a *app) error {
+			opts := proxmox.GuestBackupOptions{
+				Node:     proxmoxBackupNode,
+				VMID:     proxmoxBackupVMID,
+				Storage:  proxmoxBackupStorage,
+				Mode:     proxmoxBackupMode,
+				KeepLast: proxmoxBackupKeepLast,
+			}
+			res, err := a.ops.BackupProxmoxGuest(cmd.Context(), opts)
+			if err != nil {
+				return err
+			}
+
+			// Print basic backup info
+			cmd.Printf("backed up guest %d to %s\n", res.VMID, res.Volume)
+			if res.Size > 0 {
+				cmd.Printf("  size: %d bytes\n", res.Size)
+			}
+
+			// Print any pruned dumps
+			if len(res.Pruned) > 0 {
+				cmd.Printf("  pruned: %d dump(s)\n", len(res.Pruned))
+				for _, v := range res.Pruned {
+					cmd.Printf("    %s\n", v)
+				}
+			}
+
+			// Print prune error if it occurred
+			if res.PruneError != "" {
+				cmd.Printf("  WARNING: pruning failed: %s\n", res.PruneError)
+			}
+
+			// Reminder that this is not yet verified
+			cmd.Println("This dump is not verified as restorable until the verification drill runs.")
+
+			return nil
+		})
+	},
+}
+
 var proxmoxRemoveCmd = &cobra.Command{
 	Use:   "remove",
 	Short: "Remove the configured Proxmox connection",
@@ -156,7 +219,16 @@ func registerProxmoxCommands(root *cobra.Command) {
 	_ = proxmoxConnectCmd.MarkFlagRequired("host")
 	_ = proxmoxConnectCmd.MarkFlagRequired("token-id")
 
+	proxmoxBackupCmd.Flags().StringVar(&proxmoxBackupNode, "node", "", "Proxmox node name (required)")
+	proxmoxBackupCmd.Flags().IntVar(&proxmoxBackupVMID, "vmid", 0, "guest VMID (required)")
+	proxmoxBackupCmd.Flags().StringVar(&proxmoxBackupStorage, "storage", "", "storage name for the backup, e.g. local (required)")
+	proxmoxBackupCmd.Flags().StringVar(&proxmoxBackupMode, "mode", "snapshot", "backup mode: snapshot, suspend, or stop (default: snapshot)")
+	proxmoxBackupCmd.Flags().IntVar(&proxmoxBackupKeepLast, "keep-last", 0, "keep this many recent backups, delete older ones (default: 0, prune nothing)")
+	_ = proxmoxBackupCmd.MarkFlagRequired("node")
+	_ = proxmoxBackupCmd.MarkFlagRequired("vmid")
+	_ = proxmoxBackupCmd.MarkFlagRequired("storage")
+
 	proxmoxCmd := &cobra.Command{Use: "proxmox", Short: "Manage Ballast's connection to a Proxmox host"}
-	proxmoxCmd.AddCommand(proxmoxConnectCmd, proxmoxTestCmd, proxmoxGuestsCmd, proxmoxRemoveCmd)
+	proxmoxCmd.AddCommand(proxmoxConnectCmd, proxmoxTestCmd, proxmoxGuestsCmd, proxmoxBackupCmd, proxmoxRemoveCmd)
 	root.AddCommand(proxmoxCmd)
 }

@@ -77,6 +77,7 @@ func NewHandler(ops *Ops, apiToken string) http.Handler {
 	protected.HandleFunc("DELETE /api/v1/proxmox", h.deleteProxmoxConnection)
 	protected.HandleFunc("POST /api/v1/proxmox/test", h.testProxmoxConnection)
 	protected.HandleFunc("GET /api/v1/proxmox/guests", h.listProxmoxGuests)
+	protected.HandleFunc("POST /api/v1/proxmox/backup", h.backupProxmoxGuest)
 
 	protected.HandleFunc("GET /api/v1/projects", h.listProjects)
 	protected.HandleFunc("POST /api/v1/projects/{project}/restore", h.restoreProject)
@@ -709,4 +710,21 @@ func (h *handler) listProxmoxGuests(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, list)
+}
+
+// backupProxmoxGuest handles POST /api/v1/proxmox/backup: one vzdump of
+// one guest. The response is the (unverified) dump, or the error;
+// a prune problem is reported inside a successful result.
+func (h *handler) backupProxmoxGuest(w http.ResponseWriter, r *http.Request) {
+	var body proxmox.GuestBackupOptions
+	if err := decodeJSON(r, &body); err != nil {
+		h.writeErr(w, err, http.StatusBadRequest)
+		return
+	}
+	res, err := h.ops.BackupProxmoxGuest(r.Context(), body)
+	if err != nil {
+		h.writeErr(w, err, http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, http.StatusOK, res)
 }

@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 )
@@ -42,13 +43,20 @@ type apiEnvelope struct {
 	Data json.RawMessage `json:"data"`
 }
 
-func (cl *Client) do(ctx context.Context, method, path string, out any) error {
+func (cl *Client) do(ctx context.Context, method, path string, form url.Values, out any) error {
 	ctx, cancel := context.WithTimeout(ctx, RequestTimeout)
 	defer cancel()
 	u := strings.TrimRight(cl.Host, "/") + path
-	req, err := http.NewRequestWithContext(ctx, method, u, nil)
+	var body io.Reader
+	if form != nil {
+		body = strings.NewReader(form.Encode())
+	}
+	req, err := http.NewRequestWithContext(ctx, method, u, body)
 	if err != nil {
 		return fmt.Errorf("building Proxmox request: %w", err)
+	}
+	if form != nil {
+		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	}
 	req.Header.Set("Authorization", "PVEAPIToken="+cl.TokenID+"="+cl.TokenSecret)
 
@@ -61,7 +69,7 @@ func (cl *Client) do(ctx context.Context, method, path string, out any) error {
 		return wrapNetErr(cl.Host, err)
 	}
 	defer resp.Body.Close()
-	body, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	respBody, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
 
 	switch resp.StatusCode {
 	case http.StatusOK:
@@ -69,13 +77,13 @@ func (cl *Client) do(ctx context.Context, method, path string, out any) error {
 	case http.StatusUnauthorized, http.StatusForbidden:
 		return fmt.Errorf("Proxmox rejected the API token (HTTP %d) — check the token ID and secret, and that the token has the VM.Backup permission on /vms", resp.StatusCode)
 	default:
-		return fmt.Errorf("Proxmox API request to %s failed (HTTP %d): %s", path, resp.StatusCode, strings.TrimSpace(string(body)))
+		return fmt.Errorf("Proxmox API request to %s failed (HTTP %d): %s", path, resp.StatusCode, strings.TrimSpace(string(respBody)))
 	}
 	if out == nil {
 		return nil
 	}
 	var env apiEnvelope
-	if err := json.Unmarshal(body, &env); err != nil {
+	if err := json.Unmarshal(respBody, &env); err != nil {
 		return fmt.Errorf("decoding Proxmox's response from %s: %w", path, err)
 	}
 	if err := json.Unmarshal(env.Data, out); err != nil {
@@ -91,7 +99,7 @@ func (cl *Client) Test(ctx context.Context) (TestResult, error) {
 	var v struct {
 		Version string `json:"version"`
 	}
-	if err := cl.do(ctx, http.MethodGet, "/api2/json/version", &v); err != nil {
+	if err := cl.do(ctx, http.MethodGet, "/api2/json/version", nil, &v); err != nil {
 		return TestResult{}, err
 	}
 	if v.Version == "" {
@@ -110,7 +118,7 @@ func (cl *Client) ListGuests(ctx context.Context) ([]Guest, error) {
 		Status string `json:"status"`
 		Type   string `json:"type"`
 	}
-	if err := cl.do(ctx, http.MethodGet, "/api2/json/cluster/resources?type=vm", &items); err != nil {
+	if err := cl.do(ctx, http.MethodGet, "/api2/json/cluster/resources?type=vm", nil, &items); err != nil {
 		return nil, err
 	}
 	out := make([]Guest, 0, len(items))

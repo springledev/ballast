@@ -165,3 +165,27 @@ func (o *Ops) DeleteProxmoxConnection(ctx context.Context) error {
 	}
 	return nil
 }
+
+// BackupProxmoxGuest runs a vzdump of one guest on the configured
+// Proxmox host, waits for it, and prunes that guest's older dumps down
+// to o.KeepLast. The result is an unverified dump — it is never
+// reported as SUCCESS here; the verification drill (spec §14 step 26)
+// is what proves it restores.
+func (o *Ops) BackupProxmoxGuest(ctx context.Context, opts proxmox.GuestBackupOptions) (proxmox.GuestBackupResult, error) {
+	if err := opts.Validate(); err != nil {
+		return proxmox.GuestBackupResult{}, fmt.Errorf("%w: %w", ErrValidation, err)
+	}
+	c, err := inventory.GetProxmoxConnection(o.DB)
+	if err != nil {
+		return proxmox.GuestBackupResult{}, wrapf("Proxmox connection", err)
+	}
+	cl, err := o.Proxmox.Client(c)
+	if err != nil {
+		return proxmox.GuestBackupResult{}, o.redactErr(err)
+	}
+	res, err := cl.BackupGuest(ctx, opts, proxmox.DefaultPollInterval)
+	if err != nil {
+		return res, o.redactErr(err)
+	}
+	return res, nil
+}
