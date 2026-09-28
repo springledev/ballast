@@ -26,6 +26,7 @@ const connected = computed(() => apiToken.value !== "");
       <router-link to="/services">Backups</router-link>
       <router-link to="/destinations">Destinations</router-link>
       <router-link to="/docker-hosts">Docker hosts</router-link>
+      <router-link to="/proxmox">Proxmox</router-link>
       <router-link to="/schedule">Schedules</router-link>
       <router-link to="/settings">Notifications</router-link>
       <router-link to="/verification">Restore checks</router-link>

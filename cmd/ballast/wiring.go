@@ -17,6 +17,7 @@ import (
 	"github.com/springledev/ballast/internal/inventory"
 	"github.com/springledev/ballast/internal/notify"
 	"github.com/springledev/ballast/internal/pipeline"
+	"github.com/springledev/ballast/internal/proxmox"
 	"github.com/springledev/ballast/internal/restic"
 	execrunner "github.com/springledev/ballast/internal/runner"
 	"github.com/springledev/ballast/internal/scheduler"
@@ -164,7 +165,8 @@ func openApp(cfg config.Config, logw io.Writer) (*app, error) {
 	}
 	dockerHosts := pl.DockerHosts()
 	dockerHosts.CredDirs = credDirs
-	ops := &api.Ops{DB: st.DB(), Catalog: reg, Coord: coord, Repo: repoFor, DestinationLocks: scheduler.FileLocker{Dir: filepath.Join(cfg.DataDir, "locks", "destinations")}, Runner: r, DockerHosts: dockerHosts, CredentialsDir: cfg.WritableCredentialsDir, CredentialSearchDirs: credDirs, Redact: secrets, WorkRoot: pl.WorkRoot}
+	proxmoxResolver := proxmox.Resolver{CredDirs: credDirs, Redact: secrets}
+	ops := &api.Ops{DB: st.DB(), Catalog: reg, Coord: coord, Repo: repoFor, DestinationLocks: scheduler.FileLocker{Dir: filepath.Join(cfg.DataDir, "locks", "destinations")}, Runner: r, DockerHosts: dockerHosts, Proxmox: proxmoxResolver, CredentialsDir: cfg.WritableCredentialsDir, CredentialSearchDirs: credDirs, Redact: secrets, WorkRoot: pl.WorkRoot}
 
 	a := &app{cfg: cfg, store: st, ops: ops, coord: coord, notifier: notifier, apiToken: apiToken, secrets: secrets, logw: logw}
 	if cfg.WritableCredentialsDir != cfg.CredentialsDir {

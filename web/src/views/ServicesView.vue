@@ -2,7 +2,7 @@
 import { computed, onMounted, reactive, ref, watch } from "vue";
 
 import { api } from "@/api/client";
-import type { CatalogSummary, Destination, DockerComposeProject, DockerHost, DockerVolume, Retention, Service, Snapshot } from "@/api/types";
+import type { CatalogSummary, Destination, DockerComposeProject, DockerHost, DockerVolume, ProxmoxGuest, Retention, Service, Snapshot } from "@/api/types";
 import { formatDateTime, formatRelative } from "@/lib/format";
 import { describeServiceRetention } from "@/lib/retention";
 
@@ -134,6 +134,8 @@ const form = reactive({
   destination: "",
   docker_host: "local",
   project: "",
+  proxmox_node: "",
+  proxmox_vmid: 0,
   params: {} as Record<string, string>,
 });
 
@@ -216,6 +218,51 @@ watch(() => [form.catalog_entry, form.docker_host], () => {
   loadComposeProjects();
 });
 
+// --- Proxmox guest picker (attaching a service to a VM/LXC) ---
+
+const proxmoxGuests = ref<ProxmoxGuest[]>([]);
+const proxmoxGuestsError = ref("");
+const proxmoxGuestsLoaded = ref(false);
+
+/** Loads the Proxmox host's guests once, for the "attach to a guest"
+ * picker. Best-effort: on failure (most likely no Proxmox connection
+ * configured yet) the picker just falls back to plain node/VMID boxes. */
+async function loadProxmoxGuests() {
+  if (proxmoxGuestsLoaded.value) return;
+  proxmoxGuestsError.value = "";
+  try {
+    proxmoxGuests.value = await api.listProxmoxGuests();
+    proxmoxGuestsLoaded.value = true;
+  } catch (e) {
+    proxmoxGuests.value = [];
+    proxmoxGuestsError.value = (e as Error).message;
+  }
+}
+
+function guestLabel(g: ProxmoxGuest): string {
+  return `${g.name} (${g.vmid}, ${g.type === "lxc" ? "LXC" : "VM"})`;
+}
+
+function guestKey(node: string, vmid: number): string {
+  return `${node}:${vmid}`;
+}
+
+const selectedGuestKey = computed({
+  get: () => (form.proxmox_node && form.proxmox_vmid ? guestKey(form.proxmox_node, form.proxmox_vmid) : ""),
+  set: (key: string) => {
+    if (!key) {
+      form.proxmox_node = "";
+      form.proxmox_vmid = 0;
+      return;
+    }
+    const g = proxmoxGuests.value.find((g) => guestKey(g.node, g.vmid) === key);
+    if (g) {
+      form.proxmox_node = g.node;
+      form.proxmox_vmid = g.vmid;
+    }
+  },
+});
+
 async function load() {
   loading.value = true;
   error.value = "";
@@ -241,11 +288,14 @@ function openAdd() {
   form.destination = destinations.value[0]?.name ?? "";
   form.docker_host = "local";
   form.project = "";
+  form.proxmox_node = "";
+  form.proxmox_vmid = 0;
   form.params = {};
   saved.value = "";
   showForm.value = true;
   volumeOptions.value = [];
   volumeError.value = "";
+  void loadProxmoxGuests();
 }
 
 function startEdit(s: Service) {
@@ -256,10 +306,13 @@ function startEdit(s: Service) {
   form.destination = s.destination;
   form.docker_host = s.docker_host ?? "local";
   form.project = s.project ?? "";
+  form.proxmox_node = s.proxmox_node ?? "";
+  form.proxmox_vmid = s.proxmox_vmid ?? 0;
   form.params = { ...(s.params ?? {}) };
   saved.value = "";
   showForm.value = true;
   void loadVolumes();
+  void loadProxmoxGuests();
 }
 
 function closeForm() {
@@ -292,6 +345,8 @@ async function submit() {
     destination: form.destination,
     docker_host: form.docker_host,
     project: form.project || undefined,
+    proxmox_node: form.proxmox_node || undefined,
+    proxmox_vmid: form.proxmox_vmid || undefined,
     params: { ...form.params },
     retention: editingService.value?.retention,
   };
@@ -354,6 +409,7 @@ onMounted(load);
             <div class="item-sub">
               {{ entryName(s.catalog_entry) }}, stored in {{ s.destination }}
               <span v-if="s.project"> · project: {{ s.project }}</span>
+              <span v-if="s.proxmox_vmid"> · Proxmox guest {{ s.proxmox_vmid }}</span>
             </div>
           </div>
           <div class="actions">
@@ -512,6 +568,42 @@ onMounted(load);
                 whole stack together from <router-link to="/restore">Restore</router-link>.
               </p>
             </div>
+          </div>
+        </details>
+
+        <details class="advanced">
+          <summary>Advanced: attach to a Proxmox guest?</summary>
+          <div class="advanced-body">
+            <p class="hint">
+              If this service runs inside a Proxmox VM or LXC container, you can note which one here. This doesn't
+              change what a backup does yet — it's inventory for whole-guest backups, coming later.
+            </p>
+            <template v-if="proxmoxGuestsLoaded && proxmoxGuests.length">
+              <div class="field">
+                <label for="svc-proxmox-guest">Guest</label>
+                <select id="svc-proxmox-guest" v-model="selectedGuestKey">
+                  <option value="">Not attached to a guest</option>
+                  <option v-for="g in proxmoxGuests" :key="guestKey(g.node, g.vmid)" :value="guestKey(g.node, g.vmid)">
+                    {{ guestLabel(g) }}
+                  </option>
+                </select>
+              </div>
+            </template>
+            <template v-else>
+              <p v-if="proxmoxGuestsError" class="hint">
+                No Proxmox connection configured yet — set one up on the <router-link to="/proxmox">Proxmox</router-link> page.
+              </p>
+              <div class="inline-fields">
+                <div class="field">
+                  <label for="svc-proxmox-node" class="hint">Node</label>
+                  <input id="svc-proxmox-node" v-model="form.proxmox_node" placeholder="e.g. pve1" autocomplete="off" />
+                </div>
+                <div class="field">
+                  <label for="svc-proxmox-vmid" class="hint">VMID</label>
+                  <input id="svc-proxmox-vmid" v-model.number="form.proxmox_vmid" type="number" min="0" />
+                </div>
+              </div>
+            </template>
           </div>
         </details>
       </template>

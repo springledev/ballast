@@ -63,6 +63,7 @@ func resetCLIFlags() {
 	restoreSnapshot, restoreFiles, restoreTo = "", nil, ""
 
 	serviceCatalogEntry, serviceDestination, serviceDockerHost = "", "", ""
+	serviceProject, serviceProxmoxNode, serviceProxmoxVMID = "", "", 0
 	serviceParams, serviceContainers, serviceSecrets = nil, nil, nil
 	serviceKeepDaily, serviceKeepWeekly, serviceKeepMonthly = 0, 0, 0
 	retentionKeepDaily, retentionKeepWeekly, retentionKeepMonthly = 0, 0, 0
@@ -94,6 +95,9 @@ func resetCLIFlags() {
 	hostKind, hostAddress, hostSSHKey = "", "", ""
 	hostTLSCA, hostTLSCert, hostTLSKey = "", "", ""
 	hostSkipTest = false
+
+	proxmoxHost, proxmoxTokenID, proxmoxTokenSecret, proxmoxSecretFile = "", "", "", ""
+	proxmoxInsecure, proxmoxSkipTest = false, false
 
 	notifyEnabled, notifyMaxAgeHours, notifyHeartbeat = true, 0, false
 

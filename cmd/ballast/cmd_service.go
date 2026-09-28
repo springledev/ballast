@@ -13,6 +13,8 @@ var (
 	serviceDestination  string
 	serviceDockerHost   string
 	serviceProject      string
+	serviceProxmoxNode  string
+	serviceProxmoxVMID  int
 	serviceParams       []string
 	serviceContainers   []string
 	serviceSecrets      []string
@@ -86,6 +88,7 @@ var serviceAddCmd = &cobra.Command{
 			s := inventory.Service{
 				Name: args[0], CatalogEntry: serviceCatalogEntry, Destination: serviceDestination, DockerHost: serviceDockerHost,
 				Params: params, Containers: containers, Secrets: secrets, Project: serviceProject,
+				ProxmoxNode: serviceProxmoxNode, ProxmoxVMID: serviceProxmoxVMID,
 			}
 			// A per-service retention override is only set when at
 			// least one --keep-* flag was actually given; unspecified
@@ -108,6 +111,9 @@ var serviceAddCmd = &cobra.Command{
 			}
 			if serviceProject != "" {
 				cmd.Printf("  Project: %s (see `ballast restore-project`)\n", serviceProject)
+			}
+			if serviceProxmoxVMID != 0 {
+				cmd.Printf("  Proxmox guest: node %s, VMID %d\n", serviceProxmoxNode, serviceProxmoxVMID)
 			}
 			if s.Retention != nil {
 				cmd.Printf("  keeps %d daily, %d weekly and %d monthly backups (overrides %s)\n",
@@ -246,6 +252,8 @@ func registerServiceCommands(root *cobra.Command) {
 	serviceAddCmd.Flags().StringVar(&serviceDestination, "destination", "", "destination to back up to (required)")
 	serviceAddCmd.Flags().StringVar(&serviceDockerHost, "host", "", "Docker host this service's containers run on (default: local)")
 	serviceAddCmd.Flags().StringVar(&serviceProject, "project", "", "group this service with others of the same Docker Compose stack, for `ballast restore-project`")
+	serviceAddCmd.Flags().StringVar(&serviceProxmoxNode, "proxmox-node", "", "Proxmox node this service's guest runs on (see `ballast proxmox guests`); required with --proxmox-vmid")
+	serviceAddCmd.Flags().IntVar(&serviceProxmoxVMID, "proxmox-vmid", 0, "VMID of the Proxmox guest this service runs in; required with --proxmox-node")
 	serviceAddCmd.Flags().StringArrayVar(&serviceParams, "param", nil, "catalog parameter as key=value (repeatable)")
 	serviceAddCmd.Flags().StringArrayVar(&serviceContainers, "container", nil, "detected container as key=value (repeatable)")
 	serviceAddCmd.Flags().StringArrayVar(&serviceSecrets, "secret", nil,

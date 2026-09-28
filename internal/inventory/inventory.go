@@ -349,6 +349,14 @@ type Service struct {
 	// restore them together in dependency order. Empty means the
 	// service stands alone.
 	Project string `json:"project,omitempty"`
+	// ProxmoxNode and ProxmoxVMID attach this service to the Proxmox
+	// guest it runs in (spec §17.4): the guest Ballast will back up as
+	// a whole via vzdump once that orchestration exists (spec §14 step
+	// 25). ProxmoxVMID 0 means "not attached to a guest" — the common
+	// case, a service that runs directly in Docker or bare metal with
+	// no Proxmox tier involved.
+	ProxmoxNode string `json:"proxmox_node,omitempty"`
+	ProxmoxVMID int    `json:"proxmox_vmid,omitempty"`
 }
 
 // EffectiveRetention is the policy applied to s's backups in d: its
@@ -389,6 +397,12 @@ func PutService(db *sql.DB, s Service) error {
 			return fmt.Errorf("service %s: project: %w", s.Name, err)
 		}
 	}
+	if (s.ProxmoxVMID != 0) != (s.ProxmoxNode != "") {
+		return fmt.Errorf("service %s: proxmox_node and proxmox_vmid must be given together", s.Name)
+	}
+	if s.ProxmoxVMID < 0 {
+		return fmt.Errorf("service %s: proxmox_vmid must not be negative", s.Name)
+	}
 	paramsJSON, err := marshalMap(s.Params)
 	if err != nil {
 		return fmt.Errorf("service %s: encoding params: %w", s.Name, err)
@@ -419,8 +433,8 @@ func PutService(db *sql.DB, s Service) error {
 
 	now := time.Now().UTC().Format(time.RFC3339Nano)
 	_, err = db.Exec(`
-		INSERT INTO services (name, catalog_entry, destination, docker_host, params_json, containers_json, secrets_json, retention_json, project, created_at, updated_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		INSERT INTO services (name, catalog_entry, destination, docker_host, params_json, containers_json, secrets_json, retention_json, project, proxmox_node, proxmox_vmid, created_at, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(name) DO UPDATE SET
 			catalog_entry = excluded.catalog_entry,
 			destination = excluded.destination,
@@ -430,8 +444,10 @@ func PutService(db *sql.DB, s Service) error {
 			secrets_json = excluded.secrets_json,
 			retention_json = excluded.retention_json,
 			project = excluded.project,
+			proxmox_node = excluded.proxmox_node,
+			proxmox_vmid = excluded.proxmox_vmid,
 			updated_at = excluded.updated_at`,
-		s.Name, s.CatalogEntry, s.Destination, s.DockerHost, paramsJSON, containersJSON, secretsJSON, retentionJSON, s.Project, now, now,
+		s.Name, s.CatalogEntry, s.Destination, s.DockerHost, paramsJSON, containersJSON, secretsJSON, retentionJSON, s.Project, s.ProxmoxNode, s.ProxmoxVMID, now, now,
 	)
 	if err != nil {
 		return fmt.Errorf("saving service %s: %w", s.Name, err)
@@ -451,13 +467,13 @@ func GetService(db *sql.DB, name string) (Service, error) {
 	return s, nil
 }
 
-const serviceColumns = `name, catalog_entry, destination, docker_host, params_json, containers_json, secrets_json, retention_json, project`
+const serviceColumns = `name, catalog_entry, destination, docker_host, params_json, containers_json, secrets_json, retention_json, project, proxmox_node, proxmox_vmid`
 
 // scanService reads one serviceColumns row.
 func scanService(row interface{ Scan(...any) error }) (Service, error) {
 	var s Service
 	var paramsJSON, containersJSON, secretsJSON, retentionJSON string
-	if err := row.Scan(&s.Name, &s.CatalogEntry, &s.Destination, &s.DockerHost, &paramsJSON, &containersJSON, &secretsJSON, &retentionJSON, &s.Project); err != nil {
+	if err := row.Scan(&s.Name, &s.CatalogEntry, &s.Destination, &s.DockerHost, &paramsJSON, &containersJSON, &secretsJSON, &retentionJSON, &s.Project, &s.ProxmoxNode, &s.ProxmoxVMID); err != nil {
 		return Service{}, err
 	}
 	var err error

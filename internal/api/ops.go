@@ -27,6 +27,7 @@ import (
 	"github.com/springledev/ballast/internal/engine"
 	"github.com/springledev/ballast/internal/inventory"
 	"github.com/springledev/ballast/internal/notify"
+	"github.com/springledev/ballast/internal/proxmox"
 	"github.com/springledev/ballast/internal/restic"
 	"github.com/springledev/ballast/internal/runner"
 	"github.com/springledev/ballast/internal/scheduler"
@@ -62,6 +63,11 @@ type Ops struct {
 	// verification drills, connection tests). Wiring passes the
 	// pipeline's own resolver, so both reach a host identically.
 	DockerHosts dockerhost.Resolver
+
+	// Proxmox resolves the configured Proxmox connection into an API
+	// client (spec §17.3). Zero value works: CredDirs/Redact are
+	// filled in by wiring the same way DockerHosts is.
+	Proxmox proxmox.Resolver
 
 	// ResticBin overrides the restic binary CheckPreflight probes
 	// (tests only); empty resolves "restic" against $PATH, matching

@@ -382,6 +382,7 @@ func init() {
 	registerServiceCommands(rootCmd)
 	registerDestinationCommands(rootCmd)
 	registerHostCommands(rootCmd)
+	registerProxmoxCommands(rootCmd)
 	registerScheduleCommands(rootCmd)
 	registerNotifyCommands(rootCmd)
 	registerSecretCommands(rootCmd)

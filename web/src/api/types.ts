@@ -40,6 +40,10 @@ export interface Service {
   retention?: Retention | null;
   /** Groups this service with others of the same Docker Compose stack, for the full-stack restore wizard. */
   project?: string;
+  /** The Proxmox node this service's guest lives on, when attached to one. Set together with proxmox_vmid. */
+  proxmox_node?: string;
+  /** The Proxmox VM/LXC ID this service is attached to, when set. Set together with proxmox_node. */
+  proxmox_vmid?: number;
 }
 
 /** One service's outcome within a full-stack restore (`ballast restore-project`). */
@@ -267,4 +271,51 @@ export interface DockerComposeProject {
 export interface CreateDockerHostResponse {
   host: DockerHost;
   test?: DockerHostTestResult;
+}
+
+/** Ballast's single saved Proxmox VE connection (GET /api/v1/proxmox). */
+export interface ProxmoxConnection {
+  host: string;
+  token_id: string;
+  /** The credential file holding this connection's API token secret. */
+  credential?: string;
+  insecure: boolean;
+}
+
+/**
+ * The token secret typed into the Proxmox connection form. Write-only:
+ * the server never returns it, and leaving it empty on an update keeps
+ * whatever was already saved.
+ */
+export interface ProxmoxCredentials {
+  token_secret?: string;
+}
+
+/** PUT /api/v1/proxmox request body. */
+export interface ProxmoxConnectionSetupRequest {
+  host: string;
+  token_id: string;
+  insecure?: boolean;
+  credentials?: ProxmoxCredentials;
+  /** Save without testing the connection first. */
+  skip_test?: boolean;
+}
+
+export interface ProxmoxTestResult {
+  version: string;
+}
+
+/** PUT /api/v1/proxmox response. */
+export interface ProxmoxConnectionResult {
+  connection: ProxmoxConnection;
+  test?: ProxmoxTestResult;
+}
+
+/** One VM or LXC container on the Proxmox host, from GET /api/v1/proxmox/guests. */
+export interface ProxmoxGuest {
+  node: string;
+  vmid: number;
+  type: "qemu" | "lxc";
+  name: string;
+  status: string;
 }

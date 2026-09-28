@@ -13,6 +13,11 @@ import type {
   DockerVolume,
   NotificationSettings,
   PreflightResult,
+  ProxmoxConnection,
+  ProxmoxConnectionResult,
+  ProxmoxConnectionSetupRequest,
+  ProxmoxGuest,
+  ProxmoxTestResult,
   RestoreProjectReport,
   ScheduledJob,
   Service,
@@ -192,5 +197,22 @@ export const api = {
   },
   listDockerHostComposeProjects(name: string): Promise<DockerComposeProject[]> {
     return request("GET", `${base}/docker-hosts/${encodeURIComponent(name)}/compose-projects`);
+  },
+
+  // --- proxmox ---
+  getProxmoxConnection(): Promise<ProxmoxConnection> {
+    return request("GET", `${base}/proxmox`);
+  },
+  setupProxmoxConnection(req: ProxmoxConnectionSetupRequest): Promise<ProxmoxConnectionResult> {
+    return request("PUT", `${base}/proxmox`, req);
+  },
+  deleteProxmoxConnection(): Promise<void> {
+    return request("DELETE", `${base}/proxmox`);
+  },
+  testProxmoxConnection(): Promise<ProxmoxTestResult> {
+    return request("POST", `${base}/proxmox/test`);
+  },
+  listProxmoxGuests(): Promise<ProxmoxGuest[]> {
+    return request("GET", `${base}/proxmox/guests`);
   },
 };

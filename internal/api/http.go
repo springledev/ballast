@@ -11,6 +11,7 @@ import (
 	"github.com/springledev/ballast/internal/backend"
 	"github.com/springledev/ballast/internal/inventory"
 	"github.com/springledev/ballast/internal/notify"
+	"github.com/springledev/ballast/internal/proxmox"
 	"github.com/springledev/ballast/internal/scheduler"
 )
 
@@ -70,6 +71,12 @@ func NewHandler(ops *Ops, apiToken string) http.Handler {
 	protected.HandleFunc("POST /api/v1/docker-hosts/{name}/test", h.testDockerHost)
 	protected.HandleFunc("GET /api/v1/docker-hosts/{name}/volumes", h.listDockerHostVolumes)
 	protected.HandleFunc("GET /api/v1/docker-hosts/{name}/compose-projects", h.listDockerHostComposeProjects)
+
+	protected.HandleFunc("GET /api/v1/proxmox", h.getProxmoxConnection)
+	protected.HandleFunc("PUT /api/v1/proxmox", h.putProxmoxConnection)
+	protected.HandleFunc("DELETE /api/v1/proxmox", h.deleteProxmoxConnection)
+	protected.HandleFunc("POST /api/v1/proxmox/test", h.testProxmoxConnection)
+	protected.HandleFunc("GET /api/v1/proxmox/guests", h.listProxmoxGuests)
 
 	protected.HandleFunc("GET /api/v1/projects", h.listProjects)
 	protected.HandleFunc("POST /api/v1/projects/{project}/restore", h.restoreProject)
@@ -633,6 +640,70 @@ func (h *handler) listDockerHostVolumes(w http.ResponseWriter, r *http.Request) 
 
 func (h *handler) listDockerHostComposeProjects(w http.ResponseWriter, r *http.Request) {
 	list, err := h.ops.ListDockerHostComposeProjects(r.Context(), pathName(r))
+	if err != nil {
+		h.writeErr(w, err, http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, http.StatusOK, list)
+}
+
+func (h *handler) getProxmoxConnection(w http.ResponseWriter, r *http.Request) {
+	c, err := h.ops.GetProxmoxConnection(r.Context())
+	if err != nil {
+		h.writeErr(w, err, http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, http.StatusOK, c)
+}
+
+// putProxmoxConnectionBody is PUT /api/v1/proxmox's request shape: the
+// connection, write-only credentials, and whether to skip the
+// connection test.
+type putProxmoxConnectionBody struct {
+	proxmox.Connection
+	// Credentials are saved to a root-only credential file and never
+	// echoed back (spec rule 2).
+	Credentials proxmox.Credentials `json:"credentials"`
+	SkipTest    bool                `json:"skip_test"`
+}
+
+func (h *handler) putProxmoxConnection(w http.ResponseWriter, r *http.Request) {
+	var body putProxmoxConnectionBody
+	if err := decodeJSON(r, &body); err != nil {
+		h.writeErr(w, err, http.StatusBadRequest)
+		return
+	}
+	req := ProxmoxConnectionSetup{Connection: body.Connection, Credentials: body.Credentials, SkipTest: body.SkipTest}
+	// Respond with what SetupProxmoxConnection actually saved and
+	// found, never the request body: that would echo the token secret
+	// straight back.
+	res, err := h.ops.SetupProxmoxConnection(r.Context(), req)
+	if err != nil {
+		h.writeErr(w, err, http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, http.StatusOK, res)
+}
+
+func (h *handler) deleteProxmoxConnection(w http.ResponseWriter, r *http.Request) {
+	if err := h.ops.DeleteProxmoxConnection(r.Context()); err != nil {
+		h.writeErr(w, err, http.StatusInternalServerError)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (h *handler) testProxmoxConnection(w http.ResponseWriter, r *http.Request) {
+	tr, err := h.ops.TestProxmoxConnection(r.Context())
+	if err != nil {
+		h.writeErr(w, err, http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, http.StatusOK, tr)
+}
+
+func (h *handler) listProxmoxGuests(w http.ResponseWriter, r *http.Request) {
+	list, err := h.ops.ListProxmoxGuests(r.Context())
 	if err != nil {
 		h.writeErr(w, err, http.StatusInternalServerError)
 		return

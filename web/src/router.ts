@@ -12,6 +12,7 @@ const router = createRouter({
     { path: "/services", name: "services", component: () => import("./views/ServicesView.vue") },
     { path: "/destinations", name: "destinations", component: () => import("./views/DestinationsView.vue") },
     { path: "/docker-hosts", name: "docker-hosts", component: () => import("./views/DockerHostsView.vue") },
+    { path: "/proxmox", name: "proxmox", component: () => import("./views/ProxmoxView.vue") },
     { path: "/schedule", name: "schedule", component: () => import("./views/ScheduleView.vue") },
     { path: "/restore", name: "restore", component: () => import("./views/RestoreView.vue") },
     { path: "/verification", name: "verification", component: () => import("./views/VerificationView.vue") },
