@@ -58,7 +58,7 @@
           "required": { "type": "boolean" },
           "prompt": { "type": "string" },
           "default": { "type": "string" },
-          "picker": { "enum": ["docker-volume"] }
+          "picker": { "enum": ["docker-volume", "compose-project"] }
         }
       }
     },
@@ -68,7 +68,7 @@
       "required": ["strategy"],
       "properties": {
         "strategy": {
-          "enum": ["dump", "stop-start", "files", "exec", "volume"]
+          "enum": ["dump", "stop-start", "files", "exec", "volume", "compose"]
         },
         "dumps": {
           "type": "array",
@@ -121,6 +121,14 @@
             "containers": { "type": "array", "items": { "type": "string" } }
           }
         },
+        "compose": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["project"],
+          "properties": {
+            "project": { "type": "string", "minLength": 1 }
+          }
+        },
         "exec": {
           "type": "object",
           "additionalProperties": false,
@@ -140,6 +148,10 @@
         {
           "if": { "properties": { "strategy": { "const": "volume" } } },
           "then": { "required": ["volumes"] }
+        },
+        {
+          "if": { "properties": { "strategy": { "const": "compose" } } },
+          "then": { "required": ["compose"] }
         }
       ]
     },

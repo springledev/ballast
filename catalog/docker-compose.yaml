@@ -1,0 +1,37 @@
+# catalog/docker-compose.yaml — Docker Compose config snapshot
+# (spec §5.1, §14 step 22).
+#
+# Snapshots one Compose project's config files (docker-compose.yml
+# plus any override files it was started from) and .env, when present,
+# through a small throwaway helper container on the service's Docker
+# host — so it works the same on local and remote hosts and needs no
+# other access to the host's filesystem. Which project is looked up is
+# read from the project's own containers' Compose labels, never
+# supplied as a host path.
+#
+# This is a config-only backup: it never touches the project's
+# volumes or databases (see the "docker-volume" and per-database
+# entries for those) — pair it with them to cover a whole stack.
+#
+# Verification: the mandatory-minimum archive integrity check (the
+# config archive and the container-labels snapshot are both read back
+# whole) plus restic's own read-back.
+apiVersion: ballast.dev/v1
+service: docker-compose
+version: 1
+display:
+  name: Docker Compose config
+  description: Snapshot a Compose project's docker-compose.yml, .env and container labels
+parameters:
+  - name: project
+    required: true
+    picker: compose-project
+    prompt: "Name of the Compose project to back up (its containers' com.docker.compose.project label)"
+backup:
+  strategy: compose
+  compose:
+    project: "{{ .Params.project }}"
+verify:
+  method: archive-integrity
+notifications:
+  failureVerbosity: full

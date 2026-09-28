@@ -172,6 +172,19 @@ describe("api client", () => {
     expect(url).toBe("/api/v1/docker-hosts/nas/volumes");
   });
 
+  it("lists compose projects on a host", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      jsonResponse(200, [{ name: "immich", working_dir: "/opt/immich", services: ["server", "database"] }]),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(api.listDockerHostComposeProjects("nas")).resolves.toEqual([
+      { name: "immich", working_dir: "/opt/immich", services: ["server", "database"] },
+    ]);
+    const [url] = fetchMock.mock.calls[0];
+    expect(url).toBe("/api/v1/docker-hosts/nas/compose-projects");
+  });
+
   it("passes the host query param on detect when given", async () => {
     const fetchMock = vi.fn().mockImplementation(() => Promise.resolve(jsonResponse(200, { containers: [], suggestions: [] })));
     vi.stubGlobal("fetch", fetchMock);

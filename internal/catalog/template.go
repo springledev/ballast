@@ -46,6 +46,10 @@ func (e *Entry) DeepCopy() *Entry {
 		ec.Args = append([]string(nil), e.Backup.Exec.Args...)
 		c.Backup.Exec = &ec
 	}
+	if e.Backup.Compose != nil {
+		cs := *e.Backup.Compose
+		c.Backup.Compose = &cs
+	}
 	c.Verify.FilterStderr = append([]string(nil), e.Verify.FilterStderr...)
 	c.Verify.Methods = append([]string(nil), e.Verify.Methods...)
 	if sm := e.Verify.Smoke; sm != nil {
@@ -227,6 +231,13 @@ func (e *Entry) Resolve(ctx TemplateContext) error {
 			return fmt.Errorf("volume %q: %w", v.Name, err)
 		}
 		e.Backup.Volumes[i].Name = n
+	}
+	if cs := e.Backup.Compose; cs != nil {
+		p, err := substitute(cs.Project, ctx)
+		if err != nil {
+			return fmt.Errorf("compose project: %w", err)
+		}
+		cs.Project = p
 	}
 	ss := e.Backup.StopStart
 	if ss != nil {

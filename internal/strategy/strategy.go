@@ -20,6 +20,9 @@
 //   - volume: archive named Docker volumes through a throwaway helper
 //     container on the service's Docker host — live, or with the
 //     service's containers stopped (spec §17.5).
+//   - compose: snapshot a Docker Compose project's config files,
+//     .env and container labels, discovered by compose labels rather
+//     than a host path (spec §14 step 22).
 //
 // All external work goes through internal/runner (pipefail, SIGPIPE,
 // redaction) — strategies contain no per-service logic (catalog is
@@ -245,8 +248,16 @@ func For(entry *catalog.Entry, opts Options) (Strategy, error) {
 			return nil, err
 		}
 		return &Volume{entry: entry, opts: opts}, nil
+	case "compose":
+		if opts.Runner == nil {
+			return nil, fmt.Errorf("service %s: compose strategy needs a command runner", entry.Service)
+		}
+		if err := validateComposeEntry(entry); err != nil {
+			return nil, err
+		}
+		return &Compose{entry: entry, opts: opts}, nil
 	default:
-		return nil, fmt.Errorf("service %s: unknown backup strategy %q (want one of: files, dump, stop-start, exec, volume)", entry.Service, entry.Backup.Strategy)
+		return nil, fmt.Errorf("service %s: unknown backup strategy %q (want one of: files, dump, stop-start, exec, volume, compose)", entry.Service, entry.Backup.Strategy)
 	}
 }
 

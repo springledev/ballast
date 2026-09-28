@@ -319,3 +319,50 @@ func TestListDockerHostVolumesNoRunner(t *testing.T) {
 		t.Fatal("want an error when no runner is configured")
 	}
 }
+
+// dockerPsComposeStub is a fake `docker ps -a` answering with one
+// Compose project's two containers, so ListDockerHostComposeProjects
+// tests are hermetic (no Docker daemon needed).
+const dockerPsComposeStub = "#!/bin/sh\n" +
+	`if [ "$1 $2 $3 $4" = "ps -a --format {{json .}}" ]; then` + "\n" +
+	`  printf '%s\n' '{"Names":"immich_server","Image":"immich/server","Labels":"com.docker.compose.project=immich,com.docker.compose.service=server,com.docker.compose.project.working_dir=/opt/immich,com.docker.compose.project.config_files=/opt/immich/docker-compose.yml"}'` + "\n" +
+	`  printf '%s\n' '{"Names":"immich_db","Image":"immich/postgres","Labels":"com.docker.compose.project=immich,com.docker.compose.service=database,com.docker.compose.project.working_dir=/opt/immich,com.docker.compose.project.config_files=/opt/immich/docker-compose.yml"}'` + "\n" +
+	"fi\nexit 0\n"
+
+// TestListDockerHostComposeProjects checks the happy path: one
+// project comes back with its containers.
+func TestListDockerHostComposeProjects(t *testing.T) {
+	h := newHarness(t)
+	h.ops.Runner = &runner.Runner{}
+	h.ops.DockerHosts = dockerhost.Resolver{DockerBin: writeDockerStub(t, dockerPsComposeStub)}
+
+	got, err := h.ops.ListDockerHostComposeProjects(context.Background(), dockerhost.LocalName)
+	if err != nil {
+		t.Fatalf("ListDockerHostComposeProjects: %v", err)
+	}
+	if len(got) != 1 || got[0].Name != "immich" || len(got[0].Containers) != 2 {
+		t.Fatalf("ListDockerHostComposeProjects() = %+v, want one immich project with two containers", got)
+	}
+}
+
+// TestListDockerHostComposeProjectsUnknownHost checks that an unknown
+// host name is reported as a not-found error, not a crash.
+func TestListDockerHostComposeProjectsUnknownHost(t *testing.T) {
+	h := newHarness(t)
+	h.ops.Runner = &runner.Runner{}
+	_, err := h.ops.ListDockerHostComposeProjects(context.Background(), "nope")
+	if !errors.Is(err, inventory.ErrNotFound) {
+		t.Fatalf("err = %v, want ErrNotFound", err)
+	}
+}
+
+// TestListDockerHostComposeProjectsNoRunner checks the
+// internal-wiring guard: listing projects without a configured runner
+// must fail loudly instead of nil-pointer-panicking.
+func TestListDockerHostComposeProjectsNoRunner(t *testing.T) {
+	h := newHarness(t)
+	_, err := h.ops.ListDockerHostComposeProjects(context.Background(), dockerhost.LocalName)
+	if err == nil {
+		t.Fatal("want an error when no runner is configured")
+	}
+}

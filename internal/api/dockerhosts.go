@@ -60,6 +60,30 @@ func (o *Ops) ListDockerHostVolumes(ctx context.Context, name string) ([]dockerh
 	return list, nil
 }
 
+// ListDockerHostComposeProjects lists the Docker Compose projects on a
+// saved host, for the "compose-project" parameter picker in a
+// service's setup form. Listing projects is a best-effort
+// convenience: the caller falls back to a plain text box when this
+// fails.
+func (o *Ops) ListDockerHostComposeProjects(ctx context.Context, name string) ([]dockerhost.ComposeProject, error) {
+	h, err := inventory.GetDockerHost(o.DB, name)
+	if err != nil {
+		return nil, wrapf("docker host "+name, err)
+	}
+	if o.Runner == nil {
+		return nil, fmt.Errorf("docker host %s: listing compose projects is not configured (internal wiring error)", h.Name)
+	}
+	d, err := o.DockerHosts.Docker(h)
+	if err != nil {
+		return nil, o.redactErr(err)
+	}
+	list, err := dockerhost.ListComposeProjects(ctx, o.Runner, d)
+	if err != nil {
+		return nil, o.redactErr(err)
+	}
+	return list, nil
+}
+
 // GetDockerHost returns one Docker host.
 func (o *Ops) GetDockerHost(ctx context.Context, name string) (dockerhost.Host, error) {
 	h, err := inventory.GetDockerHost(o.DB, name)

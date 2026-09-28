@@ -1,0 +1,40 @@
+{
+  "status": 200,
+  "body": [
+    {
+      "config_files": [
+        "/opt/immich/docker-compose.yml"
+      ],
+      "containers": [
+        {
+          "image": "immich/postgres",
+          "labels": {
+            "com.docker.compose.project": "immich",
+            "com.docker.compose.project.config_files": "/opt/immich/docker-compose.yml",
+            "com.docker.compose.project.working_dir": "/opt/immich",
+            "com.docker.compose.service": "database"
+          },
+          "name": "immich_db",
+          "service": "database"
+        },
+        {
+          "image": "immich/server",
+          "labels": {
+            "com.docker.compose.project": "immich",
+            "com.docker.compose.project.config_files": "/opt/immich/docker-compose.yml",
+            "com.docker.compose.project.working_dir": "/opt/immich",
+            "com.docker.compose.service": "server"
+          },
+          "name": "immich_server",
+          "service": "server"
+        }
+      ],
+      "name": "immich",
+      "services": [
+        "database",
+        "server"
+      ],
+      "working_dir": "/opt/immich"
+    }
+  ]
+}

@@ -82,6 +82,10 @@ type Backup struct {
 	Volumes   []VolumeSpec `yaml:"volumes,omitempty" json:"volumes,omitempty"`
 	StopStart *StopStart   `yaml:"stopStart,omitempty" json:"stopStart,omitempty"`
 	Exec      *ExecBackup  `yaml:"exec,omitempty" json:"exec,omitempty"`
+	// Compose is the Docker Compose project the compose strategy
+	// snapshots (config files + .env + container labels; spec §14
+	// step 22).
+	Compose *ComposeSpec `yaml:"compose,omitempty" json:"compose,omitempty"`
 }
 
 // Dump is one dump command run inside a container (typically docker exec)
@@ -120,6 +124,15 @@ type FileSpec struct {
 // service's Docker host, so no host filesystem access is needed.
 type VolumeSpec struct {
 	Name string `yaml:"name" json:"name"`
+}
+
+// ComposeSpec names the Docker Compose project the compose strategy
+// snapshots. Project is looked up by name among the projects Ballast
+// can see running (or last run) on the service's Docker host — never a
+// host path, so a remote host needs no filesystem access beyond what
+// `docker ps` already exposes via container labels.
+type ComposeSpec struct {
+	Project string `yaml:"project" json:"project"`
 }
 
 // StopStart lists the containers that the stop-start strategy must stop

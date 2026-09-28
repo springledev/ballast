@@ -42,9 +42,10 @@ parameters:                  # optional: values the wizard/CLI ask the user for
     prompt: "Path to My Service's data folder"
     default: "/srv/myservice/data"   # used when the value is omitted (not just left blank on purpose)
     # picker: docker-volume    # optional UI hint: offer the named volumes on the service's Docker host
+    # picker: compose-project  # optional UI hint: offer the Compose projects on the service's Docker host
 
 backup:                      # required
-  strategy: dump              # required: one of dump | stop-start | files | exec | volume
+  strategy: dump              # required: one of dump | stop-start | files | exec | volume | compose
   dumps:                      # required when strategy is dump; one entry per thing to dump
     - name: database
       container: "{{ .Params.container }}"   # optional: docker container to `docker exec` into
@@ -57,6 +58,8 @@ backup:                      # required
   stopStart:                  # optional; used by the stop-start and volume strategies
     containers:
       - "{{ .Params.container }}"
+  compose:                    # required when strategy is compose: the Compose project to snapshot
+    project: "{{ .Params.project }}"
   exec:                       # required when strategy is exec (Phase-2 reserved interface — see below)
     script: "/path/to/script"
     args: ["--flag"]
@@ -93,6 +96,7 @@ A few rules worth calling out:
   fails to load instead of being silently ignored.
 - `backup.strategy: dump` requires at least one entry in `backup.dumps`.
 - `backup.strategy: volume` requires at least one entry in `backup.volumes`.
+- `backup.strategy: compose` requires `backup.compose.project`.
 - `verify.method: db-restore-drill` requires `verify.image`.
 - `verify.methods` (a list) declares multiple checks that all must pass; use
   `method` (singular) for a single check.
@@ -128,6 +132,7 @@ empty string, that empty string wins, not the default.
 | `stop-start` | Stops the listed containers, backs up `files` paths directly, then always restarts the containers — even if the backup fails or is interrupted. | The app's on-disk data (e.g. a SQLite file, an append-only data folder) isn't safe to copy while the app is writing to it. |
 | `volume` | Copies each named Docker volume in `volumes` into a tar archive using a small temporary helper container on the service's Docker host (works the same on remote hosts; no host folders needed). With `stopStart.containers` set, those containers are stopped during the copy and always started again; without it the volume is copied live. | The data lives in a named Docker volume rather than a folder you can point at. Stop the containers for anything that writes constantly (databases); live is fine for media and rarely-changing files. See `catalog/docker-volume.yaml` and `catalog/docker-volume-live.yaml`. |
 | `files` | Backs up `files` paths directly, no container involved. | A plain folder, or any data that's already safe to read live. |
+| `compose` | Finds the named Docker Compose project by its containers' own Compose labels (never a host path you supply), and archives its config files (`docker-compose.yml` and any override files it was started from) plus `.env`, when present, through a small temporary helper container — works the same on remote hosts. Also captures each container's name, image and labels (never its environment variables — those commonly carry secrets) as a second artifact. | You want the stack's own configuration backed up alongside its data, so a full-stack restore has something to recreate the containers from. Config-only: pair it with `volume`/`dump` entries for the project's actual data. See `catalog/docker-compose.yaml`. |
 | `exec` | Runs a user-provided script instead of a built-in strategy. | **Not available for general use in v0.1** — this is a reserved Phase-2 interface (mobile/external triggers), tested only with stub scripts. Don't build a catalog entry around it yet. |
 
 ## Choosing a verification method

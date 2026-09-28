@@ -7,6 +7,7 @@ import type {
   CreateDockerHostResponse,
   Destination,
   DetectResult,
+  DockerComposeProject,
   DockerHost,
   DockerHostTestResult,
   DockerVolume,
@@ -179,5 +180,8 @@ export const api = {
   },
   listDockerHostVolumes(name: string): Promise<DockerVolume[]> {
     return request("GET", `${base}/docker-hosts/${encodeURIComponent(name)}/volumes`);
+  },
+  listDockerHostComposeProjects(name: string): Promise<DockerComposeProject[]> {
+    return request("GET", `${base}/docker-hosts/${encodeURIComponent(name)}/compose-projects`);
   },
 };

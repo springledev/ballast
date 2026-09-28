@@ -621,6 +621,22 @@ func TestHTTPGolden(t *testing.T) {
 			},
 		},
 		{
+			name: "docker_hosts_list_compose_projects",
+			arrange: func(t *testing.T, h *harness) {
+				h.ops.Runner = &runner.Runner{}
+				h.ops.DockerHosts = dockerhost.Resolver{DockerBin: writeDockerStub(t, dockerPsComposeStub)}
+			},
+			req: func(h *harness) *http.Request {
+				return httptest.NewRequest(http.MethodGet, "/api/v1/docker-hosts/local/compose-projects", nil)
+			},
+		},
+		{
+			name: "docker_hosts_list_compose_projects_not_found",
+			req: func(h *harness) *http.Request {
+				return httptest.NewRequest(http.MethodGet, "/api/v1/docker-hosts/nope/compose-projects", nil)
+			},
+		},
+		{
 			// kind remote-ssh with no address credentials and
 			// skip_test: true so no connection is attempted; this
 			// case exists to prove the response never echoes the

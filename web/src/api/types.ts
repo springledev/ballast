@@ -9,7 +9,8 @@ export interface CatalogParameter {
   required?: boolean;
   prompt?: string;
   default?: string;
-  /** "docker-volume": show a picker of the service's Docker host's volumes. */
+  /** "docker-volume" / "compose-project": show a picker of the service's
+   * Docker host's volumes / Compose projects. */
   picker?: string;
 }
 
@@ -224,6 +225,24 @@ export interface DockerVolume {
   driver: string;
   /** The Compose project the volume belongs to, when it has one. */
   compose_project?: string;
+}
+
+/** One container in a DockerComposeProject, for display only. */
+export interface DockerComposeContainer {
+  name: string;
+  service: string;
+  image: string;
+  labels?: Record<string, string>;
+}
+
+/** One Docker Compose project on a host, for the "compose-project"
+ * parameter picker. */
+export interface DockerComposeProject {
+  name: string;
+  working_dir: string;
+  config_files?: string[];
+  services?: string[];
+  containers?: DockerComposeContainer[];
 }
 
 /** POST /api/v1/docker-hosts response. */

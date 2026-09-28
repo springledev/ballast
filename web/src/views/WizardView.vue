@@ -2,7 +2,7 @@
 import { computed, onMounted, onUnmounted, reactive, ref, watch } from "vue";
 
 import { api } from "@/api/client";
-import type { CatalogSummary, Destination, DetectResult, DockerHost, DockerVolume, PreflightResult, ServiceStatus } from "@/api/types";
+import type { CatalogSummary, Destination, DetectResult, DockerComposeProject, DockerHost, DockerVolume, PreflightResult, ServiceStatus } from "@/api/types";
 import { schedulePresets } from "@/lib/schedule";
 import { describeCheck, describeTier } from "@/lib/status";
 
@@ -132,7 +132,40 @@ function volumeLabel(v: DockerVolume): string {
   return v.compose_project ? `${v.name} (${v.compose_project})` : v.name;
 }
 
-watch(() => [chosenEntry.value, chosenHost.value], loadVolumes);
+// --- Compose project picker (parameters with picker: "compose-project") ---
+
+const composeProjectOptions = ref<DockerComposeProject[]>([]);
+const composeProjectError = ref("");
+const hasComposeProjectPicker = computed(() =>
+  (selectedEntry.value?.parameters ?? []).some((p) => p.picker === "compose-project"),
+);
+
+/** Loads the Compose projects on chosenHost, for the datalist of any
+ * "compose-project" parameter. Best-effort: on failure the picker just
+ * falls back to a plain text box. */
+async function loadComposeProjects() {
+  if (!hasComposeProjectPicker.value || !chosenHost.value) {
+    composeProjectOptions.value = [];
+    composeProjectError.value = "";
+    return;
+  }
+  composeProjectError.value = "";
+  const host = chosenHost.value;
+  try {
+    const projects = await api.listDockerHostComposeProjects(host);
+    if (chosenHost.value !== host) return; // the host changed meanwhile
+    composeProjectOptions.value = projects;
+  } catch {
+    if (chosenHost.value !== host) return;
+    composeProjectOptions.value = [];
+    composeProjectError.value = "Couldn't list Compose projects on this host — type the project name.";
+  }
+}
+
+watch(() => [chosenEntry.value, chosenHost.value], () => {
+  loadVolumes();
+  loadComposeProjects();
+});
 
 function next() {
   error.value = "";
@@ -306,10 +339,17 @@ const resultLight = computed(() => {
           <input :id="`wiz-param-${p.name}`" v-model="params[p.name]" list="wiz-docker-volume-options" autocomplete="off" />
           <p v-if="volumeError" class="hint">{{ volumeError }}</p>
         </template>
+        <template v-else-if="p.picker === 'compose-project'">
+          <input :id="`wiz-param-${p.name}`" v-model="params[p.name]" list="wiz-compose-project-options" autocomplete="off" />
+          <p v-if="composeProjectError" class="hint">{{ composeProjectError }}</p>
+        </template>
         <input v-else :id="`wiz-param-${p.name}`" v-model="params[p.name]" />
       </div>
       <datalist v-if="hasVolumePicker" id="wiz-docker-volume-options">
         <option v-for="v in volumeOptions" :key="v.name" :value="v.name">{{ volumeLabel(v) }}</option>
+      </datalist>
+      <datalist v-if="hasComposeProjectPicker" id="wiz-compose-project-options">
+        <option v-for="cp in composeProjectOptions" :key="cp.name" :value="cp.name">{{ cp.name }}</option>
       </datalist>
       <div class="field">
         <label for="wiz-name">Name</label>

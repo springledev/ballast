@@ -68,6 +68,7 @@ func NewHandler(ops *Ops, apiToken string) http.Handler {
 	protected.HandleFunc("DELETE /api/v1/docker-hosts/{name}", h.deleteDockerHost)
 	protected.HandleFunc("POST /api/v1/docker-hosts/{name}/test", h.testDockerHost)
 	protected.HandleFunc("GET /api/v1/docker-hosts/{name}/volumes", h.listDockerHostVolumes)
+	protected.HandleFunc("GET /api/v1/docker-hosts/{name}/compose-projects", h.listDockerHostComposeProjects)
 
 	mux := http.NewServeMux()
 	mux.Handle("/api/v1/", withAuth(protected, apiToken))
@@ -575,6 +576,15 @@ func (h *handler) testDockerHost(w http.ResponseWriter, r *http.Request) {
 
 func (h *handler) listDockerHostVolumes(w http.ResponseWriter, r *http.Request) {
 	list, err := h.ops.ListDockerHostVolumes(r.Context(), pathName(r))
+	if err != nil {
+		h.writeErr(w, err, http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, http.StatusOK, list)
+}
+
+func (h *handler) listDockerHostComposeProjects(w http.ResponseWriter, r *http.Request) {
+	list, err := h.ops.ListDockerHostComposeProjects(r.Context(), pathName(r))
 	if err != nil {
 		h.writeErr(w, err, http.StatusInternalServerError)
 		return

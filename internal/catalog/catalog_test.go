@@ -204,6 +204,47 @@ func TestResolveVolumeTemplates(t *testing.T) {
 	}
 }
 
+// composeEntryYAML is a minimal compose-strategy entry.
+func composeEntryYAML() string {
+	return `apiVersion: ballast.dev/v1
+service: stack
+version: 1
+parameters:
+  - name: project
+    required: true
+    picker: compose-project
+backup:
+  strategy: compose
+  compose:
+    project: "{{ .Params.project }}"
+verify:
+  method: archive-integrity
+`
+}
+
+// TestResolveComposeTemplates checks that the compose project name is
+// templated, the picker hint survives loading, and DeepCopy isolates
+// the compose spec.
+func TestResolveComposeTemplates(t *testing.T) {
+	entry, err := Load([]byte(composeEntryYAML()))
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if got := entry.Parameters[0].Picker; got != "compose-project" {
+		t.Errorf("picker = %q, want compose-project", got)
+	}
+	deep := entry.DeepCopy()
+	if err := deep.Resolve(TemplateContext{Params: map[string]string{"project": "immich"}}); err != nil {
+		t.Fatalf("Resolve: %v", err)
+	}
+	if got := deep.Backup.Compose.Project; got != "immich" {
+		t.Errorf("compose project = %q, want immich", got)
+	}
+	if got := entry.Backup.Compose.Project; got != "{{ .Params.project }}" {
+		t.Errorf("original entry mutated; compose project = %q", got)
+	}
+}
+
 func TestResolveTemplates(t *testing.T) {
 	entry, err := Load([]byte(validEntry))
 	if err != nil {
