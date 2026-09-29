@@ -1,6 +1,6 @@
 # Ballast
 
-Ballast is a self-hosted backup tool for Docker-based homelabs. It backs up your favorite services (Immich, Vaultwarden, Postgres, MySQL, CouchDB, and any folder), encrypts and stores them using restic—a well-known open-source backup program—on local disk (cloud destinations like B2, S3, and SFTP are planned), and proves every single backup can actually be restored before marking it done. Think of it as automated backup sanity checking for the apps that matter to you. No telemetry, no tracking.
+Ballast is a self-hosted backup tool for Docker-based homelabs. It backs up your favorite services (Immich, Vaultwarden, Postgres, MySQL, CouchDB, and any folder), encrypts and stores them using restic—a well-known open-source backup program—on local disk or cloud destinations (Backblaze B2, S3, Cloudflare R2, and SFTP), and proves every single backup can actually be restored before marking it done. Think of it as automated backup sanity checking for the apps that matter to you. No telemetry, no tracking.
 
 **Status meanings:** Green = verified and restores; Amber = backed up, but Ballast could not prove it restores; Red = something failed.
 
@@ -48,10 +48,12 @@ Ballast comes with built-in support for:
 - `backup` — Run a verified backup for one configured service now
 - `catalog` — Browse the service catalog
 - `destination` — Manage backup destinations
+- `doctor` — Check restic, Docker hosts, destinations, and disk space for common configuration problems
 - `notify` — Choose when Ballast alerts you about each service
 - `restore` — Restore a service's backup into a new directory
 - `run-due` — Run every backup job whose schedule is due (for systemd timers)
 - `schedule` — Manage backup schedules
+- `self-backup` — Back up Ballast's own state database and configuration to a destination
 - `serve` — Serve the Web UI and REST API
 - `service` — Manage configured backup services
 - `snapshots` — List restic snapshots for one service

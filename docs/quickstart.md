@@ -71,8 +71,8 @@ for Immich specifically.
 ### Step 2 of 4: Where should the backups be kept?
 
 If you haven't configured a destination yet, the wizard offers to create a
-local folder for you (a good starting point — support for cloud
-destinations like B2, S3 or SFTP is planned but not available yet). It suggests a folder under Ballast's own
+local folder for you (a good starting point — you can also use cloud
+destinations like Backblaze B2, S3, Cloudflare R2, or SFTP). It suggests a folder under Ballast's own
 data directory, but you can point it anywhere, including a second disk or a
 mounted NAS share, which is worth doing so a single disk failure can't take
 out both your data and your backups.
