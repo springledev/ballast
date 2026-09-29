@@ -33,7 +33,7 @@ func systemdCredentialsDir(t *testing.T, files map[string]string) string {
 	if err := os.Chmod(dir, 0o500); err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { os.Chmod(dir, 0o700) })
+	t.Cleanup(func() { _ = os.Chmod(dir, 0o700) })
 	t.Setenv("CREDENTIALS_DIRECTORY", dir)
 	return dir
 }

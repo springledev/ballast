@@ -8,8 +8,8 @@ import (
 )
 
 var (
-	doctorJSON      bool
-	selfBackupJSON  bool
+	doctorJSON     bool
+	selfBackupJSON bool
 )
 
 // doctorCmd is `ballast doctor [--json]` (spec §9): a thin wrapper over
@@ -45,9 +45,10 @@ var doctorCmd = &cobra.Command{
 func printDoctorReport(cmd *cobra.Command, report api.DoctorReport) {
 	for _, c := range report.Checks {
 		mark := "[FAIL]"
-		if c.Status == api.DoctorOK {
+		switch c.Status {
+		case api.DoctorOK:
 			mark = "[ok]"
-		} else if c.Status == api.DoctorWarn {
+		case api.DoctorWarn:
 			mark = "[WARN]"
 		}
 		cmd.Printf("%s %s %s — %s\n", mark, c.Area, c.Name, c.Detail)

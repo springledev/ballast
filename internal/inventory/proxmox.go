@@ -42,7 +42,7 @@ func GetProxmoxConnection(db *sql.DB) (proxmox.Connection, error) {
 	err := db.QueryRow(`SELECT host, token_id, credential, insecure FROM proxmox_connection WHERE id = 1`).
 		Scan(&c.Host, &c.TokenID, &c.Credential, &insecure)
 	if errors.Is(err, sql.ErrNoRows) {
-		return proxmox.Connection{}, fmt.Errorf("Proxmox connection: %w", ErrNotFound)
+		return proxmox.Connection{}, fmt.Errorf("the Proxmox connection: %w", ErrNotFound)
 	}
 	if err != nil {
 		return proxmox.Connection{}, fmt.Errorf("getting Proxmox connection: %w", err)
@@ -62,7 +62,7 @@ func DeleteProxmoxConnection(db *sql.DB) error {
 		return fmt.Errorf("deleting Proxmox connection: %w", err)
 	}
 	if n, _ := res.RowsAffected(); n == 0 {
-		return fmt.Errorf("Proxmox connection: %w", ErrNotFound)
+		return fmt.Errorf("the Proxmox connection: %w", ErrNotFound)
 	}
 	return nil
 }

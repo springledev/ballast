@@ -191,7 +191,7 @@ func TestEngineAdapter_NilReceiver_ReturnsErrorInsteadOfPanicking(t *testing.T) 
 	var n interface {
 		NotifyJobFailure(ctx context.Context, service string, runID int64, detail string) error
 	} = adapter
-	if n == nil {
+	if isNilInterface(n) {
 		t.Fatal("typed-nil *EngineAdapter stored in an interface should not compare equal to nil")
 	}
 }
@@ -219,3 +219,8 @@ func TestEngineAdapter_NotifySuccessHeartbeat_ExplicitlyDisabled(t *testing.T) {
 		t.Errorf("events = %d, want 0 (explicitly disabled)", len(ch.events))
 	}
 }
+
+// isNilInterface reports whether v is a nil interface value. It takes
+// an any so the comparison is made on the interface, not on the
+// concrete pointer type the caller started with.
+func isNilInterface(v any) bool { return v == nil }

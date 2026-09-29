@@ -250,7 +250,7 @@ func runRemoteE2E(t *testing.T, ctx context.Context, bin string, rc remoteCase) 
 		t.Logf("wrong-key connection test error: %v", err)
 	}
 	state, err = p.Run(ctx, "photos")
-	record(err)
+	_ = record(err)
 	if state == engine.SUCCESS || state == engine.SUCCESS_UNVERIFIED {
 		t.Fatalf("backup with a wrong key ended %s, want a failure", state)
 	}

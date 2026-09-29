@@ -16,7 +16,7 @@ func TestClientTest(t *testing.T) {
 		if r.URL.Path != "/api2/json/version" {
 			t.Errorf("path = %q", r.URL.Path)
 		}
-		w.Write([]byte(`{"data":{"version":"8.2.1"}}`))
+		_, _ = w.Write([]byte(`{"data":{"version":"8.2.1"}}`))
 	}))
 	defer srv.Close()
 
@@ -51,7 +51,7 @@ func TestClientListGuests(t *testing.T) {
 		if r.URL.Query().Get("type") != "vm" {
 			t.Errorf("query = %q", r.URL.RawQuery)
 		}
-		w.Write([]byte(`{"data":[
+		_, _ = w.Write([]byte(`{"data":[
 			{"node":"pve1","vmid":100,"name":"immich","status":"running","type":"lxc"},
 			{"node":"pve1","vmid":101,"name":"win-vm","status":"stopped","type":"qemu"},
 			{"node":"pve1","vmid":100,"type":"storage"}
@@ -78,7 +78,7 @@ func TestClientListGuests(t *testing.T) {
 func TestClientRequestFailure(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusInternalServerError)
-		w.Write([]byte("boom"))
+		_, _ = w.Write([]byte("boom"))
 	}))
 	defer srv.Close()
 

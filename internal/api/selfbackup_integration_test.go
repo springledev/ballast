@@ -47,7 +47,9 @@ func TestSelfBackupRealResticIntegration(t *testing.T) {
 		t.Fatalf("init: %v", err)
 	}
 	cfg := filepath.Join(t.TempDir(), "ballast.yaml")
-	os.WriteFile(cfg, []byte("max_parallel_jobs: 2\n"), 0o600)
+	if err := os.WriteFile(cfg, []byte("max_parallel_jobs: 2\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
 	h.ops.SelfBackupFiles = SelfBackupSources{ConfigFile: cfg}
 
 	res, err := h.ops.SelfBackup(context.Background(), "real")
@@ -59,7 +61,7 @@ func TestSelfBackupRealResticIntegration(t *testing.T) {
 		t.Fatalf("restore: %v", err)
 	}
 	var found int
-	filepath.Walk(out, func(p string, fi os.FileInfo, _ error) error {
+	_ = filepath.Walk(out, func(p string, fi os.FileInfo, _ error) error {
 		if fi == nil || fi.IsDir() {
 			return nil
 		}
@@ -80,7 +82,9 @@ func TestSelfBackupRealResticIntegration(t *testing.T) {
 	// Doctor: a wrong password must be a failed destination line.
 	h.ops.Repo = open(func() string {
 		p := filepath.Join(h.credDir, "wrong")
-		os.WriteFile(p, []byte("nope\n"), 0o600)
+		if err := os.WriteFile(p, []byte("nope\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
 		return p
 	}())
 	rep, err := h.ops.Doctor(context.Background())

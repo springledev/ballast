@@ -81,7 +81,7 @@ func (o *Ops) SetupProxmoxConnection(ctx context.Context, req ProxmoxConnectionS
 		files := []dockerhost.File{{Name: c.Credential, Data: data}}
 		undo, serr := o.savePrivateFiles(files)
 		if serr != nil {
-			return res, fmt.Errorf("Proxmox connection: %w", serr)
+			return res, fmt.Errorf("the Proxmox connection: %w", serr)
 		}
 		defer func() {
 			if err != nil {

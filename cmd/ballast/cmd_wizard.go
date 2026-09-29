@@ -132,7 +132,7 @@ func runWizard(cmd *cobra.Command, args []string) error {
 func checkWizardPrerequisites(ctx context.Context, a *app, out io.Writer) error {
 	res := a.ops.CheckPreflight(ctx)
 	if res.ResticError != "" {
-		return fmt.Errorf("Ballast uses restic to store backups, and it can't be used yet: %s", res.ResticError)
+		return fmt.Errorf("ballast uses restic to store backups, and it can't be used yet: %s", res.ResticError)
 	}
 	if res.ResticWarning != "" {
 		fmt.Fprintf(out, "\nWarning: %s\n", res.ResticWarning)

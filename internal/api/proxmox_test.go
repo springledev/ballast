@@ -284,7 +284,7 @@ func TestBackupProxmoxGuest(t *testing.T) {
 		case r.URL.Path == "/api2/json/version":
 			w.Write([]byte(`{"data":{"version":"8.2.1"}}`))
 		case r.Method == http.MethodPost && r.URL.Path == "/api2/json/nodes/pve1/vzdump":
-			r.ParseForm()
+			_ = r.ParseForm()
 			if r.PostForm.Get("vmid") != "100" || r.PostForm.Get("storage") != "local" || r.PostForm.Get("mode") != "snapshot" {
 				t.Errorf("vzdump form = %v", r.PostForm)
 			}

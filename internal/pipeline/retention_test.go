@@ -166,7 +166,8 @@ func TestRunSkipsRetentionUnlessVerified(t *testing.T) {
 // repositories are unaffected.
 func TestRepoLock(t *testing.T) {
 	a, b := t.TempDir(), t.TempDir()
-	if repoLock(a) != repoLock(a) {
+	first, second := repoLock(a), repoLock(a)
+	if first != second {
 		t.Fatal("repoLock returned different locks for one location")
 	}
 	if repoLock(a) == repoLock(b) {
@@ -182,7 +183,9 @@ func TestRepoLock(t *testing.T) {
 	}()
 
 	// Another repository is not blocked by a's backup.
-	repoLock(b).Lock()
+	if !repoLock(b).TryLock() {
+		t.Fatal("another repository was blocked by a's backup")
+	}
 	repoLock(b).Unlock()
 
 	select {

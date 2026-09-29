@@ -174,7 +174,7 @@ func TestWebhookChannel_Send(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			var gotPayload map[string]interface{}
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-				json.NewDecoder(r.Body).Decode(&gotPayload)
+				_ = json.NewDecoder(r.Body).Decode(&gotPayload)
 				w.WriteHeader(tt.statusCode)
 			}))
 			defer server.Close()

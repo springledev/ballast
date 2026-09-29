@@ -84,13 +84,13 @@ func TestVerifyGuestConfig(t *testing.T) {
 			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				switch {
 				case strings.HasSuffix(r.URL.Path, "/content"):
-					json.NewEncoder(w).Encode(map[string]any{"data": []DumpVolume{{Volume: vol, VMID: 100, Size: tt.size}}})
+					_ = json.NewEncoder(w).Encode(map[string]any{"data": []DumpVolume{{Volume: vol, VMID: 100, Size: tt.size}}})
 				case strings.HasSuffix(r.URL.Path, "/extractconfig"):
 					if tt.confCode != 200 {
 						http.Error(w, "boom", tt.confCode)
 						return
 					}
-					json.NewEncoder(w).Encode(map[string]any{"data": tt.conf})
+					_ = json.NewEncoder(w).Encode(map[string]any{"data": tt.conf})
 				default:
 					http.NotFound(w, r)
 				}
