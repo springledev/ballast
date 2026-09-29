@@ -180,8 +180,22 @@ size, and any pruned dumps.`,
 				cmd.Printf("  WARNING: pruning failed: %s\n", res.PruneError)
 			}
 
-			// Reminder that this is not yet verified
-			cmd.Println("This dump is not verified as restorable until the verification drill runs.")
+			// Each verification layer is reported on its own (spec §17.4).
+			if res.Verification == nil {
+				cmd.Println("This dump is not verified as restorable.")
+				return nil
+			}
+			for _, l := range res.Verification.Layers {
+				mark := "PASS"
+				if !l.Passed {
+					mark = "FAIL"
+				}
+				cmd.Printf("  [%s] %s\n", mark, l.Detail)
+			}
+			if !res.Verification.Verified {
+				return fmt.Errorf("guest %d was backed up but is NOT verified as restorable — see the failed checks above", res.VMID)
+			}
+			cmd.Println("Verified: the guest's settings and every attached service restore correctly.")
 
 			return nil
 		})

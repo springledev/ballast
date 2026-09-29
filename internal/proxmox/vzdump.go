@@ -66,7 +66,7 @@ func (o *GuestBackupOptions) Validate() error {
 
 // GuestBackupResult is what one guest backup produced. A finished
 // dump is NOT a verified backup: proving it restores is the
-// verification drill's job (spec §14 step 26), so callers must not
+// verification drill's job (VerifyGuestConfig, spec §14 step 26), so callers must not
 // treat this as SUCCESS on its own (AGENTS.md rule 1).
 type GuestBackupResult struct {
 	Node    string `json:"node"`
@@ -86,6 +86,10 @@ type GuestBackupResult struct {
 	// never instead of — the backup's own outcome: a full disk of old
 	// dumps must not make a good backup look failed, nor hide behind it.
 	PruneError string `json:"prune_error,omitempty"`
+	// Verification is the verification drill's verdict (spec §17.4),
+	// filled in by the caller after BackupGuest: nil means the dump
+	// has not been drilled and must not be shown as verified.
+	Verification *GuestVerification `json:"verification,omitempty"`
 }
 
 // TaskStatus is a Proxmox task's state.

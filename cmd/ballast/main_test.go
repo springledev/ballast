@@ -486,7 +486,9 @@ func TestShutdownContextCancelledBySignals(t *testing.T) {
 
 func TestRunDueCommandPassesCancellationToRunner(t *testing.T) {
 	var gotCtxErr error
+	started := make(chan struct{})
 	data := cliEnv(t, scheduler.RunnerFunc(func(ctx context.Context, _ string) (engine.State, error) {
+		close(started)
 		select {
 		case <-ctx.Done(): // a real runner would restart stopped containers here
 		case <-time.After(5 * time.Second):
@@ -512,7 +514,16 @@ func TestRunDueCommandPassesCancellationToRunner(t *testing.T) {
 	// directly. (main executes once, so production is unaffected.)
 	runDueCmd.SetContext(ctx)
 	t.Cleanup(func() { runDueCmd.SetContext(context.Background()) })
-	time.AfterFunc(50*time.Millisecond, cancel)
+	// Cancel only once the runner is really running, so the cut-short
+	// run is what gets reported (a fixed delay raced startup work).
+	go func() {
+		select {
+		case <-started:
+			cancel()
+		case <-time.After(30 * time.Second):
+			cancel()
+		}
+	}()
 	err := rootCmd.ExecuteContext(ctx)
 
 	if !errors.Is(gotCtxErr, context.Canceled) {

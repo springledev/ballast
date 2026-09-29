@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 
 	"github.com/springledev/ballast/internal/dockerhost"
+	"github.com/springledev/ballast/internal/engine"
 	"github.com/springledev/ballast/internal/inventory"
 	"github.com/springledev/ballast/internal/proxmox"
 )
@@ -187,5 +188,48 @@ func (o *Ops) BackupProxmoxGuest(ctx context.Context, opts proxmox.GuestBackupOp
 	if err != nil {
 		return res, o.redactErr(err)
 	}
+
+	// Drill both layers independently (spec §17.4): the guest's stored
+	// config, and every service attached to the guest via its own latest
+	// verified run. A failure in one never hides the other.
+	config := cl.VerifyGuestConfig(ctx, res)
+	config.Detail = o.redact(config.Detail)
+	inGuest, err := o.inGuestLayers(opts.Node, opts.VMID)
+	if err != nil {
+		return res, err
+	}
+	gv := proxmox.Combine(config, inGuest...)
+	res.Verification = &gv
 	return res, nil
+}
+
+// inGuestLayers reports, per service attached to the guest, whether its
+// latest run passed verification (state SUCCESS). A service that has
+// never run, or whose latest run is amber or failed, fails its layer.
+func (o *Ops) inGuestLayers(node string, vmid int) ([]proxmox.LayerResult, error) {
+	services, err := inventory.ListServices(o.DB)
+	if err != nil {
+		return nil, wrapf("services", err)
+	}
+	var out []proxmox.LayerResult
+	for _, s := range services {
+		if s.ProxmoxVMID != vmid || s.ProxmoxNode != node {
+			continue
+		}
+		r := proxmox.LayerResult{Service: s.Name}
+		runs, err := engine.RecentRuns(o.DB, s.Name, 1)
+		switch {
+		case err != nil:
+			return nil, fmt.Errorf("service %s: %w", s.Name, err)
+		case len(runs) == 0:
+			r.Detail = fmt.Sprintf("%s has never been backed up, so its in-guest restore is unproven", s.Name)
+		case runs[0].State != engine.SUCCESS:
+			r.Detail = fmt.Sprintf("the latest backup of %s ended as %s, so its in-guest restore is not verified", s.Name, runs[0].State)
+		default:
+			r.Passed = true
+			r.Detail = fmt.Sprintf("the latest backup of %s passed its restore check", s.Name)
+		}
+		out = append(out, r)
+	}
+	return out, nil
 }

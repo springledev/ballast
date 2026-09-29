@@ -288,16 +288,22 @@ func TestBackupProxmoxGuest(t *testing.T) {
 			if r.PostForm.Get("vmid") != "100" || r.PostForm.Get("storage") != "local" || r.PostForm.Get("mode") != "snapshot" {
 				t.Errorf("vzdump form = %v", r.PostForm)
 			}
-			dumps = 1
+			dumps++
 			w.Write([]byte(`{"data":"` + upid + `"}`))
 		case strings.HasSuffix(r.URL.Path, "/status"):
 			w.Write([]byte(`{"data":{"status":"stopped","exitstatus":"OK"}}`))
+		case strings.HasSuffix(r.URL.Path, "/vzdump/extractconfig"):
+			w.Write([]byte(`{"data":"arch: amd64\nrootfs: local:100/x.raw,size=8G\n"}`))
 		case strings.HasSuffix(r.URL.Path, "/storage/local/content"):
 			if dumps == 0 {
 				w.Write([]byte(`{"data":[]}`))
 				return
 			}
-			w.Write([]byte(`{"data":[{"volid":"local:backup/vzdump-lxc-100-new.tar.zst","ctime":10,"size":2048,"vmid":100}]}`))
+			list := `{"volid":"local:backup/vzdump-lxc-100-new.tar.zst","ctime":10,"size":2048,"vmid":100}`
+			if dumps > 1 {
+				list = `{"volid":"local:backup/vzdump-lxc-100-newer.tar.zst","ctime":20,"size":2048,"vmid":100},` + list
+			}
+			w.Write([]byte(`{"data":[` + list + `]}`))
 		default:
 			w.WriteHeader(http.StatusNotFound)
 		}
@@ -318,10 +324,70 @@ func TestBackupProxmoxGuest(t *testing.T) {
 	if res.Volume != "local:backup/vzdump-lxc-100-new.tar.zst" || res.UPID != upid || res.Size != 2048 {
 		t.Errorf("result = %+v", res)
 	}
+	if res.Verification == nil || !res.Verification.Verified || len(res.Verification.Layers) != 1 {
+		t.Errorf("verification = %+v, want the guest-config layer passed", res.Verification)
+	}
+
+	// A service attached to the guest that has never run fails its own
+	// in-guest layer, and so the whole guest is not verified — while the
+	// guest-config layer still reports its own pass.
+	h.addDestination("d")
+	if err := h.ops.PutService(context.Background(), inventory.Service{
+		Name: "db", CatalogEntry: "folder", Destination: "d",
+		Params:      map[string]string{"path": "/data"},
+		ProxmoxNode: "pve1", ProxmoxVMID: 100,
+	}); err != nil {
+		t.Fatalf("PutService: %v", err)
+	}
+	res, err = h.ops.BackupProxmoxGuest(context.Background(), proxmox.GuestBackupOptions{Node: "pve1", VMID: 100, Storage: "local"})
+	if err != nil {
+		t.Fatalf("BackupProxmoxGuest with attached service: %v", err)
+	}
+	if v := res.Verification; v == nil || v.Verified || len(v.Layers) != 2 || !v.Layers[0].Passed || v.Layers[1].Passed {
+		t.Errorf("verification = %+v, want config passed, in-guest failed, not verified", v)
+	}
 
 	// Missing storage is a validation error, before any network call.
 	_, err = h.ops.BackupProxmoxGuest(context.Background(), proxmox.GuestBackupOptions{Node: "pve1", VMID: 100})
 	if !errors.Is(err, ErrValidation) {
 		t.Errorf("err = %v, want ErrValidation", err)
+	}
+}
+
+func TestInGuestLayers(t *testing.T) {
+	tests := []struct {
+		name  string
+		state string // "" = never ran
+		want  bool
+	}{
+		{"never ran", "", false},
+		{"verified success", "SUCCESS", true},
+		{"amber unverified", "SUCCESS_UNVERIFIED", false},
+		{"failed", "FAILED", false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			h := newHarness(t)
+			h.addDestination("d")
+			if err := h.ops.PutService(context.Background(), inventory.Service{
+				Name: "db", CatalogEntry: "folder", Destination: "d",
+				Params:      map[string]string{"path": "/data"},
+				ProxmoxNode: "pve1", ProxmoxVMID: 100,
+			}); err != nil {
+				t.Fatal(err)
+			}
+			if tt.state != "" {
+				if _, err := h.ops.DB.Exec(`INSERT INTO jobs (service, created_at) VALUES ('db', '2026-01-01T00:00:00Z')`); err != nil {
+					t.Fatal(err)
+				}
+				if _, err := h.ops.DB.Exec(`INSERT INTO runs (job_id, state, started_at, finished_at) VALUES (1, ?, '2026-01-01T00:00:00Z', '2026-01-01T00:01:00Z')`, tt.state); err != nil {
+					t.Fatal(err)
+				}
+			}
+			layers, err := h.ops.inGuestLayers("pve1", 100)
+			if err != nil || len(layers) != 1 || layers[0].Passed != tt.want {
+				t.Fatalf("layers = %+v, err = %v, want passed=%v", layers, err, tt.want)
+			}
+		})
 	}
 }
