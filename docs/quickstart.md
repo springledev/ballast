@@ -221,3 +221,15 @@ is verified — is handled for you; see
 [Adding a service to the catalog](catalog-contributing.md) if you're curious
 how it works under the hood, or want to add a similar entry for something
 else.
+
+### Check your setup
+
+```bash
+ballast doctor
+```
+
+This checks restic, your Docker hosts, destinations and free disk space, and tells you in plain English what to fix.
+
+### Proxmox
+
+If you run Proxmox, see the [Proxmox guide](proxmox.md). Upgrading from an earlier version? See [Upgrading](migrating.md).

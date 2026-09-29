@@ -1,0 +1,96 @@
+# Proxmox guide
+
+If your homelab runs on Proxmox, Ballast can back up whole guests (VMs and LXC containers) with Proxmox's own `vzdump`, and it can back up the services *inside* those guests too. Ballast checks each layer separately, so a good guest backup never hides a broken database backup, or the other way round.
+
+Ballast talks to Proxmox through its web API, never over SSH.
+
+## 1. Create an API token
+
+In the Proxmox web UI:
+
+1. Go to **Datacenter → Permissions → Users** and add a user, for example `ballast@pve`.
+2. Go to **Datacenter → Permissions → API Tokens** and add a token named `backup` for that user.
+3. Copy the secret Proxmox shows you. It's displayed once.
+4. Go to **Datacenter → Permissions**, add an API Token Permission on path `/vms`, and give it the `VM.Backup` role (plus `Datastore.AllocateSpace` on the storage you'll back up to, if Proxmox asks for it).
+
+Keep the permissions small. Ballast never needs to create or delete guests.
+
+## 2. Connect Ballast
+
+Save the token secret to a file (no trailing whitespace), then:
+
+```bash
+ballast proxmox connect \
+  --host 192.168.1.10 \
+  --token-id ballast@pve!backup \
+  --token-secret-file ./token.txt
+```
+
+Ballast tests the connection before saving it, so a typo never leaves you with a broken setup. Proxmox uses a self-signed certificate by default. If you haven't replaced it, add `--insecure`.
+
+Check it any time:
+
+```bash
+ballast proxmox test
+ballast proxmox guests
+```
+
+The web UI has the same thing under **Proxmox**.
+
+## 3. Back up a guest
+
+```bash
+ballast proxmox backup --node pve1 --vmid 101 --storage local --mode snapshot --keep-last 3
+```
+
+| Option | What it does |
+| --- | --- |
+| `--mode snapshot` | Guest keeps running (default). |
+| `--mode suspend` | Pauses the guest briefly. |
+| `--mode stop` | Shuts the guest down while it's copied. |
+| `--keep-last N` | Keeps the newest N dumps of that guest and deletes older ones. `0` keeps everything. |
+
+Ballast starts the job, waits for it to finish, and reports the result.
+
+## 4. Back up the services inside a guest
+
+Attach a catalog service (Vaultwarden, Postgres, a plain folder…) to a guest, in the web UI under **Proxmox → guests**.
+
+- **A Docker guest**: the service uses that guest's Docker host. Set it up as described in [Docker hosts](docker-hosts.md).
+- **A plain LXC container**: Ballast runs the dump with `pct exec` through the Proxmox API.
+
+The order is: dump inside the guest, send the dump to your restic destination, then take the `vzdump` of the whole guest.
+
+## 5. What "verified" means here
+
+Two independent checks must both pass, and each shows its own light:
+
+- **Guest layer**: Ballast confirms the guest's configuration can be restored from its `vzdump`.
+- **Service layer**: the service's own backup goes through its usual restore test (for example, a throwaway database restore).
+
+If one fails, the other is still reported. Nothing is marked green until both have been proven restorable.
+
+## What Ballast does inside your guests
+
+Ballast only *reads or dumps* inside a guest: `docker exec` to run a dump, or `pct exec` to run a dump command. It doesn't install anything, edit files or change settings there. This is the one place Ballast reaches into your other machines, so it's worth knowing.
+
+## Running Ballast itself on Proxmox
+
+**In an LXC container (recommended for homelabs)**
+
+- Use an unprivileged container.
+- Turn on `nesting=1,keyctl=1` if the restore tests will run Docker inside it.
+- On ZFS storage, give Docker its own directory, or use fuse-overlayfs, so Docker's layers don't clash with ZFS.
+- If Ballast backs up Docker on the *same* machine, mount `/var/run/docker.sock` into it. For Docker on other machines, nothing needs mounting; use a [remote host](docker-hosts.md).
+
+**In a VM**
+
+- Simpler and better isolated, needs about 2 GB of RAM, and has none of the nesting caveats. A good default if you'd rather not think about Docker inside LXC.
+
+## Checking your setup
+
+```bash
+ballast doctor
+```
+
+This checks restic, each Docker host, the Proxmox connection, your destinations, and free disk space for restore tests, and says in plain English what to fix.

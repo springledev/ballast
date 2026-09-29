@@ -28,6 +28,9 @@ Ballast is a self-hosted backup tool for Docker-based homelabs. It backs up your
 - [Configuration](docs/configuration.md) — Configure services and destinations
 - [Systemd setup](docs/systemd.md) — Run backups automatically
 - [Contributing services](docs/catalog-contributing.md) — Add your own services to the catalog
+- [Docker hosts](docs/docker-hosts.md) — Back up containers on other machines
+- [Proxmox](docs/proxmox.md) — Back up guests and the services inside them
+- [Upgrading](docs/migrating.md) — Moving from v0.1
 
 ## Supported Services
 
