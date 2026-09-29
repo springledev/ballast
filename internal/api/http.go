@@ -39,7 +39,9 @@ func NewHandler(ops *Ops, apiToken string) http.Handler {
 	protected.HandleFunc("GET /api/v1/catalog", h.catalog)
 	protected.HandleFunc("GET /api/v1/detect", h.detect)
 	protected.HandleFunc("GET /api/v1/preflight", h.preflight)
+	protected.HandleFunc("GET /api/v1/doctor", h.doctor)
 	protected.HandleFunc("POST /api/v1/verify", h.verifyAll)
+	protected.HandleFunc("POST /api/v1/self-backup", h.selfBackup)
 
 	protected.HandleFunc("GET /api/v1/services", h.listServices)
 	protected.HandleFunc("POST /api/v1/services", h.createService)
@@ -339,6 +341,38 @@ func (h *handler) verifyAll(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, reports)
+}
+
+// doctor always returns 200 with a report of system checks (each carrying
+// its own status) unless Doctor could not even start; a check that failed
+// is not itself an API-level failure.
+func (h *handler) doctor(w http.ResponseWriter, r *http.Request) {
+	report, err := h.ops.Doctor(r.Context())
+	if err != nil && !report.Healthy() {
+		h.writeErr(w, err, http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, http.StatusOK, report)
+}
+
+type selfBackupRequestBody struct {
+	Destination string `json:"destination"`
+}
+
+// selfBackup backs up Ballast's own state and returns the result as JSON,
+// or an error if the backup failed or could not be verified.
+func (h *handler) selfBackup(w http.ResponseWriter, r *http.Request) {
+	var body selfBackupRequestBody
+	if err := decodeJSON(r, &body); err != nil {
+		h.writeErr(w, err, http.StatusBadRequest)
+		return
+	}
+	result, err := h.ops.SelfBackup(r.Context(), body.Destination)
+	if err != nil {
+		h.writeErr(w, err, http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, http.StatusOK, result)
 }
 
 // --- schedules -------------------------------------------------------

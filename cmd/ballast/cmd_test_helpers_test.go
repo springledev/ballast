@@ -104,6 +104,7 @@ func resetCLIFlags() {
 	secretValueFlag = ""
 
 	verifyAll, verifyJSON = false, false
+	doctorJSON, selfBackupJSON = false, false
 }
 
 // withStubRestic prepends a directory holding a fake "restic"

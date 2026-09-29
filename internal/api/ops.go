@@ -97,6 +97,11 @@ type Ops struct {
 	// checker (no artifacts are ever matched) but not its read-back.
 	WorkRoot string
 
+	// SelfBackupFiles says which of Ballast's own files SelfBackup saves
+	// (config file and user catalog directories; the status DB is
+	// always included). Zero value backs up the DB only.
+	SelfBackupFiles SelfBackupSources
+
 	// Redact holds secret strings that must never reach a returned
 	// error's text (spec rule 2), the last line of defence before an
 	// error becomes an API response body or CLI output. A repository
