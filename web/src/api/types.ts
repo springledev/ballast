@@ -133,6 +133,10 @@ export interface TierStatus {
   last_finished_at?: string;
   last_error?: string;
   snapshot_id?: string;
+  last_verified_at?: string;
+  verified_age_seconds?: number;
+  max_age_seconds?: number;
+  stale?: boolean;
 }
 
 export interface VerificationRecord {

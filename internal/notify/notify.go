@@ -62,6 +62,33 @@ type Event struct {
 	Severity string
 	// Timestamp is when the event occurred.
 	Timestamp time.Time
+	// Tier names the backup tier the event is about ("restic" for the
+	// primary tier). Empty means the primary tier. Every channel shows
+	// it, so a problem with one copy of the data is never worded as if
+	// it were about another (spec §11, rule 3).
+	Tier string
+}
+
+// TierPrimary is the tier name of the restic (primary) tier.
+const TierPrimary = "restic"
+
+// TierName returns the event's tier, defaulting to the primary tier.
+func (e Event) TierName() string {
+	if e.Tier == "" {
+		return TierPrimary
+	}
+	return e.Tier
+}
+
+// ForTier returns a copy of e attributed to tier, with the tier named
+// in the message so it reads correctly even where only the message is
+// shown.
+func (e Event) ForTier(tier string) Event {
+	e.Tier = tier
+	if tier != "" && tier != TierPrimary {
+		e.Message = fmt.Sprintf("[%s copy] %s", tier, e.Message)
+	}
+	return e
 }
 
 // Channel is the interface for a notification delivery mechanism.
@@ -144,7 +171,7 @@ func (n *NtfyChannel) Send(ctx context.Context, event Event) error {
 	}
 
 	// Set headers per ntfy API
-	req.Header.Set("Title", fmt.Sprintf("[%s] %s", event.Service, event.Type))
+	req.Header.Set("Title", fmt.Sprintf("[%s] [%s] %s", event.Service, event.TierName(), event.Type))
 	req.Header.Set("Priority", priorityFromSeverity(event.Severity))
 
 	resp, err := client.Do(req)
@@ -185,6 +212,7 @@ func NewWebhookChannel(url string) *WebhookChannel {
 // webhookPayload is the JSON structure sent to webhooks.
 type webhookPayload struct {
 	Service   string    `json:"service"`
+	Tier      string    `json:"tier"`
 	Type      EventType `json:"type"`
 	Severity  string    `json:"severity"`
 	Message   string    `json:"message"`
@@ -209,6 +237,7 @@ func (w *WebhookChannel) Send(ctx context.Context, event Event) error {
 
 	payload := webhookPayload{
 		Service:   event.Service,
+		Tier:      event.TierName(),
 		Type:      event.Type,
 		Severity:  event.Severity,
 		Message:   event.Message,
@@ -354,6 +383,31 @@ func (n *Notifier) Send(ctx context.Context, event Event) error {
 		}
 	}
 
+	return errors.Join(errs...)
+}
+
+// SendTiers delivers one event per backup tier. Each is sent on its own,
+// primary tier first, and a failure to deliver (or a problem in) one
+// tier never stops or hides another (spec rule 3): every delivery
+// error is returned, labelled with its tier.
+func (n *Notifier) SendTiers(ctx context.Context, events []Event) error {
+	ordered := make([]Event, 0, len(events))
+	for _, e := range events {
+		if e.TierName() == TierPrimary {
+			ordered = append(ordered, e)
+		}
+	}
+	for _, e := range events {
+		if e.TierName() != TierPrimary {
+			ordered = append(ordered, e)
+		}
+	}
+	var errs []error
+	for _, e := range ordered {
+		if err := n.Send(ctx, e); err != nil {
+			errs = append(errs, fmt.Errorf("%s tier: %w", e.TierName(), err))
+		}
+	}
 	return errors.Join(errs...)
 }
 

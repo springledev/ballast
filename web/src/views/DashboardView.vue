@@ -5,7 +5,7 @@ import { useRouter } from "vue-router";
 import TrafficLight from "@/components/TrafficLight.vue";
 import { api } from "@/api/client";
 import type { ServiceStatus } from "@/api/types";
-import { formatAgeSeconds, formatDateTime } from "@/lib/format";
+import { formatAgeSeconds, formatDateTime, formatRelative } from "@/lib/format";
 import { describeSchedule } from "@/lib/schedule";
 import { describeTier, summarize, worstLight } from "@/lib/status";
 
@@ -147,6 +147,7 @@ onUnmounted(() => clearInterval(timer));
                     {{ t.last_state ?? "no runs" }}<template v-if="t.last_run_id">, run #{{ t.last_run_id }}</template>
                     <template v-if="t.last_finished_at">, finished {{ formatDateTime(t.last_finished_at) }}</template>
                     <template v-if="t.snapshot_id">, snapshot <code>{{ t.snapshot_id.slice(0, 8) }}</code></template>
+                    <template v-if="t.last_verified_at">, last checked restore {{ formatRelative(t.last_verified_at) }}</template>
                   </dd>
                 </template>
               </dl>

@@ -18,6 +18,10 @@ export const lightLabel: Record<Light, string> = {
 /** One sentence describing a tier's state for a person, not a log. */
 export function describeTier(t: TierStatus): string {
   const when = formatRelative(t.last_finished_at);
+  if (t.stale && t.light === "amber" && t.last_state === "SUCCESS") {
+    const verified = t.last_verified_at ? formatRelative(t.last_verified_at) : "a long time ago";
+    return `No backup has been checked recently. The last checked backup was ${verified}, which is older than it should be.`;
+  }
   switch (t.light) {
     case "green":
       return `Backed up and checked ${when}. It can be restored.`;

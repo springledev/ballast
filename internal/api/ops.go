@@ -262,6 +262,18 @@ type TierStatus struct {
 	LastFinishedAt *time.Time `json:"last_finished_at,omitempty"`
 	LastError      string     `json:"last_error,omitempty"`
 	SnapshotID     string     `json:"snapshot_id,omitempty"`
+	// LastVerifiedAt is when this tier's last verified (SUCCESS, never
+	// SUCCESS_UNVERIFIED) backup finished — i.e. the last restore-checked
+	// copy — or nil if there never was one.
+	LastVerifiedAt *time.Time `json:"last_verified_at,omitempty"`
+	// VerifiedAgeSeconds is the age of LastVerifiedAt.
+	VerifiedAgeSeconds *int64 `json:"verified_age_seconds,omitempty"`
+	// MaxAgeSeconds is how old a verified backup may get before the
+	// tier counts as stale (spec §11).
+	MaxAgeSeconds int64 `json:"max_age_seconds,omitempty"`
+	// Stale is true when there is no verified backup within
+	// MaxAgeSeconds. A stale tier is never shown green.
+	Stale bool `json:"stale"`
 }
 
 // VerificationRecord is the API/CLI-facing shape of an
@@ -382,16 +394,32 @@ func (o *Ops) statusOne(s inventory.Service, sched scheduler.ScheduledJob, withV
 			}
 		}
 	}
-	st.Tiers = []TierStatus{tier}
 
 	lastSuccess, err := fresh.LastSuccessfulRun(s.Name)
 	if err != nil {
 		return ServiceStatus{}, wrapf("service "+s.Name, err)
 	}
+	maxAge, err := fresh.MaxAgeFor(s.Name)
+	if err != nil {
+		return ServiceStatus{}, wrapf("service "+s.Name, err)
+	}
+	tier.MaxAgeSeconds = int64(maxAge.Seconds())
 	if !lastSuccess.IsZero() {
 		age := int64(time.Since(lastSuccess).Seconds())
 		st.FreshnessAgeSeconds = &age
+		tier.LastVerifiedAt = &lastSuccess
+		tier.VerifiedAgeSeconds = &age
 	}
+	// Only a tier that has been backed up at least once can be stale
+	// ("none" already says nothing exists), and a stale tier must not
+	// read green: its last good copy is older than the allowed window.
+	if tier.Light != "none" && tier.Light != "running" && time.Since(lastSuccess) > maxAge {
+		tier.Stale = true
+		if tier.Light == "green" {
+			tier.Light = "amber"
+		}
+	}
+	st.Tiers = []TierStatus{tier}
 	return st, nil
 }
 

@@ -327,3 +327,20 @@ func (f *FreshnessChecker) clearFreshnessAlert(service string) error {
 	}
 	return nil
 }
+
+// MaxAgeFor returns the max age the service's backups are held to: its
+// notification_settings override when set, else the default derived
+// from its schedule (spec §11), else the nightly default.
+func (f *FreshnessChecker) MaxAgeFor(service string) (time.Duration, error) {
+	var maxAge sql.NullInt64
+	var cron sql.NullString
+	err := f.db.QueryRow(`SELECT max_age_hours FROM notification_settings WHERE service = ?`, service).Scan(&maxAge)
+	if err != nil && err != sql.ErrNoRows {
+		return 0, fmt.Errorf("reading max age for %s: %w", service, err)
+	}
+	err = f.db.QueryRow(`SELECT cron_expr FROM schedules WHERE service = ?`, service).Scan(&cron)
+	if err != nil && err != sql.ErrNoRows {
+		return 0, fmt.Errorf("reading schedule for %s: %w", service, err)
+	}
+	return effectiveMaxAge(maxAge, cron), nil
+}

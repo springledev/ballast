@@ -1226,6 +1226,51 @@ func TestOpsStatusLightsAndFreshness(t *testing.T) {
 	}
 }
 
+// TestOpsStatusStaleTierNeverGreen: a verified backup older than the
+// service's max age is reported stale and shown amber, and the tier
+// carries the last-verified time and allowed window.
+func TestOpsStatusStaleTierNeverGreen(t *testing.T) {
+	h := newHarness(t)
+	h.addDestination("local")
+	if err := inventory.PutService(h.ops.DB, inventory.Service{Name: "svc", CatalogEntry: "folder", Destination: "local"}); err != nil {
+		t.Fatalf("PutService: %v", err)
+	}
+	m, err := engine.StartRun(h.ops.DB, "svc")
+	if err != nil {
+		t.Fatalf("StartRun: %v", err)
+	}
+	for _, s := range []engine.State{engine.PREPARING, engine.DUMPING, engine.UPLOADING, engine.VERIFYING} {
+		if err := m.Transition(s, "step"); err != nil {
+			t.Fatalf("Transition %s: %v", s, err)
+		}
+	}
+	if err := m.RecordVerification(engine.VerificationRecord{Method: "archive-integrity", Passed: true}); err != nil {
+		t.Fatalf("RecordVerification: %v", err)
+	}
+	if err := m.Transition(engine.SUCCESS, "verified"); err != nil {
+		t.Fatalf("Transition SUCCESS: %v", err)
+	}
+
+	tier := func() TierStatus {
+		st, err := h.ops.Status(context.Background(), "svc", false)
+		if err != nil {
+			t.Fatalf("Status: %v", err)
+		}
+		return st[0].Tiers[0]
+	}
+	if got := tier(); got.Light != "green" || got.Stale || got.LastVerifiedAt == nil || got.MaxAgeSeconds == 0 {
+		t.Fatalf("fresh tier = %+v, want green, not stale, verified time and max age set", got)
+	}
+
+	old := time.Now().Add(-100 * time.Hour).UTC().Format(time.RFC3339Nano)
+	if _, err := h.ops.DB.Exec(`UPDATE runs SET finished_at = ?`, old); err != nil {
+		t.Fatalf("aging run: %v", err)
+	}
+	if got := tier(); got.Light != "amber" || !got.Stale {
+		t.Errorf("old tier = light %s stale %v, want amber and stale", got.Light, got.Stale)
+	}
+}
+
 func TestOpsStatusUnknownServiceErrors(t *testing.T) {
 	h := newHarness(t)
 	if _, err := h.ops.Status(context.Background(), "nope", false); !errors.Is(err, inventory.ErrNotFound) {

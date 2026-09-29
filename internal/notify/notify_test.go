@@ -59,7 +59,7 @@ func TestNtfyChannel_Send(t *testing.T) {
 			},
 			statusCode: 200,
 			wantErr:    false,
-			wantTitle:  "[immich] job_failure",
+			wantTitle:  "[immich] [restic] job_failure",
 		},
 		{
 			name:    "empty topic",
@@ -611,5 +611,58 @@ func BenchmarkMaxFiringGap(b *testing.B) {
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
 		maxFiringGap(sched)
+	}
+}
+
+// recordingChannel records every event it is sent and can fail on demand.
+type recordingChannel struct {
+	got  []Event
+	fail map[string]bool // tier -> fail
+}
+
+func (r *recordingChannel) Send(_ context.Context, e Event) error {
+	r.got = append(r.got, e)
+	if r.fail[e.TierName()] {
+		return errors.New("boom")
+	}
+	return nil
+}
+func (r *recordingChannel) Type() string { return "rec" }
+
+func TestSendTiersIsolationAndOrder(t *testing.T) {
+	tests := []struct {
+		name      string
+		fail      map[string]bool
+		wantErrIn []string
+	}{
+		{"all ok", nil, nil},
+		{"secondary fails, primary still delivered", map[string]bool{"rclone": true}, []string{"rclone tier"}},
+		{"primary fails, secondary still delivered", map[string]bool{"restic": true}, []string{"restic tier"}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ch := &recordingChannel{fail: tt.fail}
+			n := NewNotifier()
+			n.RegisterChannel("svc", ch)
+			base := FormatJobFailure("svc", "1", "disk full")
+			err := n.SendTiers(context.Background(), []Event{base.ForTier("rclone"), base.ForTier("restic")})
+			if len(ch.got) != 2 {
+				t.Fatalf("delivered %d events, want 2 (no tier may block another)", len(ch.got))
+			}
+			if ch.got[0].TierName() != "restic" || ch.got[1].TierName() != "rclone" {
+				t.Errorf("order = %s,%s; want primary first", ch.got[0].TierName(), ch.got[1].TierName())
+			}
+			if strings.Contains(ch.got[0].Message, "copy]") || !strings.Contains(ch.got[1].Message, "[rclone copy]") {
+				t.Errorf("tier wording not separated: %q / %q", ch.got[0].Message, ch.got[1].Message)
+			}
+			if len(tt.wantErrIn) == 0 && err != nil {
+				t.Errorf("unexpected error: %v", err)
+			}
+			for _, w := range tt.wantErrIn {
+				if err == nil || !strings.Contains(err.Error(), w) {
+					t.Errorf("err = %v, want mention of %q", err, w)
+				}
+			}
+		})
 	}
 }

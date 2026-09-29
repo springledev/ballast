@@ -8,6 +8,8 @@
       "tiers": [
         {
           "light": "none",
+          "max_age_seconds": 172800,
+          "stale": false,
           "tier": "restic"
         }
       ]
