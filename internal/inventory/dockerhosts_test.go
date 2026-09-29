@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/springledev/ballast/internal/dockerhost"
+	"github.com/springledev/keel/dockerhost"
 )
 
 func TestDockerHostCRUD(t *testing.T) {

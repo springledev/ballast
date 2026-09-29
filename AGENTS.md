@@ -155,3 +155,10 @@
  feature is done, run `/verify-feature` before moving on. Never batch
 
  multiple §14 steps into one change.
+
+ ## Shared code
+
+ `secret`, `runner`, `dockerhost` and `sshkey` live in the `keel` repo
+ (`github.com/springledev/keel`, checked out at `../keel`, wired by a
+ `replace` in go.mod). Fix those packages in keel, never copy them back
+ into `internal/`.

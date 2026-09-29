@@ -11,7 +11,7 @@ import (
 
 	"github.com/springledev/ballast/internal/inventory"
 	"github.com/springledev/ballast/internal/proxmox"
-	"github.com/springledev/ballast/internal/secret"
+	"github.com/springledev/keel/secret"
 )
 
 // fakeProxmoxServer answers /api2/json/version and

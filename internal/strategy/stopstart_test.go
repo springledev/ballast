@@ -3,7 +3,7 @@ package strategy
 import (
 	"archive/tar"
 	"context"
-	"github.com/springledev/ballast/internal/dockerhost"
+	"github.com/springledev/keel/dockerhost"
 	"io"
 	"net"
 	"os"

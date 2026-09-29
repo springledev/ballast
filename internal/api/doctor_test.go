@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/springledev/ballast/internal/runner"
+	"github.com/springledev/keel/runner"
 )
 
 func TestDoctorReportHealthy(t *testing.T) {

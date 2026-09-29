@@ -2,7 +2,7 @@ package detect
 
 import (
 	"context"
-	"github.com/springledev/ballast/internal/dockerhost"
+	"github.com/springledev/keel/dockerhost"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -11,7 +11,7 @@ import (
 
 	bundled "github.com/springledev/ballast/catalog"
 	"github.com/springledev/ballast/internal/catalog"
-	"github.com/springledev/ballast/internal/runner"
+	"github.com/springledev/keel/runner"
 )
 
 // dockerPsStub is a fake `docker` CLI answering only `docker ps

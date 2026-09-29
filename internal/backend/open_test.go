@@ -8,8 +8,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/springledev/ballast/internal/runner"
-	"github.com/springledev/ballast/internal/secret"
+	"github.com/springledev/keel/runner"
+	"github.com/springledev/keel/secret"
 )
 
 // writeCred writes a credential file with exactly the given

@@ -7,8 +7,8 @@ import (
 	"sort"
 
 	"github.com/springledev/ballast/internal/notify"
-	"github.com/springledev/ballast/internal/runner"
-	"github.com/springledev/ballast/internal/secret"
+	"github.com/springledev/keel/runner"
+	"github.com/springledev/keel/secret"
 )
 
 // BuildNotifier constructs a notify.Notifier that finds each

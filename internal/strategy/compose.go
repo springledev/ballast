@@ -14,7 +14,7 @@ import (
 	"strings"
 
 	"github.com/springledev/ballast/internal/catalog"
-	"github.com/springledev/ballast/internal/dockerhost"
+	"github.com/springledev/keel/dockerhost"
 )
 
 // composeFileNamePattern is the set of file names the compose

@@ -9,9 +9,9 @@ import (
 	"testing"
 
 	ballastcatalog "github.com/springledev/ballast/internal/catalog"
-	"github.com/springledev/ballast/internal/runner"
 	"github.com/springledev/ballast/internal/strategy"
 	"github.com/springledev/ballast/internal/verify"
+	"github.com/springledev/keel/runner"
 )
 
 // resolveWithDummyValues loads and resolves one bundled entry with

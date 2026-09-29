@@ -1,15 +1,15 @@
 package verify
 
 import (
-	"github.com/springledev/ballast/internal/dockerhost"
+	"github.com/springledev/keel/dockerhost"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/springledev/ballast/internal/catalog"
-	"github.com/springledev/ballast/internal/runner"
 	"github.com/springledev/ballast/internal/strategy"
+	"github.com/springledev/keel/runner"
 )
 
 // dockerStub is a fake docker CLI covering every subcommand the

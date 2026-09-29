@@ -7,10 +7,10 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/springledev/ballast/internal/dockerhost"
 	"github.com/springledev/ballast/internal/engine"
 	"github.com/springledev/ballast/internal/inventory"
 	"github.com/springledev/ballast/internal/proxmox"
+	"github.com/springledev/keel/dockerhost"
 )
 
 // GetProxmoxConnection returns Ballast's configured Proxmox

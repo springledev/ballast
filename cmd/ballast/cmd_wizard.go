@@ -14,8 +14,8 @@ import (
 	"github.com/springledev/ballast/internal/catalog"
 	"github.com/springledev/ballast/internal/inventory"
 	"github.com/springledev/ballast/internal/notify"
-	execrunner "github.com/springledev/ballast/internal/runner"
 	"github.com/spf13/cobra"
+	execrunner "github.com/springledev/keel/runner"
 )
 
 // wizardCmd is `ballast wizard` (spec §5.3.6, §9): a guided first run

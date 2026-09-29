@@ -27,11 +27,11 @@ import (
 	"github.com/springledev/ballast/internal/api"
 	"github.com/springledev/ballast/internal/config"
 	"github.com/springledev/ballast/internal/notify"
-	execrunner "github.com/springledev/ballast/internal/runner"
 	"github.com/springledev/ballast/internal/scheduler"
 	"github.com/springledev/ballast/internal/store"
 	"github.com/springledev/ballast/web"
 	"github.com/spf13/cobra"
+	execrunner "github.com/springledev/keel/runner"
 )
 
 // version is the build version, overridable at build time with

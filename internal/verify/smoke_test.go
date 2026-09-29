@@ -10,9 +10,9 @@ import (
 	"time"
 
 	"github.com/springledev/ballast/internal/catalog"
-	"github.com/springledev/ballast/internal/dockerhost"
-	"github.com/springledev/ballast/internal/runner"
 	"github.com/springledev/ballast/internal/strategy"
+	"github.com/springledev/keel/dockerhost"
+	"github.com/springledev/keel/runner"
 )
 
 // smokeDockerStub is a fake docker CLI covering the subcommands the

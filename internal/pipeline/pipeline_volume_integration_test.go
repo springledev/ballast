@@ -12,13 +12,13 @@ import (
 	"time"
 
 	"github.com/springledev/ballast/internal/catalog"
-	"github.com/springledev/ballast/internal/dockerhost"
 	"github.com/springledev/ballast/internal/engine"
 	"github.com/springledev/ballast/internal/inventory"
 	"github.com/springledev/ballast/internal/restic"
-	"github.com/springledev/ballast/internal/runner"
 	"github.com/springledev/ballast/internal/store"
 	"github.com/springledev/ballast/internal/strategy"
+	"github.com/springledev/keel/dockerhost"
+	"github.com/springledev/keel/runner"
 )
 
 // requireDockerDaemon skips the test unless a Docker daemon answers

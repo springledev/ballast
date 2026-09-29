@@ -5,6 +5,7 @@ go 1.25.0
 require (
 	github.com/santhosh-tekuri/jsonschema/v6 v6.0.3
 	github.com/spf13/cobra v1.8.1
+	github.com/springledev/keel v0.0.0-00010101000000-000000000000
 	github.com/testcontainers/testcontainers-go v0.44.0
 	golang.org/x/term v0.45.0
 	gopkg.in/yaml.v3 v3.0.1
@@ -40,7 +41,7 @@ require (
 	github.com/mattn/go-isatty v0.0.24 // indirect
 	github.com/moby/docker-image-spec v1.3.1 // indirect
 	github.com/moby/go-archive v0.2.0 // indirect
-	github.com/moby/moby/api v1.55.0 // indirect
+	github.com/moby/moby/api v1.55.0
 	github.com/moby/moby/client v0.5.0 // indirect
 	github.com/moby/patternmatcher v0.6.1 // indirect
 	github.com/moby/sys/sequential v0.7.0 // indirect
@@ -72,3 +73,7 @@ require (
 	modernc.org/mathutil v1.7.1 // indirect
 	modernc.org/memory v1.12.1 // indirect
 )
+
+// INTERIM: keel is untagged. Drop this replace (and the placeholder
+// version above) once keel has a v0.x tag. CI checks keel out at ../keel.
+replace github.com/springledev/keel => ../keel

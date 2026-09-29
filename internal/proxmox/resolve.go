@@ -4,8 +4,8 @@ import (
 	"fmt"
 	"net/http"
 
-	"github.com/springledev/ballast/internal/runner"
-	"github.com/springledev/ballast/internal/secret"
+	"github.com/springledev/keel/runner"
+	"github.com/springledev/keel/secret"
 )
 
 // Resolver turns a configured Connection into a ready-to-use Client,

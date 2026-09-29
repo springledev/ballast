@@ -13,7 +13,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
-	"github.com/springledev/ballast/internal/dockerhost"
+	"github.com/springledev/keel/dockerhost"
 	"os"
 	"path/filepath"
 	"sort"
@@ -29,9 +29,9 @@ import (
 	"github.com/springledev/ballast/internal/notify"
 	"github.com/springledev/ballast/internal/proxmox"
 	"github.com/springledev/ballast/internal/restic"
-	"github.com/springledev/ballast/internal/runner"
 	"github.com/springledev/ballast/internal/scheduler"
-	"github.com/springledev/ballast/internal/secret"
+	"github.com/springledev/keel/runner"
+	"github.com/springledev/keel/secret"
 )
 
 // Ops is the shared operations layer. Every exported method wraps its

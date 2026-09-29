@@ -7,10 +7,10 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/springledev/ballast/internal/dockerhost"
 	"github.com/springledev/ballast/internal/inventory"
-	"github.com/springledev/ballast/internal/runner"
-	"github.com/springledev/ballast/internal/secret"
+	"github.com/springledev/keel/dockerhost"
+	"github.com/springledev/keel/runner"
+	"github.com/springledev/keel/secret"
 )
 
 // fakeSSHPrivateKey is a syntactically valid, unencrypted OpenSSH
@@ -75,7 +75,7 @@ func TestSetupDockerHostSSHSkipTest(t *testing.T) {
 	if res.Test != nil {
 		t.Errorf("Test = %+v, want nil (skip_test)", res.Test)
 	}
-	wantCred := dockerhost.DefaultCredentialName("rpi")
+	wantCred := dockerhost.DefaultCredentialName("ballast", "rpi")
 	if res.Host.Credential != wantCred {
 		t.Errorf("Credential = %q, want %q", res.Host.Credential, wantCred)
 	}
@@ -183,7 +183,7 @@ func TestSetupDockerHostConnectionFailureRollsBack(t *testing.T) {
 	if _, gerr := inventory.GetDockerHost(h.ops.DB, "rpi"); !errors.Is(gerr, inventory.ErrNotFound) {
 		t.Errorf("a host row was saved despite the failed connection test: %v", gerr)
 	}
-	path := filepath.Join(h.credDir, dockerhost.DefaultCredentialName("rpi"))
+	path := filepath.Join(h.credDir, dockerhost.DefaultCredentialName("ballast", "rpi"))
 	if _, serr := os.Stat(path); !os.IsNotExist(serr) {
 		t.Errorf("credential file %s was not rolled back: %v", path, serr)
 	}
@@ -248,7 +248,7 @@ func TestDeleteDockerHostRemovesCredentialFiles(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("SetupDockerHost: %v", err)
 	}
-	path := filepath.Join(h.credDir, dockerhost.DefaultCredentialName("rpi"))
+	path := filepath.Join(h.credDir, dockerhost.DefaultCredentialName("ballast", "rpi"))
 	if _, err := os.Stat(path); err != nil {
 		t.Fatalf("credential file missing before delete: %v", err)
 	}

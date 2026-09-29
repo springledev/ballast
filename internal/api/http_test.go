@@ -14,10 +14,10 @@ import (
 	"time"
 
 	"github.com/springledev/ballast/internal/backend"
-	"github.com/springledev/ballast/internal/dockerhost"
 	"github.com/springledev/ballast/internal/inventory"
 	"github.com/springledev/ballast/internal/notify"
-	"github.com/springledev/ballast/internal/runner"
+	"github.com/springledev/keel/dockerhost"
+	"github.com/springledev/keel/runner"
 )
 
 // fakeEd25519PrivateKey is a syntactically valid, unencrypted OpenSSH

@@ -12,7 +12,7 @@ import (
 	"database/sql"
 	"fmt"
 	"github.com/springledev/ballast/internal/backend"
-	"github.com/springledev/ballast/internal/dockerhost"
+	"github.com/springledev/keel/dockerhost"
 	"io"
 	"os"
 	"path/filepath"
@@ -23,10 +23,10 @@ import (
 	"github.com/springledev/ballast/internal/engine"
 	"github.com/springledev/ballast/internal/inventory"
 	"github.com/springledev/ballast/internal/restic"
-	"github.com/springledev/ballast/internal/runner"
-	"github.com/springledev/ballast/internal/secret"
 	"github.com/springledev/ballast/internal/strategy"
 	"github.com/springledev/ballast/internal/verify"
+	"github.com/springledev/keel/runner"
+	"github.com/springledev/keel/secret"
 )
 
 // Pipeline turns a configured service into a verified restic backup.

@@ -3,14 +3,14 @@ package strategy
 import (
 	"context"
 	"errors"
-	"github.com/springledev/ballast/internal/dockerhost"
+	"github.com/springledev/keel/dockerhost"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/springledev/ballast/internal/catalog"
-	"github.com/springledev/ballast/internal/runner"
+	"github.com/springledev/keel/runner"
 )
 
 // TestDumpContainer runs a container dump against the docker stub and

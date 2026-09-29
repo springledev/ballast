@@ -14,7 +14,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/springledev/ballast/internal/runner"
+	"github.com/springledev/keel/runner"
 )
 
 // resticStub is a fake restic CLI. It appends every invocation's argv

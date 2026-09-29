@@ -18,10 +18,10 @@ import (
 	"github.com/springledev/ballast/internal/inventory"
 	"github.com/springledev/ballast/internal/notify"
 	"github.com/springledev/ballast/internal/restic"
-	"github.com/springledev/ballast/internal/runner"
 	"github.com/springledev/ballast/internal/scheduler"
-	secretpkg "github.com/springledev/ballast/internal/secret"
 	"github.com/springledev/ballast/internal/store"
+	"github.com/springledev/keel/runner"
+	secretpkg "github.com/springledev/keel/secret"
 )
 
 // resticStubScript is a minimal, hermetic fake restic CLI shared by

@@ -1,6 +1,6 @@
 package notify
 
-import "github.com/springledev/ballast/internal/runner"
+import "github.com/springledev/keel/runner"
 
 // LoadCredentialValue reads the trimmed contents of a root-only
 // credential file (systemd LoadCredential= semantics via

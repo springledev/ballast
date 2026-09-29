@@ -32,7 +32,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/springledev/ballast/internal/runner"
+	"github.com/springledev/keel/runner"
 )
 
 // PinnedVersion is the restic release whose --json output this

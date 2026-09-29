@@ -38,11 +38,11 @@ import (
 	"strings"
 	"time"
 
-	"github.com/springledev/ballast/internal/dockerhost"
+	"github.com/springledev/keel/dockerhost"
 
 	"github.com/springledev/ballast/internal/catalog"
-	"github.com/springledev/ballast/internal/runner"
 	"github.com/springledev/ballast/internal/strategy"
+	"github.com/springledev/keel/runner"
 )
 
 // Result is the first-class verification record of spec §7: one

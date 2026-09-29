@@ -8,7 +8,7 @@ import (
 	"testing"
 
 	"github.com/springledev/ballast/internal/catalog"
-	"github.com/springledev/ballast/internal/runner"
+	"github.com/springledev/keel/runner"
 )
 
 // execEntry wraps a stub script in a minimal exec catalog entry.

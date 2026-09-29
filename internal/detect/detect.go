@@ -12,14 +12,14 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"github.com/springledev/ballast/internal/dockerhost"
+	"github.com/springledev/keel/dockerhost"
 	"os/exec"
 	"regexp"
 	"sort"
 	"strings"
 
 	"github.com/springledev/ballast/internal/catalog"
-	"github.com/springledev/ballast/internal/runner"
+	"github.com/springledev/keel/runner"
 )
 
 // Container is one running Docker container, as much as detection

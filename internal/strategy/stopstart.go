@@ -12,7 +12,7 @@ import (
 	"time"
 
 	"github.com/springledev/ballast/internal/catalog"
-	"github.com/springledev/ballast/internal/runner"
+	"github.com/springledev/keel/runner"
 )
 
 // stopStartArtifact is the name of the single tar artifact the

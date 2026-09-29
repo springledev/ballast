@@ -14,7 +14,7 @@ import (
 	"github.com/springledev/ballast/internal/catalog"
 	"github.com/springledev/ballast/internal/inventory"
 	"github.com/springledev/ballast/internal/restic"
-	"github.com/springledev/ballast/internal/runner"
+	"github.com/springledev/keel/runner"
 )
 
 func TestRestoreProjectRequiresProjectAndTo(t *testing.T) {

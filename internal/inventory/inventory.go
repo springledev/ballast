@@ -24,9 +24,9 @@ import (
 	"time"
 
 	"github.com/springledev/ballast/internal/backend"
-	"github.com/springledev/ballast/internal/dockerhost"
 	"github.com/springledev/ballast/internal/restic"
 	"github.com/springledev/ballast/internal/store"
+	"github.com/springledev/keel/dockerhost"
 )
 
 // ErrNotFound is returned when a named destination or service does

@@ -7,8 +7,8 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/springledev/ballast/internal/dockerhost"
 	"github.com/springledev/ballast/internal/inventory"
+	"github.com/springledev/keel/dockerhost"
 )
 
 // dockerFor resolves the named Docker host ("" = the local host) into
@@ -133,7 +133,7 @@ func (o *Ops) SetupDockerHost(ctx context.Context, req DockerHostSetup) (res Doc
 		if h.Kind == dockerhost.Local {
 			return res, fmt.Errorf("%w: docker host %s: a local host does not use credentials", ErrValidation, h.Name)
 		}
-		h.Credential = dockerhost.DefaultCredentialName(h.Name)
+		h.Credential = dockerhost.DefaultCredentialName("ballast", h.Name)
 	} else if h.Kind != dockerhost.Local && existed && prev.Kind == h.Kind && h.Credential == "" {
 		h.Credential = prev.Credential
 	}
@@ -225,7 +225,7 @@ func (o *Ops) DeleteDockerHost(ctx context.Context, name string) error {
 		}
 		return wrapf("docker host "+name, err)
 	}
-	if o.CredentialsDir == "" || h.Credential != dockerhost.DefaultCredentialName(name) {
+	if o.CredentialsDir == "" || h.Credential != dockerhost.DefaultCredentialName("ballast", name) {
 		return nil
 	}
 	ca, cert, key := dockerhost.TLSFiles(h.Credential)

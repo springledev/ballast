@@ -7,7 +7,7 @@ import (
 	"path/filepath"
 
 	"github.com/springledev/ballast/internal/catalog"
-	"github.com/springledev/ballast/internal/runner"
+	"github.com/springledev/keel/runner"
 )
 
 // artifactDirEnv is the environment variable telling an exec script

@@ -6,8 +6,8 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/springledev/ballast/internal/dockerhost"
 	"github.com/springledev/ballast/internal/store"
+	"github.com/springledev/keel/dockerhost"
 )
 
 // PutDockerHost inserts or updates a Docker host. The name is

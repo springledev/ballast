@@ -19,10 +19,10 @@ import (
 	"github.com/springledev/ballast/internal/pipeline"
 	"github.com/springledev/ballast/internal/proxmox"
 	"github.com/springledev/ballast/internal/restic"
-	execrunner "github.com/springledev/ballast/internal/runner"
 	"github.com/springledev/ballast/internal/scheduler"
-	"github.com/springledev/ballast/internal/secret"
 	"github.com/springledev/ballast/internal/store"
+	execrunner "github.com/springledev/keel/runner"
+	"github.com/springledev/keel/secret"
 )
 
 // apiTokenCredential is the credential file `ballast serve` reads its

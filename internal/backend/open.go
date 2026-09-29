@@ -10,8 +10,8 @@ import (
 	"strings"
 
 	"github.com/springledev/ballast/internal/restic"
-	"github.com/springledev/ballast/internal/runner"
-	"github.com/springledev/ballast/internal/secret"
+	"github.com/springledev/keel/runner"
+	"github.com/springledev/keel/secret"
 )
 
 // Target is everything Resolver.Open needs about one destination. It

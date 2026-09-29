@@ -32,12 +32,12 @@ package strategy
 import (
 	"context"
 	"fmt"
-	"github.com/springledev/ballast/internal/dockerhost"
+	"github.com/springledev/keel/dockerhost"
 	"path/filepath"
 	"strings"
 
 	"github.com/springledev/ballast/internal/catalog"
-	"github.com/springledev/ballast/internal/runner"
+	"github.com/springledev/keel/runner"
 )
 
 // Strategy is the backup-side plugin interface of spec §4.2. One

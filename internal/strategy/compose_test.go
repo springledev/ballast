@@ -9,8 +9,8 @@ import (
 	"testing"
 
 	"github.com/springledev/ballast/internal/catalog"
-	"github.com/springledev/ballast/internal/dockerhost"
-	"github.com/springledev/ballast/internal/runner"
+	"github.com/springledev/keel/dockerhost"
+	"github.com/springledev/keel/runner"
 )
 
 // composeEntry builds a compose-strategy entry for the named project.

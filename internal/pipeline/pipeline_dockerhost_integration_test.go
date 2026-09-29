@@ -18,12 +18,12 @@ import (
 	"github.com/testcontainers/testcontainers-go/wait"
 
 	"github.com/springledev/ballast/internal/api"
-	"github.com/springledev/ballast/internal/dockerhost"
 	"github.com/springledev/ballast/internal/engine"
 	"github.com/springledev/ballast/internal/inventory"
 	"github.com/springledev/ballast/internal/restic"
-	"github.com/springledev/ballast/internal/runner"
-	"github.com/springledev/ballast/internal/secret"
+	"github.com/springledev/keel/dockerhost"
+	"github.com/springledev/keel/runner"
+	"github.com/springledev/keel/secret"
 )
 
 // dindImage is the "second Docker host": a Docker daemon in a

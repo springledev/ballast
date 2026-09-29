@@ -13,7 +13,7 @@ import (
 	"time"
 
 	"github.com/springledev/ballast/internal/engine"
-	"github.com/springledev/ballast/internal/secret"
+	"github.com/springledev/keel/secret"
 )
 
 // ErrAlreadyRunning reports that a service's run lock is held by a

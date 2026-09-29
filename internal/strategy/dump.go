@@ -9,7 +9,7 @@ import (
 	"strings"
 
 	"github.com/springledev/ballast/internal/catalog"
-	"github.com/springledev/ballast/internal/runner"
+	"github.com/springledev/keel/runner"
 )
 
 // Dump implements the dump strategy (spec §4.2): each catalog

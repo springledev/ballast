@@ -18,9 +18,9 @@ import (
 	"github.com/springledev/ballast/internal/engine"
 	"github.com/springledev/ballast/internal/inventory"
 	"github.com/springledev/ballast/internal/restic"
-	"github.com/springledev/ballast/internal/runner"
-	"github.com/springledev/ballast/internal/secret"
 	"github.com/springledev/ballast/internal/store"
+	"github.com/springledev/keel/runner"
+	"github.com/springledev/keel/secret"
 
 	"github.com/testcontainers/testcontainers-go"
 	"github.com/testcontainers/testcontainers-go/wait"

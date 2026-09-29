@@ -14,7 +14,7 @@ import (
 	"time"
 
 	"github.com/springledev/ballast/internal/engine"
-	secretpkg "github.com/springledev/ballast/internal/secret"
+	secretpkg "github.com/springledev/keel/secret"
 )
 
 // spyRunner stands in for the real backup pipeline (spec §12: test

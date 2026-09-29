@@ -14,7 +14,7 @@ import (
 	"time"
 
 	"github.com/springledev/ballast/internal/notify"
-	"github.com/springledev/ballast/internal/secret"
+	"github.com/springledev/keel/secret"
 )
 
 func writeCred(t *testing.T, dir, name, value string) {

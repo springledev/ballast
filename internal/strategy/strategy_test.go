@@ -1,14 +1,14 @@
 package strategy
 
 import (
-	"github.com/springledev/ballast/internal/dockerhost"
+	"github.com/springledev/keel/dockerhost"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/springledev/ballast/internal/catalog"
-	"github.com/springledev/ballast/internal/runner"
+	"github.com/springledev/keel/runner"
 )
 
 // writeStub writes an executable stub script and returns its absolute
