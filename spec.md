@@ -630,7 +630,45 @@
  29. Docs & launch pass: 15-minute quickstart, Proxmox guide (incl. Ballast's own LXC/VM requirements, §17.7), Docker-host setup guide, migration page from v0.1.
 
 
- The secondary rclone tier is not part of v0.1 or v0.2; see §12.
+
+
+ **v0.3 extension (steps 30–40, §18: friction removal + compose robustness) — design rationale in `PLAN-v0.3.md`; this list is the normative order.**
+
+
+ 30. Notification channels (v0.3, §18.1): reusable `NotificationChannel` model (ntfy, full base URL — `https://ntfy.sh/` only the default, self-hosted first-class — with optional username/token from the credential store), test-send button on every channel through the same code path as job notifications, Settings UI page, `ballast notify channel …` CLI parity; existing per-service notification settings and the ntfy credential-file path migrate onto channels, not dropped.
+
+
+ 31. Email + webhook channels and event routing (§18.1): SMTP (host/port/TLS/STARTTLS/from/to, credentials from the store) and webhook (URL, optional HMAC secret, JSON payload, HTTP status shown on test-send); per-service, per-tier event routing (failure, verification failure, freshness, success heartbeat); recovery ("back to normal") notice and alert de-duplication/cool-down; notifications sent from the engine's success/fail/freshness paths so CLI-triggered and scheduled jobs notify identically (tested both ways).
+
+
+ 32. `.env` credential source (§18.2): third secret-store source `env-file` (`{path, key}`) with a real dotenv parser (quotes, comments, `export`, empty values, CRLF); resolved at job-run time, only path+key ever stored; loud PREPARING failure naming the exact file/key; UI/CLI "test this source" listing key names only; tests assert resolved values never reach DB, logs or API responses and that a rotated password is picked up with no re-setup.
+
+
+ 33. `.env` one-path setup (§18.2): Immich wizard becomes "path to your Immich directory" → `.env` found, `DB_USERNAME`/`DB_PASSWORD`/`DB_DATABASE_NAME` read automatically, confirmation screen only; catalog-generic mechanism (a catalog entry declares its documented `.env` keys) so any compose-based app gets the same setup.
+
+
+ 34. Compose discovery hardening (§18.4): label-driven discovery is primary (`project`, `project.working_dir`, `project.config_files` — trust the absolute paths, use the label's project name over the directory name), default-filename filesystem scan for stacks that are defined but not running (lookup order `compose.yaml` → `compose.yml` → `docker-compose.yaml` → `docker-compose.yml`), and explicit project-directory registration for label-less stacks; all per DockerHost, remote scans through the helper-container mechanism (§17.5).
+
+
+ 35. Compose snapshot completeness (§18.4): base file + auto-merged override files in Docker's merge order (recorded in snapshot metadata) + project `.env` + every `env_file:` target found by parsing the YAML; values fully present in the restic repo, fully redacted in every UI/API response; `docker compose config` parse check recorded as a verification check; headline CI test: the captured file set for every stack shape is sufficient to `docker compose up` from scratch.
+
+
+ 36. Daemon mode (§18.3): `listen` key in `ballast.yaml` and `--listen` flag (`--addr` kept as an alias) with the config file as the single source of truth; CLI commands become thin clients of the daemon's HTTP API (`--url` / `BALLAST_URL`), with safe single-shot fallback (`backup`, `verify`) and a hint when no daemon is running; `ballast config check`. The default listen address is NOT changed in this step (see step 37).
+
+
+ 37. Auth layer (§18.3, release blocker): token auto-generated at first start when none exists (printed once, written root-only; existing `ballast-api-token` installs untouched), CLI reads it from the credential dir automatically, login screen + `HttpOnly` session cookie for the UI, rate-limited login attempts, constant-time comparison, no token in logs, `ballast token rotate` + UI rotate/sign-out-everywhere, non-loopback/no-TLS exposure warning; a test enumerates every router route and asserts 401 without credentials. In the same change the default listen address becomes `0.0.0.0:8080`.
+
+
+ 38. Scheduler-in-daemon + `run-due` parity (§18.3): the daemon's scheduler is the default execution path and `ballast run-due` the headless fallback, both through the same `Coordinator`; tests prove a job run either way yields identical DB state transitions, notifications and verification results; fix any divergence found.
+
+
+ 39. systemd unit + docs (§18.3): shipped unit (`Restart=on-failure`, `LoadCredential=`, `ProtectSystem=strict`, `PrivateTmp`, `NoNewPrivileges`, with the `ReadWritePaths=`/Docker-socket access a real backup needs) passing `systemd-analyze verify`, documented `LoadCredential` smoke test that includes a backup under the hardened unit; docs networking section opens with the do-not-port-forward warning (reverse proxy with TLS or tailnet/VPN); quickstart updated for daemon-first setup, UI notifications, `.env` sources and compose coverage.
+
+
+ 40. Usability pass (§18.5): first-run checklist on the dashboard, weekly digest notification, Ballast health banner (last self-backup age, low disk, missing credentials from the doctor checks), `doctor` exposure check; final v0.3 acceptance sweep (§18.6).
+
+
+ The secondary rclone tier is not part of v0.1, v0.2 or v0.3; see §12.
 
 
 
@@ -801,3 +839,90 @@
  - [ ] `ballast doctor` catches the top 10 misconfiguration causes
 
  - [ ] Docs: 15-minute quickstart, Proxmox guide (incl. Ballast's own LXC/VM requirements), Docker-host guide, migration page
+
+
+ ---
+
+
+
+ ## 18. v0.3 extension: friction removal & compose robustness (normative)
+
+
+
+ **Goal:** close three usability gaps found in real use (notifications only via CLI, credentials pasted by hand, Ballast only reachable from localhost) and make compose discovery miss nothing. Builds on v0.2; rationale, reconciliation with existing code and added usability features in `PLAN-v0.3.md`. No mobile code (rule 6); the `exec` strategy and `ballast trigger --token` interfaces are untouched.
+
+
+
+ ### 18.1 Notifications in the web UI
+
+ - `NotificationChannel`: `type` (`ntfy` | `webhook` | `email`), settings, and per-event routing (failure, verification failure, freshness breach, success heartbeat, recovery) per service and per tier (§11). Channels are reusable objects referenced by services.
+
+ - **ntfy** takes a full base URL (`https://ntfy.sh/` is only the default; self-hosted is first-class); optional username/token from the credential store. **Email:** SMTP host/port/TLS/STARTTLS/from/to, credentials from the store. **Webhook:** full URL, optional HMAC secret, JSON payload.
+
+ - Every channel has a **test-send** that uses the same code path, auth and priority as real notifications, titled "Ballast test notification"; webhook test shows the HTTP status.
+
+ - Sending happens in the engine's success/fail/freshness paths, never the UI: CLI-triggered and scheduled jobs notify identically. A failure notification is de-duplicated (one alert, then a reminder per cool-down, default 24 h); a return to green sends one recovery notice. Per-tier isolation (§11, rule 3) is unchanged.
+
+ - Secrets (ntfy token, SMTP password, HMAC secret) live in the credential store and never appear in the DB, logs or API responses.
+
+
+
+ ### 18.2 `.env` credential sources
+
+ - The secret store gains source type `env-file` (`{path, key}`). The parser implements real dotenv semantics: `KEY=value`, double- and single-quoted values, `#` comments, blank lines, `export KEY=value`, empty values, CRLF line endings.
+
+ - Resolved at **job-run time**, never at setup time; only path + key are stored, never the value. A missing file, missing key or unreadable path fails the job at PREPARING with a message naming the exact file and key — never an empty password.
+
+ - A catalog entry MAY declare the documented `.env` keys it needs, giving a one-field setup ("path to your app's directory"): Immich reads `DB_USERNAME`, `DB_PASSWORD`, `DB_DATABASE_NAME` this way and shows a confirmation screen only. The UI's "test this source" lists key names found, never values.
+
+
+
+ ### 18.3 Daemon-first serving & auth
+
+ - `ballast serve` is the primary mode. Listen address comes from `listen` in `ballast.yaml` or `--listen` (`--addr` remains an alias); the default is `0.0.0.0:8080`, **switched on only together with the auth layer below**. The config file is the single source of truth for daemon and CLI.
+
+ - CLI commands are thin clients of the daemon API (`--url` / `BALLAST_URL`). With no daemon reachable, single-shot `backup` and `verify` fall back to direct execution against the same config and print a hint that `serve` is the recommended permanent mode.
+
+ - **Authentication is a release blocker.** A token is generated at first start when none is configured, printed once and stored root-only (an existing `ballast-api-token` credential is honoured unchanged); the CLI finds it in the credential dir. Every API route except a health endpoint requires it. The UI shows a login screen and holds an `HttpOnly` session cookie (`Secure` behind a TLS-terminating proxy). Constant-time comparison, no token in logs, login attempts rate-limited, token rotation supported. Single token, single user (no RBAC).
+
+ - The scheduler inside the daemon is the default execution path; `ballast run-due` is the headless fallback. Both go through the same engine/coordinator: identical state transitions, notifications and verification results for the same job.
+
+ - A systemd unit ships with the release: `Restart=on-failure`, `LoadCredential=` for the token, `ProtectSystem=strict`, `PrivateTmp=true`, `NoNewPrivileges=true`, with the write paths and Docker socket access a real backup needs. Docs open the networking section with: **do not port-forward Ballast to the internet** — use a TLS reverse proxy or a tailnet/VPN.
+
+
+
+ ### 18.4 Compose coverage
+
+ - **Filenames Docker accepts:** default lookup order `compose.yaml`, `compose.yml`, `docker-compose.yaml`, `docker-compose.yml`; auto-merged `compose.override.yaml/.yml` and `docker-compose.override.yaml/.yml`; explicit `-f` stacks; legacy v1 files.
+
+ - **Discovery order:** (1) container labels per DockerHost — `com.docker.compose.project`, `.project.working_dir`, `.project.config_files` are authoritative (absolute paths, project name from the label, not the directory); (2) a filesystem scan of configured directories, for defined-but-not-running stacks; (3) explicit registration of a project directory for label-less stacks. Remote hosts use the helper-container file access of §17.5.
+
+ - **Snapshot contents:** base file, overrides in merge order (order recorded in snapshot metadata), the project `.env`, and every `env_file:` target referenced by the YAML. Values are complete in the encrypted restic repo and redacted in all UI/API output and logs. The captured set must be sufficient to `docker compose up` the stack from scratch (CI-proven for every stack shape); a `docker compose config` parse check is recorded as a verification check.
+
+
+
+ ### 18.5 Usability additions
+
+ First-run checklist on the dashboard, weekly digest notification, Ballast health banner (self-backup age, disk space, missing credentials), `ballast config check`, and an exposure warning in `doctor` and the UI when listening beyond loopback without a TLS proxy.
+
+
+
+ ### 18.6 Acceptance checklist (v0.3 "done")
+
+ - [ ] A beginner sets up self-hosted ntfy entirely in the UI, presses test-send and receives the notification
+
+ - [ ] Email and webhook channels work with test-send; failures and recoveries notify once, not repeatedly
+
+ - [ ] Immich setup is one path entry; `.env` credentials are read at run time and a rotated password works on the next run
+
+ - [ ] Every compose filename variant, override combination and custom `-f` stack is discovered and snapshotted; restored snapshots can `docker compose up` from scratch (CI)
+
+ - [ ] `.env`/`env_file` values are present in the restic snapshot and redacted in every UI/API response
+
+ - [ ] `ballast serve` runs permanently under the shipped systemd unit on `0.0.0.0:8080`; no API route or UI page is reachable without credentials
+
+ - [ ] CLI works as a daemon client and as a standalone fallback with identical outcomes; scheduler and `run-due` parity is tested
+
+ - [ ] Secrets never in DB, logs or API responses — re-asserted for `.env` and notification-auth paths
+
+ - [ ] Docs: networking section leads with the do-not-port-forward warning; quickstart updated
