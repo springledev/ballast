@@ -117,11 +117,27 @@ a credential's contents, in this or any other message. If something
 looks wrong, `systemctl status` or the journal will tell you the
 directory, not the secret.
 
+## Networking: read this before you expose Ballast
+
+**Do not port-forward Ballast to the internet.** Ballast can start,
+stop and restore your containers, so anyone who reaches its login page
+is one guessed key away from your data. Reach it from outside your home
+only through a reverse proxy that adds HTTPS (Caddy, nginx, Traefik) or
+a private network such as Tailscale or WireGuard. On your home network,
+`http://<host>:8080` is fine; Ballast shows a warning banner and
+`ballast doctor` flags it whenever it is listening beyond this machine
+without HTTPS. To keep it on this machine only, set `listen:
+127.0.0.1:8080` in `ballast.yaml`.
+
 ## `ballast.service` — running `serve`
+
+The release ships a hardened unit at
+[`deploy/ballast.service`](../deploy/ballast.service). Copy it as is:
 
 ```ini
 [Unit]
 Description=Ballast backup service (web UI + API + scheduler)
+Documentation=https://github.com/springledev/ballast/blob/main/docs/systemd.md
 After=network-online.target docker.service
 Wants=network-online.target
 
@@ -129,27 +145,57 @@ Wants=network-online.target
 Type=simple
 Environment=BALLAST_CONFIG_DIR=/etc/ballast
 Environment=BALLAST_DATA_DIR=/var/lib/ballast
+Environment=XDG_CACHE_HOME=/var/cache/ballast
 ExecStart=/usr/local/bin/ballast serve
+# One line per credential file you have provisioned.
 LoadCredential=ballast-api-token:/etc/ballast/credentials/ballast-api-token
 LoadCredential=ballast-restic-password.mybackup:/etc/ballast/credentials/ballast-restic-password.mybackup
 LoadCredential=ballast-ntfy-topic:/etc/ballast/credentials/ballast-ntfy-topic
+# A stop must never cut a stop/start backup off halfway.
 TimeoutStopSec=5min
 KillMode=mixed
 Restart=on-failure
 RestartSec=5s
+
+# Ballast needs root to talk to the Docker socket and read service data,
+# so the unit is hardened by taking things away rather than by dropping root.
 User=root
 Group=root
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=read-only
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+LockPersonality=true
+# Writable locations: Ballast's own data, the restic cache, and the config
+# dir (the API token and generated passwords are saved there).
+# Add the folder of any local destination or restore target here too.
+ReadWritePaths=/var/lib/ballast /etc/ballast
+CacheDirectory=ballast
+# The Docker socket (/run/docker.sock) stays reachable: /run is read-only
+# under ProtectSystem=strict, which still allows connecting to a socket.
 
 [Install]
 WantedBy=multi-user.target
 ```
+
+What the hardening does: `ProtectSystem=strict` makes the whole file
+system read-only except `ReadWritePaths=` (Ballast's data and config
+directories; add the folder of any local backup destination or restore
+target), `PrivateTmp` gives it its own `/tmp`, and `NoNewPrivileges`
+stops it gaining extra rights. The Docker socket still works. Ballast
+stays root because it needs Docker access and to read your services'
+data.
 
 List one `LoadCredential=` line per credential file you've
 provisioned (add more for other destinations, per-service ntfy/webhook
 overrides, and so on).
 
 ```bash
-sudo cp ballast.service /etc/systemd/system/
+sudo cp deploy/ballast.service /etc/systemd/system/
 sudo systemctl daemon-reload
 sudo systemctl enable --now ballast.service
 sudo systemctl status ballast.service
@@ -296,13 +342,29 @@ restart, which is exactly the failure mode Ballast exists to prevent.
   still around after `TimeoutStopSec` does systemd SIGKILL the whole
   group.
 
+## Smoke test: credentials and a backup under the hardened unit
+
+After `systemctl enable --now ballast.service`, confirm the unit can
+see its credentials and actually do a backup (not just start):
+
+```bash
+sudo systemctl status ballast.service              # active (running)
+sudo journalctl -u ballast.service | grep -i credential   # which dir was used
+curl -s http://localhost:8080/health               # open endpoint, no key needed
+sudo BALLAST_CONFIG_DIR=/etc/ballast BALLAST_DATA_DIR=/var/lib/ballast ballast backup <service>
+```
+
+`ballast backup` hands the job to the running daemon, so it runs inside
+the hardened unit. It should finish verified. If it fails with "read-only
+file system", add that folder to `ReadWritePaths=`.
+
 ## Verifying unit files before installing them
 
 If you've edited these units, sanity-check the syntax before copying
 them into `/etc/systemd/system/`:
 
 ```bash
-systemd-analyze verify --man=false ./ballast.service
+systemd-analyze verify --man=false deploy/ballast.service
 systemd-analyze verify --man=false ./ballast-run-due.service ./ballast-run-due.timer
 systemd-analyze verify --man=false './ballast-trigger@.service'
 ```

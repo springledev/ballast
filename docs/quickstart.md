@@ -190,7 +190,18 @@ ballast restore <service> --snapshot <id> --file /some/specific/path --to /path/
 `--to` must point at a new, empty location — Ballast never restores over
 existing data by default.
 
-### Run it unattended with systemd
+### Run it permanently (daemon first)
+
+The simplest setup is `ballast serve` kept running by systemd: it hosts the
+web UI, the API and the scheduler in one process, so scheduled backups run
+and you can manage everything from the browser, including notification
+channels (Settings), `.env` sources and compose-stack discovery. Install the
+shipped hardened unit from [Systemd setup](systemd.md).
+
+**Don't port-forward Ballast to the internet.** Use a reverse proxy with
+HTTPS or a tailnet/VPN to reach it remotely.
+
+### Run it unattended with a timer instead
 
 `ballast run-due` runs every job whose schedule is currently due and exits
 non-zero if anything failed — built for a systemd timer or cron, so backups

@@ -1,0 +1,45 @@
+[Unit]
+Description=Ballast backup service (web UI + API + scheduler)
+Documentation=https://github.com/springledev/ballast/blob/main/docs/systemd.md
+After=network-online.target docker.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+Environment=BALLAST_CONFIG_DIR=/etc/ballast
+Environment=BALLAST_DATA_DIR=/var/lib/ballast
+Environment=XDG_CACHE_HOME=/var/cache/ballast
+ExecStart=/usr/local/bin/ballast serve
+# One line per credential file you have provisioned.
+LoadCredential=ballast-api-token:/etc/ballast/credentials/ballast-api-token
+LoadCredential=ballast-restic-password.mybackup:/etc/ballast/credentials/ballast-restic-password.mybackup
+LoadCredential=ballast-ntfy-topic:/etc/ballast/credentials/ballast-ntfy-topic
+# A stop must never cut a stop/start backup off halfway.
+TimeoutStopSec=5min
+KillMode=mixed
+Restart=on-failure
+RestartSec=5s
+
+# Ballast needs root to talk to the Docker socket and read service data,
+# so the unit is hardened by taking things away rather than by dropping root.
+User=root
+Group=root
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=read-only
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+LockPersonality=true
+# Writable locations: Ballast's own data, the restic cache, and the config
+# dir (the API token and generated passwords are saved there).
+# Add the folder of any local destination or restore target here too.
+ReadWritePaths=/var/lib/ballast /etc/ballast
+CacheDirectory=ballast
+# The Docker socket (/run/docker.sock) stays reachable: /run is read-only
+# under ProtectSystem=strict, which still allows connecting to a socket.
+
+[Install]
+WantedBy=multi-user.target
