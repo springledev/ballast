@@ -42,6 +42,10 @@ import (
 // scheduler.ErrAlreadyRunning, scheduler.ErrPreviousRunInterrupted),
 // so callers can map them with errors.Is instead of string matching.
 type Ops struct {
+	// ListenAddr is where `ballast serve` listens ("" outside serve);
+	// Doctor warns when it is open to the network.
+	ListenAddr string
+
 	DB      *sql.DB
 	Catalog *catalog.Registry
 	Coord   *scheduler.Coordinator

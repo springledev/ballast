@@ -1,39 +1,28 @@
 import { ref } from "vue";
 
-// Ballast's API requires `Authorization: Bearer <token>` on every
-// request except the trigger endpoint (spec rule 2; internal/api's
-// withAuth). The web UI has no login/session system of its own — it
-// is a thin layer over the same token an operator would put in a
-// CLI script or a ballast.yaml-adjacent secret — so the token is
-// entered once and kept in this browser's localStorage only. It is
-// never sent anywhere but this Ballast server's own /api/v1 routes.
-const STORAGE_KEY = "ballast_api_token";
+// The web UI signs in with the access key once; the server answers with
+// an HttpOnly session cookie, so the key itself is never kept in the
+// browser (not in localStorage, not in memory after sign-in). This
+// module only tracks whether the browser currently has a live session.
+export type SessionState = "checking" | "in" | "out";
 
-function readStoredToken(): string {
-  try {
-    return window.localStorage.getItem(STORAGE_KEY) ?? "";
-  } catch {
-    // Private browsing / blocked storage: fall back to an in-memory
-    // token for this page load rather than crashing the app.
-    return "";
-  }
+export const session = ref<SessionState>("checking");
+
+// freshKey holds a just-rotated access key (in memory only) so the
+// sign-in screen can show it once after rotation signs everyone out.
+export const freshKey = ref("");
+
+export function markSignedIn(): void {
+  session.value = "in";
 }
 
-export const apiToken = ref<string>(readStoredToken());
-
-export function setApiToken(token: string): void {
-  apiToken.value = token;
-  try {
-    if (token) {
-      window.localStorage.setItem(STORAGE_KEY, token);
-    } else {
-      window.localStorage.removeItem(STORAGE_KEY);
-    }
-  } catch {
-    // Ignore: the in-memory ref still works for this page load.
-  }
+export function markSignedOut(): void {
+  session.value = "out";
 }
 
-export function clearApiToken(): void {
-  setApiToken("");
+// Older versions kept the key in localStorage; remove any leftover copy.
+try {
+  window.localStorage.removeItem("ballast_api_token");
+} catch {
+  // Storage blocked: nothing to clean up.
 }

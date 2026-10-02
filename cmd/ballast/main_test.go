@@ -152,6 +152,9 @@ func execCLI(t *testing.T, args ...string) (string, error) {
 	// leak flags into one another (e.g. one test's --init leaking into
 	// the next test's plain `destination add`).
 	resetCLIFlags()
+	// A test that ran rootCmd.ExecuteContext with a cancelled context
+	// must not leak that context into later commands.
+	rootCmd.SetContext(context.Background())
 	var out bytes.Buffer
 	rootCmd.SetOut(&out)
 	rootCmd.SetErr(&out)

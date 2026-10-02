@@ -111,6 +111,10 @@ func (o *Ops) Doctor(ctx context.Context) (DoctorReport, error) {
 		add("destination", d.Name, DoctorOK, "credentials work and the repository can be read")
 	}
 
+	if o.ListenAddr != "" && !ListenIsLoopback(o.ListenAddr) {
+		add("network", o.ListenAddr, DoctorWarn, "Ballast is reachable from your network over plain HTTP. Put it behind a reverse proxy that provides HTTPS (or use a tailnet/VPN) so your access key is not sent in the clear.")
+	}
+
 	if o.WorkRoot != "" {
 		st, detail := diskCheck(o.WorkRoot)
 		add("disk", o.WorkRoot, st, detail)

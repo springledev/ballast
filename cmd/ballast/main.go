@@ -73,9 +73,21 @@ var serveCmd = &cobra.Command{
 			return err
 		}
 		defer a.Close()
+		tokenDir := execrunner.FindCredentialDir(apiTokenCredential, cfg.CredentialDirs()...)
+		tokenPath := filepath.Join(tokenDir, apiTokenCredential)
 		if a.apiToken == "" {
-			tokenPath := filepath.Join(execrunner.FindCredentialDir(apiTokenCredential, cfg.CredentialDirs()...), apiTokenCredential)
-			return fmt.Errorf("refusing to start: no API token configured; put one in %s (under systemd: LoadCredential=%s:<path>)", tokenPath, apiTokenCredential)
+			tok, err := api.GenerateToken()
+			if err != nil {
+				return fmt.Errorf("generating an access key: %w", err)
+			}
+			if err := writeAPIToken(tokenPath, tok); err != nil {
+				return fmt.Errorf("no access key exists yet and Ballast could not create one: %w", err)
+			}
+			a.apiToken = tok
+			a.secrets.Add(tok)
+			// Printed once, here, to the terminal only (never to the log
+			// writer); it is also saved root-only at tokenPath.
+			fmt.Fprintf(cmd.ErrOrStderr(), "ballast: first start — your access key is:\n\n    %s\n\nSave it now. It is stored in %s (readable only by its owner); `ballast token rotate` makes a new one.\n", tok, tokenPath)
 		}
 
 		// A backup started by POST .../backup must outlive that single
@@ -91,10 +103,6 @@ var serveCmd = &cobra.Command{
 		if err != nil {
 			return fmt.Errorf("loading embedded web UI: %w", err)
 		}
-		mux := http.NewServeMux()
-		mux.Handle("/api/v1/", api.NewHandler(a.ops, a.apiToken))
-		mux.Handle("/", webUI)
-
 		listen := cfg.Listen
 		if cmd.Flags().Changed("listen") {
 			listen = serveAddr
@@ -102,11 +110,26 @@ var serveCmd = &cobra.Command{
 				return fmt.Errorf("--listen: %w", err)
 			}
 		}
+		auth := api.NewAuth(a.apiToken, func(tok string) error {
+			if err := writeAPIToken(tokenPath, tok); err != nil {
+				return err
+			}
+			a.secrets.Add(tok)
+			return nil
+		}, listen)
+		a.ops.ListenAddr = listen
+		mux := http.NewServeMux()
+		mux.Handle("/api/v1/", api.NewAuthedHandler(a.ops, auth))
+		mux.Handle("/", webUI)
+
 		ln, err := net.Listen("tcp", listen)
 		if err != nil {
 			return fmt.Errorf("starting web server: %w", err)
 		}
 		log.Printf("ballast %s listening on http://%s", version, ln.Addr())
+		if !api.ListenIsLoopback(listen) {
+			log.Printf("ballast: listening beyond this machine over plain HTTP; put Ballast behind a reverse proxy with HTTPS (or a tailnet) before exposing it")
+		}
 
 		schedDone := make(chan struct{})
 		go func() {

@@ -148,21 +148,20 @@ ballast status --json                       # for scripts
 ballast serve
 ```
 
-By default this listens on `http://127.0.0.1:8000` and serves both the API
-and the Vue-based web UI. It refuses to start until you've set up an access
-key: generate any random string yourself (for example `openssl rand -hex
-32`) and save it, with no trailing whitespace, to:
+By default this listens on `http://0.0.0.0:8080` and serves both the API
+and the Vue-based web UI. On first start, Ballast auto-generates a 256-bit
+access key, prints it to the terminal once, and saves it root-only. Open the
+web UI in a browser, enter that access key on the sign-in screen, and you're
+in — it's kept in the browser as a session cookie and sent only to your own
+Ballast server. (If you're listening beyond localhost without HTTPS, a
+banner will remind you to use a reverse proxy with HTTPS or a tailnet.)
 
-```
-~/.config/ballast/credentials/ballast-api-token
-```
+To use your own access key instead, create it before starting:
 
-(Under systemd, provide it instead with
-`LoadCredential=ballast-api-token:/path/to/file` — see
-[Systemd setup](systemd.md).) Running `ballast serve` without one prints the
-exact path it expected, so you can't get this wrong. Open the web UI in a
-browser, paste that same string in as the "access key," and you're in — it's
-kept in the browser only and sent only to your own Ballast server.
+```bash
+openssl rand -hex 32 > ~/.config/ballast/credentials/ballast-api-token
+chmod 600 ~/.config/ballast/credentials/ballast-api-token
+```
 
 ### Set up a schedule or change it later
 

@@ -17,6 +17,7 @@ const router = createRouter({
     { path: "/restore", name: "restore", component: () => import("./views/RestoreView.vue") },
     { path: "/verification", name: "verification", component: () => import("./views/VerificationView.vue") },
     { path: "/settings", name: "settings", component: () => import("./views/SettingsView.vue") },
+    { path: "/security", name: "security", component: () => import("./views/SecurityView.vue") },
     { path: "/wizard", name: "wizard", component: () => import("./views/WizardView.vue") },
   ],
 });

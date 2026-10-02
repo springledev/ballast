@@ -1,14 +1,35 @@
 <script setup lang="ts">
-import { computed } from "vue";
+import { onMounted, ref } from "vue";
 
 import ConnectGate from "@/components/ConnectGate.vue";
-import { apiToken, clearApiToken } from "@/api/auth";
+import { api } from "@/api/client";
+import { markSignedIn, markSignedOut, session } from "@/api/auth";
 
-const connected = computed(() => apiToken.value !== "");
+const insecure = ref(false);
+
+async function checkSession() {
+  try {
+    insecure.value = (await api.session()).insecure_exposure;
+    markSignedIn();
+  } catch {
+    markSignedOut();
+  }
+}
+
+async function signOut() {
+  try {
+    await api.logout();
+  } finally {
+    markSignedOut();
+  }
+}
+
+onMounted(checkSession);
 </script>
 
 <template>
-  <ConnectGate v-if="!connected" />
+  <div v-if="session === 'checking'" class="center-screen" aria-busy="true" />
+  <ConnectGate v-else-if="session === 'out'" @signed-in="checkSession" />
   <div v-else class="app-shell">
     <nav class="sidebar" aria-label="Main">
       <div class="brand">
@@ -30,11 +51,16 @@ const connected = computed(() => apiToken.value !== "");
       <router-link to="/schedule">Schedules</router-link>
       <router-link to="/settings">Notifications</router-link>
       <router-link to="/verification">Restore checks</router-link>
+      <router-link to="/security">Security</router-link>
 
       <div class="spacer" />
-      <button class="sign-out" type="button" @click="clearApiToken">Sign out</button>
+      <button class="sign-out" type="button" @click="signOut">Sign out</button>
     </nav>
     <main class="main">
+      <p v-if="insecure" class="notice notice--warn" role="alert">
+        Ballast is reachable from your network over plain HTTP, so your access key can be read by anyone on it.
+        Put Ballast behind a reverse proxy that provides HTTPS (or use a VPN/tailnet).
+      </p>
       <router-view />
     </main>
   </div>

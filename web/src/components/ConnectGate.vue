@@ -2,9 +2,10 @@
 import { ref } from "vue";
 
 import { api, ApiError } from "@/api/client";
-import { setApiToken } from "@/api/auth";
+import { freshKey } from "@/api/auth";
 
-const input = ref("");
+const emit = defineEmits<{ (e: "signed-in"): void }>();
+const input = ref(freshKey.value);
 const checking = ref(false);
 const error = ref("");
 
@@ -16,17 +17,18 @@ async function connect() {
   }
   checking.value = true;
   error.value = "";
-  setApiToken(token);
   try {
-    // Any authenticated endpoint works as a connectivity check; the
-    // catalog is always present (bundled entries ship in the binary).
-    await api.catalog();
+    await api.login(token);
+    input.value = "";
+    freshKey.value = "";
+    emit("signed-in");
   } catch (e) {
-    setApiToken("");
     error.value =
       e instanceof ApiError && e.status === 401
         ? "That access key didn't work. Check you copied all of it and try again."
-        : `Couldn't reach Ballast: ${(e as Error).message}`;
+        : e instanceof ApiError && e.status === 429
+          ? "Too many tries. Wait a minute and try again."
+          : `Couldn't reach Ballast: ${(e as Error).message}`;
   } finally {
     checking.value = false;
   }
@@ -37,6 +39,10 @@ async function connect() {
   <div class="center-screen">
     <form class="panel" style="max-width: 460px; width: 100%" @submit.prevent="connect">
       <h2>Sign in to Ballast</h2>
+      <div v-if="freshKey" class="notice notice--ok" role="status">
+        <p style="margin-top: 0">Your new access key. Save it now — it won't be shown again.</p>
+        <code>{{ freshKey }}</code>
+      </div>
       <p class="lede" style="margin-bottom: 1rem">Paste the access key from your Ballast server.</p>
       <div class="field">
         <label for="token">Access key</label>
@@ -51,12 +57,12 @@ async function connect() {
         <summary>Where do I find the access key?</summary>
         <div class="advanced-body">
           <p style="margin-top: 0">
-            It's the contents of the file <code>ballast-api-token</code> in Ballast's credential folder on the
-            server. Running <code>ballast serve</code> without one prints the exact path it expects. Under systemd,
-            provide it with <code>LoadCredential=ballast-api-token:/path/to/file</code>.
+            Ballast prints it once the first time <code>ballast serve</code> starts, and keeps it in the file
+            <code>ballast-api-token</code> in its credential folder on the server. Lost it? Run
+            <code>ballast token rotate</code> on the server to make a new one.
           </p>
           <p style="margin-bottom: 0">
-            The key is kept in this browser only and sent only to this Ballast server. "Sign out" forgets it.
+            Ballast does not store the key in your browser; it gives you a sign-in cookie instead. "Sign out" ends it.
           </p>
         </div>
       </details>

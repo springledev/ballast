@@ -1,4 +1,4 @@
-import { apiToken, clearApiToken } from "./auth";
+import { markSignedOut } from "./auth";
 import type {
   ApiErrorBody,
   CatalogSummary, EnvSourceProposal,
@@ -42,9 +42,6 @@ export class ApiError extends Error {
 
 async function request<T>(method: string, path: string, body?: unknown): Promise<T> {
   const headers: Record<string, string> = {};
-  if (apiToken.value) {
-    headers.Authorization = `Bearer ${apiToken.value}`;
-  }
   if (body !== undefined) {
     headers["Content-Type"] = "application/json";
   }
@@ -73,10 +70,10 @@ async function request<T>(method: string, path: string, body?: unknown): Promise
     const message =
       (data as ApiErrorBody | undefined)?.error || text || `${method} ${path} failed with ${res.status}`;
     if (res.status === 401) {
-      // The token was rejected (missing, wrong, or revoked server-
-      // side): drop it so the app falls back to the connect screen
-      // instead of silently failing every call from here on.
-      clearApiToken();
+      // The session ended (expired, signed out, or the key was
+      // rotated): fall back to the sign-in screen instead of silently
+      // failing every call from here on.
+      markSignedOut();
     }
     throw new ApiError(res.status, message);
   }
@@ -93,6 +90,21 @@ export const api = {
     if (withVerify) params.set("verify", "1");
     const qs = params.toString();
     return request("GET", `${base}/status${qs ? `?${qs}` : ""}`);
+  },
+  login(token: string): Promise<void> {
+    return request("POST", `${base}/auth/login`, { token });
+  },
+  logout(): Promise<void> {
+    return request("POST", `${base}/auth/logout`);
+  },
+  session(): Promise<{ ok: boolean; insecure_exposure: boolean }> {
+    return request("GET", `${base}/auth/session`);
+  },
+  rotateKey(): Promise<{ token: string }> {
+    return request("POST", `${base}/auth/rotate`);
+  },
+  signOutEverywhere(): Promise<void> {
+    return request("POST", `${base}/auth/sign-out-everywhere`);
   },
   catalog(): Promise<CatalogSummary[]> {
     return request("GET", `${base}/catalog`);

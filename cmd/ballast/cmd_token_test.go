@@ -1,6 +1,8 @@
 package main
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -57,4 +59,27 @@ func extractToken(out string) string {
 		return line
 	}
 	return ""
+}
+
+func TestWriteAPITokenIsOwnerOnly(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "creds", apiTokenCredential)
+	for _, tok := range []string{"first", "second"} {
+		if err := writeAPIToken(path, tok); err != nil {
+			t.Fatal(err)
+		}
+		fi, err := os.Stat(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if fi.Mode().Perm() != 0o600 {
+			t.Fatalf("mode = %v, want 0600", fi.Mode().Perm())
+		}
+		got, _ := os.ReadFile(path)
+		if string(got) != tok+"\n" {
+			t.Fatalf("contents = %q", got)
+		}
+	}
+	if _, err := os.Stat(path + ".tmp"); !os.IsNotExist(err) {
+		t.Fatal("temp file left behind")
+	}
 }

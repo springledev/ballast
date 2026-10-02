@@ -68,19 +68,17 @@ starts, and Ballast checks there first.
 
 ### The API token (`ballast serve` only)
 
-`ballast serve` refuses to start without one — there's no
-unauthenticated mode. Generate a random one and lock it down:
+`ballast serve` auto-generates a 256-bit access key on first start if one
+doesn't exist, prints it to the terminal once, and saves it root-only
+(0600). You can then enter that key on the web UI's sign-in screen.
+
+To use your own access key instead (for example, if you're migrating from an
+existing setup), create it before starting:
 
 ```bash
 sudo sh -c 'umask 077; openssl rand -hex 32 > /etc/ballast/credentials/ballast-api-token'
 sudo chmod 600 /etc/ballast/credentials/ballast-api-token
 ```
-
-(`openssl rand -hex 32` prints 64 random hex characters — plenty of
-entropy for a bearer token, and the `umask 077` means the file is
-created `0600` from the start, so there's no window where it's
-readable by anyone else.) The web UI needs this same token to talk to
-its own API; it will prompt for it the first time you open it.
 
 ### Restic repository passwords
 
@@ -131,7 +129,7 @@ Wants=network-online.target
 Type=simple
 Environment=BALLAST_CONFIG_DIR=/etc/ballast
 Environment=BALLAST_DATA_DIR=/var/lib/ballast
-ExecStart=/usr/local/bin/ballast serve --addr 127.0.0.1:8000
+ExecStart=/usr/local/bin/ballast serve
 LoadCredential=ballast-api-token:/etc/ballast/credentials/ballast-api-token
 LoadCredential=ballast-restic-password.mybackup:/etc/ballast/credentials/ballast-restic-password.mybackup
 LoadCredential=ballast-ntfy-topic:/etc/ballast/credentials/ballast-ntfy-topic
@@ -157,8 +155,9 @@ sudo systemctl enable --now ballast.service
 sudo systemctl status ballast.service
 ```
 
-Then open `http://<host>:8000` and enter the API token you generated
-above.
+Then open `http://<host>:8080` and enter the access key that Ballast printed
+to the terminal on first start. (Or if you created your own token file, use
+that instead.)
 
 ## `ballast-run-due.service` + `.timer` — headless, no web UI
 

@@ -32,6 +32,15 @@ import (
 // every other route relies on — not a heuristic that could drift out
 // of sync with the route table.
 func NewHandler(ops *Ops, apiToken string) http.Handler {
+	return NewAuthedHandler(ops, NewAuth(apiToken, nil, ""))
+}
+
+// NewAuthedHandler is NewHandler with an explicit Auth, so the server
+// can rotate the key and report where it listens. Besides the routes
+// below, it serves GET /api/v1/health, POST /api/v1/auth/login and
+// POST /api/v1/auth/logout without credentials (login is
+// rate-limited); every other route needs the key or a session.
+func NewAuthedHandler(ops *Ops, auth *Auth) http.Handler {
 	h := &handler{ops: ops}
 	protected := http.NewServeMux()
 
@@ -93,11 +102,20 @@ func NewHandler(ops *Ops, apiToken string) http.Handler {
 	protected.HandleFunc("GET /api/v1/proxmox/guests", h.listProxmoxGuests)
 	protected.HandleFunc("POST /api/v1/proxmox/backup", h.backupProxmoxGuest)
 
+	protected.HandleFunc("GET /api/v1/auth/session", auth.session)
+	protected.HandleFunc("POST /api/v1/auth/rotate", auth.rotate)
+	protected.HandleFunc("POST /api/v1/auth/sign-out-everywhere", auth.signOutEverywhere)
+
 	protected.HandleFunc("GET /api/v1/projects", h.listProjects)
 	protected.HandleFunc("POST /api/v1/projects/{project}/restore", h.restoreProject)
 
 	mux := http.NewServeMux()
-	mux.Handle("/api/v1/", withAuth(protected, apiToken))
+	mux.Handle("/api/v1/", auth.middleware(protected))
+	mux.HandleFunc("GET /api/v1/health", func(w http.ResponseWriter, _ *http.Request) {
+		writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
+	})
+	mux.HandleFunc("POST /api/v1/auth/login", auth.login)
+	mux.HandleFunc("POST /api/v1/auth/logout", auth.logout)
 	mux.HandleFunc("POST /api/v1/services/{name}/trigger", h.trigger)
 	return mux
 }

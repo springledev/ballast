@@ -30,7 +30,7 @@ var errNoDaemon = errors.New("no Ballast daemon is running")
 // (the same API the web UI uses), so CLI commands and the daemon never
 // disagree about state.
 type daemonClient struct {
-	base  string // e.g. http://127.0.0.1:8000, no trailing slash
+	base  string // e.g. http://127.0.0.1:8080, no trailing slash
 	token string
 	http  *http.Client
 }

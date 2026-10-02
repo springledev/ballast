@@ -63,10 +63,9 @@ type Config struct {
 }
 
 // DefaultListen is Listen when ballast.yaml does not set `listen`. It
-// stays on the loopback address until the authentication layer ships
-// (PLAN.md step 37), so a default install is never reachable from the
-// network.
-const DefaultListen = "127.0.0.1:8000"
+// is reachable from the network, which is safe only because every API
+// route requires the access key (internal/api Auth).
+const DefaultListen = "0.0.0.0:8080"
 
 // ValidateListen checks that addr looks like host:port with a port from 0
 // to 65535 (0 picks any free port; the host may be empty, meaning every
