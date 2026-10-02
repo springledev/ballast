@@ -61,6 +61,7 @@ func NewHandler(ops *Ops, apiToken string) http.Handler {
 	protected.HandleFunc("PUT /api/v1/services/{name}/secrets/{secret}", h.putSecret)
 	protected.HandleFunc("PUT /api/v1/services/{name}/secrets/{secret}/env-file", h.putEnvSecret)
 	protected.HandleFunc("POST /api/v1/env-sources/test", h.testEnvSource)
+	protected.HandleFunc("POST /api/v1/catalog/{name}/env-source", h.readEnvSource)
 
 	protected.HandleFunc("GET /api/v1/notification-channels", h.listChannels)
 	protected.HandleFunc("POST /api/v1/notification-channels", h.putChannel)
@@ -528,6 +529,23 @@ func (h *handler) testEnvSource(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string][]string{"keys": keys})
+}
+
+// readEnvSource proposes setup values from the .env in an app's folder.
+func (h *handler) readEnvSource(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Dir string `json:"dir"`
+	}
+	if err := decodeJSON(r, &body); err != nil {
+		h.writeErr(w, err, http.StatusBadRequest)
+		return
+	}
+	prop, err := h.ops.ReadEnvSource(r.Context(), r.PathValue("name"), body.Dir)
+	if err != nil {
+		h.writeErr(w, err, http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, http.StatusOK, prop)
 }
 
 // --- trigger tokens & trigger --------------------------------------------

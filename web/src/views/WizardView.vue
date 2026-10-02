@@ -2,7 +2,7 @@
 import { computed, onMounted, onUnmounted, reactive, ref, watch } from "vue";
 
 import { api } from "@/api/client";
-import type { CatalogSummary, Destination, DetectResult, DockerComposeProject, DockerHost, DockerVolume, PreflightResult, ServiceStatus } from "@/api/types";
+import type { CatalogSummary, EnvSourceProposal, Destination, DetectResult, DockerComposeProject, DockerHost, DockerVolume, PreflightResult, ServiceStatus } from "@/api/types";
 import { schedulePresets } from "@/lib/schedule";
 import { describeCheck, describeTier } from "@/lib/status";
 
@@ -28,6 +28,29 @@ const chosenHost = ref("local");
 const chosenEntry = ref("");
 const serviceName = ref("");
 const params = reactive<Record<string, string>>({});
+// One-path setup from the app's .env (spec §18.2).
+const envDir = ref("");
+const envProposal = ref<EnvSourceProposal | null>(null);
+const envError = ref("");
+const envSecrets = ref<Record<string, string>>({});
+
+async function readEnv() {
+  envError.value = "";
+  envProposal.value = null;
+  try {
+    envProposal.value = await api.readEnvSource(chosenEntry.value, envDir.value);
+  } catch (e) {
+    envError.value = e instanceof Error ? e.message : String(e);
+  }
+}
+
+function useEnvSettings() {
+  const prop = envProposal.value;
+  if (!prop || prop.missing?.length) return;
+  Object.assign(params, prop.params);
+  envSecrets.value = { ...prop.secrets };
+  envProposal.value = null;
+}
 
 const destMode = ref<"existing" | "new">("new");
 const destExisting = ref("");
@@ -97,6 +120,10 @@ function chooseEntry(id: string) {
   chosenEntry.value = id;
   serviceName.value = id;
   for (const k of Object.keys(params)) delete params[k];
+  envDir.value = "";
+  envProposal.value = null;
+  envError.value = "";
+  envSecrets.value = {};
   for (const p of selectedEntry.value?.parameters ?? []) params[p.name] = p.default ?? "";
 }
 
@@ -227,6 +254,7 @@ async function start() {
       destination: dest,
       docker_host: chosenHost.value,
       params: { ...params },
+      secrets: Object.keys(envSecrets.value).length ? { ...envSecrets.value } : undefined,
     };
     if (serviceSaved.value) {
       await api.updateService(serviceSaved.value, svc);
@@ -332,6 +360,30 @@ const resultLight = computed(() => {
       <p v-if="preflight && !preflight.docker_installed" class="hint" style="margin: 0.5rem 0 1rem">
         Docker isn't available on this server, so only plain folders can be backed up for now.
       </p>
+
+      <div v-if="selectedEntry?.env_source" class="field" style="margin-top: 1rem">
+        <label for="wiz-env-dir">{{ selectedEntry.env_source.prompt || "Path to the folder holding the app's .env file" }}</label>
+        <input id="wiz-env-dir" v-model="envDir" placeholder="/opt/immich" autocomplete="off" />
+        <p class="hint">Optional — Ballast reads the settings it needs from that folder's .env file, so you can skip the boxes below.</p>
+        <button type="button" class="secondary" :disabled="!envDir" @click="readEnv">Look for settings</button>
+        <p v-if="envError" class="hint" role="alert">{{ envError }}</p>
+        <div v-if="envProposal" style="margin-top: 0.5rem">
+          <p class="hint">Found {{ envProposal.env_file }}:</p>
+          <ul>
+            <li v-for="k in envProposal.keys" :key="k.key">
+              <code>{{ k.key }}</code>:
+              <span v-if="!k.found">not found</span>
+              <span v-else-if="k.secret">found (stays in that file, never copied)</span>
+              <span v-else>{{ k.value }}</span>
+            </li>
+          </ul>
+          <p v-if="envProposal.missing?.length" class="hint" role="alert">
+            Missing from that file: {{ envProposal.missing.join(", ") }}. Fill in the boxes below by hand instead.
+          </p>
+          <button v-else type="button" @click="useEnvSettings">Use these settings</button>
+        </div>
+        <p v-else-if="Object.keys(envSecrets).length" class="hint">Using the settings from your .env file. You can still change any box below.</p>
+      </div>
 
       <div v-for="p in selectedEntry?.parameters ?? []" :key="p.name" class="field" style="margin-top: 1rem">
         <label :for="`wiz-param-${p.name}`">{{ p.prompt || p.name }}<span v-if="!p.required" class="muted"> (optional)</span></label>

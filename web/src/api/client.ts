@@ -1,7 +1,7 @@
 import { apiToken, clearApiToken } from "./auth";
 import type {
   ApiErrorBody,
-  CatalogSummary,
+  CatalogSummary, EnvSourceProposal,
   ChannelInput,
   ChannelView,
   CreateDestinationRequest,
@@ -96,6 +96,9 @@ export const api = {
   },
   catalog(): Promise<CatalogSummary[]> {
     return request("GET", `${base}/catalog`);
+  },
+  readEnvSource(entry: string, dir: string): Promise<EnvSourceProposal> {
+    return request("POST", `${base}/catalog/${encodeURIComponent(entry)}/env-source`, { dir });
   },
   detect(host?: string): Promise<DetectResult> {
     return request("GET", `${base}/detect${host ? `?host=${encodeURIComponent(host)}` : ""}`);

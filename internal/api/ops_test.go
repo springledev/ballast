@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	bundledcatalog "github.com/springledev/ballast/catalog"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -1619,5 +1620,103 @@ func TestOpsEnvSecret(t *testing.T) {
 	}
 	if strings.Contains(h.ops.Redact.Redact("x s3cr3t-pw"), "s3cr3t-pw") {
 		t.Error("value not registered for redaction")
+	}
+}
+
+func TestOpsReadEnvSource(t *testing.T) {
+	h := newHarness(t)
+	ctx := context.Background()
+	h.ops.Redact = secretpkg.NewSet()
+	reg, err := catalog.LoadRegistry(bundledcatalog.Bundled, nil)
+	if err != nil {
+		t.Fatalf("LoadRegistry: %v", err)
+	}
+	h.ops.Catalog = reg
+
+	write := func(body string) string {
+		dir := t.TempDir()
+		if err := os.WriteFile(filepath.Join(dir, ".env"), []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		return dir
+	}
+	full := write("UPLOAD_LOCATION=./library\nDB_USERNAME=immich\nDB_PASSWORD=s3cr3t-pw\nDB_DATABASE_NAME=immich\n")
+
+	prop, err := h.ops.ReadEnvSource(ctx, "immich", full)
+	if err != nil {
+		t.Fatalf("ReadEnvSource: %v", err)
+	}
+	wantParams := map[string]string{"library_dir": filepath.Join(full, "library"), "db_user": "immich", "db_name": "immich"}
+	if !reflect.DeepEqual(prop.Params, wantParams) {
+		t.Errorf("Params = %v, want %v", prop.Params, wantParams)
+	}
+	wantRef := inventory.EnvRef(filepath.Join(full, ".env"), "DB_PASSWORD")
+	if prop.Secrets["db_password"] != wantRef || len(prop.Missing) != 0 {
+		t.Errorf("Secrets = %v Missing = %v, want db_password -> %s and nothing missing", prop.Secrets, prop.Missing, wantRef)
+	}
+	if b, _ := json.Marshal(prop); strings.Contains(string(b), "s3cr3t-pw") {
+		t.Errorf("proposal leaked the password: %s", b)
+	}
+
+	t.Run("missing required key is reported, optional is not", func(t *testing.T) {
+		p, err := h.ops.ReadEnvSource(ctx, "immich", write("UPLOAD_LOCATION=/photos\nDB_PASSWORD=x\n"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !reflect.DeepEqual(p.Missing, []string{"DB_USERNAME"}) {
+			t.Errorf("Missing = %v, want [DB_USERNAME]", p.Missing)
+		}
+	})
+	t.Run("errors", func(t *testing.T) {
+		for name, tc := range map[string]struct{ entry, dir string }{
+			"relative dir":  {"immich", "opt/immich"},
+			"no .env":       {"immich", t.TempDir()},
+			"no shortcut":   {"folder", full},
+			"unknown entry": {"nope", full},
+		} {
+			if _, err := h.ops.ReadEnvSource(ctx, tc.entry, tc.dir); !errors.Is(err, ErrValidation) {
+				t.Errorf("%s: err = %v, want ErrValidation", name, err)
+			}
+		}
+	})
+}
+
+// TestOpsEnvSourceSetupStoresReferencesOnly walks the one-path setup
+// (spec §18.2): read the folder's .env, save the proposed service, and
+// check the database holds the path+key reference but never the password.
+func TestOpsEnvSourceSetupStoresReferencesOnly(t *testing.T) {
+	h := newHarness(t)
+	h.addDestination("local")
+	ctx := context.Background()
+	reg, err := catalog.LoadRegistry(bundledcatalog.Bundled, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	h.ops.Catalog = reg
+	h.ops.Redact = secretpkg.NewSet()
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, ".env"), []byte("UPLOAD_LOCATION=/photos\nDB_USERNAME=immich\nDB_PASSWORD=s3cr3t-pw\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	prop, err := h.ops.ReadEnvSource(ctx, "immich", dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	params := map[string]string{"db_image": "img", "db_container": "c"}
+	for k, v := range prop.Params {
+		params[k] = v
+	}
+	if err := h.ops.PutService(ctx, inventory.Service{Name: "photos", CatalogEntry: "immich", Destination: "local", Params: params, Secrets: prop.Secrets}); err != nil {
+		t.Fatalf("PutService: %v", err)
+	}
+	svc, err := inventory.GetService(h.ops.DB, "photos")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := inventory.EnvRef(filepath.Join(dir, ".env"), "DB_PASSWORD"); svc.Secrets["db_password"] != want {
+		t.Errorf("stored secret = %q, want %q", svc.Secrets["db_password"], want)
+	}
+	if b, _ := json.Marshal(svc); strings.Contains(string(b), "s3cr3t-pw") {
+		t.Errorf("stored service leaked the password: %s", b)
 	}
 }

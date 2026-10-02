@@ -62,6 +62,31 @@
         }
       }
     },
+    "envSource": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["keys"],
+      "properties": {
+        "prompt": { "type": "string" },
+        "file": { "type": "string" },
+        "keys": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["key"],
+            "oneOf": [{ "required": ["param"] }, { "required": ["secret"] }],
+            "properties": {
+              "key": { "type": "string" },
+              "param": { "type": "string" },
+              "secret": { "type": "string" },
+              "optional": { "type": "boolean" }
+            }
+          }
+        }
+      }
+    },
     "backup": {
       "type": "object",
       "additionalProperties": false,

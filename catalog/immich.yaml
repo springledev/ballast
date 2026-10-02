@@ -42,6 +42,9 @@ parameters:
   - name: library_dir
     required: true
     prompt: "Path to your Immich upload/library folder on this machine (UPLOAD_LOCATION in Immich's .env file)"
+  - name: db_name
+    default: "immich"
+    prompt: "Immich's database name (DB_DATABASE_NAME in Immich's .env file)"
   - name: db_container
     required: true
     default: "immich_postgres"
@@ -54,6 +57,21 @@ parameters:
     required: true
     default: "ghcr.io/immich-app/postgres:14-vectorchord0.4.3-pgvectors0.2.0"
     prompt: "Image of Immich's database container, used for the test restore (copy it from Immich's docker-compose.yml)"
+# One-field setup (spec §18.2): give Ballast the Immich folder and it
+# reads these documented keys from its .env file. The password is only
+# ever referenced (read again on every run), never copied.
+envSource:
+  prompt: "Path to your Immich folder (the one containing docker-compose.yml and .env)"
+  keys:
+    - key: UPLOAD_LOCATION
+      param: library_dir
+    - key: DB_USERNAME
+      param: db_user
+    - key: DB_DATABASE_NAME
+      param: db_name
+      optional: true
+    - key: DB_PASSWORD
+      secret: db_password
 backup:
   strategy: dump
   dumps:

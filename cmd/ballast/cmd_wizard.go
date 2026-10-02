@@ -75,7 +75,20 @@ func runWizard(cmd *cobra.Command, args []string) error {
 			return err
 		}
 		params := make(map[string]string, len(entry.Parameters))
+		var secrets map[string]string
+		if entry.EnvSource != nil {
+			prop, err := askEnvSource(ctx, a, in, out, entry)
+			if err != nil {
+				return err
+			}
+			if prop != nil {
+				params, secrets = prop.Params, prop.Secrets
+			}
+		}
 		for _, p := range entry.Parameters {
+			if _, done := params[p.Name]; done {
+				continue
+			}
 			prompt := p.Prompt
 			if prompt == "" {
 				prompt = p.Name
@@ -97,7 +110,7 @@ func runWizard(cmd *cobra.Command, args []string) error {
 		}
 
 		if err := a.ops.PutService(ctx, inventory.Service{
-			Name: serviceName, CatalogEntry: entry.Service, Destination: destName, Params: params,
+			Name: serviceName, CatalogEntry: entry.Service, Destination: destName, Params: params, Secrets: secrets,
 		}); err != nil {
 			return fmt.Errorf("saving %s: %w", serviceName, err)
 		}
@@ -448,4 +461,49 @@ func askLine(out io.Writer, in *bufio.Reader, prompt, def string) (string, error
 		return def, nil
 	}
 	return line, nil
+}
+
+// askEnvSource offers the one-path setup (spec §18.2): the user gives
+// the app's folder, Ballast reads the documented .env keys and shows a
+// confirmation. It returns nil when the user would rather answer by
+// hand (blank path, or declining the confirmation); a folder that
+// can't be read is explained and the questions fall back to manual.
+// Secret values are never printed — only that they were found.
+func askEnvSource(ctx context.Context, a *app, in *bufio.Reader, out io.Writer, entry *catalog.Entry) (*api.EnvSourceProposal, error) {
+	prompt := entry.EnvSource.Prompt
+	if prompt == "" {
+		prompt = "Path to the folder holding the app's .env file"
+	}
+	dir, err := askLine(out, in, prompt+" (blank to fill in each setting by hand)", "")
+	if err != nil || dir == "" {
+		return nil, err
+	}
+	prop, err := a.ops.ReadEnvSource(ctx, entry.Service, dir)
+	if err != nil {
+		fmt.Fprintf(out, "  Couldn't use that folder: %v\n  Let's fill the settings in by hand instead.\n", err)
+		return nil, nil
+	}
+	fmt.Fprintf(out, "  Found %s:\n", prop.EnvFile)
+	for _, k := range prop.Keys {
+		switch {
+		case !k.Found:
+			fmt.Fprintf(out, "    %-20s not found\n", k.Key)
+		case k.Secret != "":
+			fmt.Fprintf(out, "    %-20s found (kept in that file, never copied)\n", k.Key)
+		default:
+			fmt.Fprintf(out, "    %-20s %s\n", k.Key, k.Value)
+		}
+	}
+	if len(prop.Missing) > 0 {
+		fmt.Fprintf(out, "  Missing from the file: %s. Let's fill the settings in by hand instead.\n", strings.Join(prop.Missing, ", "))
+		return nil, nil
+	}
+	ok, err := askLine(out, in, "Use these settings? (yes/no)", "yes")
+	if err != nil {
+		return nil, err
+	}
+	if !strings.HasPrefix(strings.ToLower(ok), "y") {
+		return nil, nil
+	}
+	return &prop, nil
 }

@@ -19,6 +19,18 @@ export interface CatalogSummary {
   name: string;
   description: string;
   parameters?: CatalogParameter[];
+  /** Present when setup can read the app's settings from its .env file. */
+  env_source?: { prompt?: string };
+}
+
+/** What reading an app's .env found. Secret values are never included. */
+export interface EnvSourceProposal {
+  env_file: string;
+  keys: { key: string; found: boolean; secret?: string; param?: string; value?: string }[];
+  params: Record<string, string>;
+  /** Secret name -> reference (file path + key only). */
+  secrets: Record<string, string>;
+  missing?: string[];
 }
 
 /** How many of the newest daily/weekly/monthly backups to keep. */
@@ -33,6 +45,8 @@ export interface Service {
   catalog_entry: string;
   destination: string;
   params?: Record<string, string>;
+  /** Secret name -> .env reference (path + key only; never a value). */
+  secrets?: Record<string, string>;
   containers?: Record<string, string>;
   /** Which Docker host runs this service's containers. Defaults to "local". */
   docker_host?: string;

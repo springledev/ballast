@@ -21,11 +21,14 @@ type Entry struct {
 	// Discovery declares, per referenced container/guest, how to find
 	// it at job-run time instead of hardcoding a name (spec §6.1). Keys
 	// become {{ .Discovery.<name> }} placeholders.
-	Discovery     map[string]DiscoveryRule `yaml:"discovery,omitempty" json:"discovery,omitempty"`
-	Parameters    []Parameter              `yaml:"parameters,omitempty" json:"parameters,omitempty"`
-	Backup        Backup                   `yaml:"backup" json:"backup"`
-	Verify        Verify                   `yaml:"verify" json:"verify"`
-	Notifications Notifications            `yaml:"notifications,omitempty" json:"notifications,omitempty"`
+	Discovery  map[string]DiscoveryRule `yaml:"discovery,omitempty" json:"discovery,omitempty"`
+	Parameters []Parameter              `yaml:"parameters,omitempty" json:"parameters,omitempty"`
+	// EnvSource lets setup read the app's documented .env keys from
+	// one directory path (spec §18.2).
+	EnvSource     *EnvSource    `yaml:"envSource,omitempty" json:"envSource,omitempty"`
+	Backup        Backup        `yaml:"backup" json:"backup"`
+	Verify        Verify        `yaml:"verify" json:"verify"`
+	Notifications Notifications `yaml:"notifications,omitempty" json:"notifications,omitempty"`
 }
 
 // Display holds user-facing names shown in the CLI and web UI.
@@ -70,6 +73,30 @@ type Parameter struct {
 	// host; empty means a plain text box. It never changes how the
 	// value is used — the parameter is still an ordinary string.
 	Picker string `yaml:"picker,omitempty" json:"picker,omitempty"`
+}
+
+// EnvSource declares the documented keys of an app's .env file, giving
+// a one-field setup: the user supplies the app's directory and setup
+// reads each key (spec §18.2). A key fills either a parameter (a
+// non-secret value such as a database user, shown for confirmation) or
+// a secret (stored only as an env-file reference, never copied).
+type EnvSource struct {
+	// Prompt asks for the app's directory in plain English.
+	Prompt string `yaml:"prompt,omitempty" json:"prompt,omitempty"`
+	// File is the .env file name inside that directory (default ".env").
+	File string         `yaml:"file,omitempty" json:"file,omitempty"`
+	Keys []EnvSourceKey `yaml:"keys" json:"keys"`
+}
+
+// EnvSourceKey maps one .env key to a parameter or a secret name.
+// Exactly one of Param and Secret is set.
+type EnvSourceKey struct {
+	Key    string `yaml:"key" json:"key"`
+	Param  string `yaml:"param,omitempty" json:"param,omitempty"`
+	Secret string `yaml:"secret,omitempty" json:"secret,omitempty"`
+	// Optional keys that are absent are skipped instead of reported
+	// as missing.
+	Optional bool `yaml:"optional,omitempty" json:"optional,omitempty"`
 }
 
 // Backup describes how to create the backup artifacts.

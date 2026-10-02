@@ -1,6 +1,7 @@
 package catalog
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -771,5 +772,24 @@ func TestResolveSmokeTemplates(t *testing.T) {
 	}
 	if err := bad.Resolve(TemplateContext{Params: map[string]string{"container": "vw"}}); err == nil || !strings.Contains(err.Error(), "smoke container") {
 		t.Errorf("Resolve with unknown param = %v, want a smoke container error", err)
+	}
+}
+
+func TestLoadEnvSource(t *testing.T) {
+	t.Parallel()
+	const block = "\nenvSource:\n  keys:\n    - key: UPLOAD_LOCATION\n      param: %s\n    - key: DB_PASSWORD\n      secret: db_password\n"
+	e, err := Load([]byte(validEntry + fmt.Sprintf(block, "library_dir")))
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if e.EnvSource == nil || len(e.EnvSource.Keys) != 2 || e.EnvSource.Keys[1].Secret != "db_password" {
+		t.Errorf("EnvSource = %+v", e.EnvSource)
+	}
+	if _, err := Load([]byte(validEntry + fmt.Sprintf(block, "nope"))); err == nil || !strings.Contains(err.Error(), "does not declare") {
+		t.Errorf("unknown param err = %v, want it to say the parameter is not declared", err)
+	}
+	both := validEntry + "\nenvSource:\n  keys:\n    - key: K\n      param: library_dir\n      secret: s\n"
+	if _, err := Load([]byte(both)); err == nil {
+		t.Error("key with both param and secret accepted, want rejection")
 	}
 }

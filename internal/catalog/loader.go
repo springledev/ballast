@@ -98,7 +98,28 @@ func Load(data []byte) (*Entry, error) {
 			return nil, fmt.Errorf("detect.docker.imagePattern %q is not a valid regular expression: %w", entry.Detect.Docker.ImagePattern, err)
 		}
 	}
+	if err := entry.validateEnvSource(); err != nil {
+		return nil, err
+	}
 	return entry, nil
+}
+
+// validateEnvSource checks that every envSource key fills a declared
+// parameter, so a typo in a catalog file is caught at load time.
+func (e *Entry) validateEnvSource() error {
+	if e.EnvSource == nil {
+		return nil
+	}
+	params := make(map[string]bool, len(e.Parameters))
+	for _, p := range e.Parameters {
+		params[p.Name] = true
+	}
+	for _, k := range e.EnvSource.Keys {
+		if k.Param != "" && !params[k.Param] {
+			return fmt.Errorf("envSource key %s fills parameter %q, which this entry does not declare", k.Key, k.Param)
+		}
+	}
+	return nil
 }
 
 // toJSONCompatible converts a yaml.v3-decoded value (map[any]any keyed by

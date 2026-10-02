@@ -811,6 +811,80 @@ func (o *Ops) TestEnvSource(ctx context.Context, path string) ([]string, error) 
 	return keys, nil
 }
 
+// EnvSourceKeyStatus is one expected .env key and whether it was found.
+// It never carries a value for secret keys.
+type EnvSourceKeyStatus struct {
+	Key    string `json:"key"`
+	Found  bool   `json:"found"`
+	Secret string `json:"secret,omitempty"`
+	Param  string `json:"param,omitempty"`
+	// Value is set only for non-secret parameter keys (a database
+	// user, a folder), so setup can show them for confirmation.
+	Value string `json:"value,omitempty"`
+}
+
+// EnvSourceProposal is the confirmation screen for one-path setup.
+type EnvSourceProposal struct {
+	EnvFile string               `json:"env_file"`
+	Keys    []EnvSourceKeyStatus `json:"keys"`
+	// Params are the suggested catalog parameter values.
+	Params map[string]string `json:"params"`
+	// Secrets maps a secret name to its env-file reference
+	// (path + key only, never a value).
+	Secrets map[string]string `json:"secrets"`
+	// Missing lists required keys that are not in the file.
+	Missing []string `json:"missing,omitempty"`
+}
+
+// ReadEnvSource finds the app's .env inside dir using the catalog
+// entry's envSource keys (spec §18.2) and proposes parameter values
+// and secret references. Nothing is saved, and secret values are never
+// returned: only their reference.
+func (o *Ops) ReadEnvSource(ctx context.Context, catalogEntry, dir string) (EnvSourceProposal, error) {
+	entry, ok := o.Catalog.Get(catalogEntry)
+	if !ok {
+		return EnvSourceProposal{}, fmt.Errorf("%w: catalog entry %q not found", ErrValidation, catalogEntry)
+	}
+	if entry.EnvSource == nil {
+		return EnvSourceProposal{}, fmt.Errorf("%w: %s has no .env shortcut; fill in its settings by hand", ErrValidation, catalogEntry)
+	}
+	if !filepath.IsAbs(dir) {
+		return EnvSourceProposal{}, fmt.Errorf("%w: the folder path %q must be an absolute path (for example /opt/immich)", ErrValidation, dir)
+	}
+	file := entry.EnvSource.File
+	if file == "" {
+		file = ".env"
+	}
+	envPath := filepath.Join(dir, file)
+	vars, err := dotenv.ReadFile(envPath)
+	if err != nil {
+		return EnvSourceProposal{}, fmt.Errorf("%w: %v", ErrValidation, err)
+	}
+	prop := EnvSourceProposal{EnvFile: envPath, Params: map[string]string{}, Secrets: map[string]string{}}
+	for _, k := range entry.EnvSource.Keys {
+		v, found := vars[k.Key]
+		st := EnvSourceKeyStatus{Key: k.Key, Found: found, Secret: k.Secret, Param: k.Param}
+		switch {
+		case !found:
+			if !k.Optional {
+				prop.Missing = append(prop.Missing, k.Key)
+			}
+		case k.Secret != "":
+			o.Redact.Add(v)
+			prop.Secrets[k.Secret] = inventory.EnvRef(envPath, k.Key)
+		default:
+			// Docker resolves relative paths against the compose folder.
+			if v != "" && strings.HasPrefix(v, ".") {
+				v = filepath.Join(dir, v)
+			}
+			st.Value = v
+			prop.Params[k.Param] = v
+		}
+		prop.Keys = append(prop.Keys, st)
+	}
+	return prop, nil
+}
+
 // --- Destinations --------------------------------------------------------
 
 // ListDestinations lists every configured destination.
@@ -1343,6 +1417,8 @@ type CatalogSummary struct {
 	Name        string              `json:"name"`
 	Description string              `json:"description"`
 	Parameters  []catalog.Parameter `json:"parameters,omitempty"`
+	// EnvSource, when set, offers one-path setup from the app's .env.
+	EnvSource *catalog.EnvSource `json:"env_source,omitempty"`
 }
 
 // ListCatalog returns every loaded catalog entry, sorted by service
@@ -1357,6 +1433,7 @@ func (o *Ops) ListCatalog() []CatalogSummary {
 			Name:        e.Display.Name,
 			Description: e.Display.Description,
 			Parameters:  e.Parameters,
+			EnvSource:   e.EnvSource,
 		})
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Service < out[j].Service })
