@@ -32,6 +32,6 @@ backup:
   compose:
     project: "{{ .Params.project }}"
 verify:
-  method: archive-integrity
+  methods: [archive-integrity, compose-config]
 notifications:
   failureVerbosity: full

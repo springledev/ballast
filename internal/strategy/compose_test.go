@@ -54,6 +54,10 @@ if [ "$1" = "run" ]; then
     done
     exit 0
   fi
+  if [ "$script" = 'cd /data && cat "$1"' ]; then
+    printf '%s' "$STUB_YAML"
+    exit 0
+  fi
   if [ "$script" = 'cd /data && tar -cf - "$@"' ]; then
     for f in "$@"; do
       ok=0
@@ -78,6 +82,10 @@ echo "stub: unhandled command: $*" >&2
 exit 1
 `
 
+// stubYAML is the body the stub's `cat` returns for every compose file
+// (tests that care set it; the tests here are not parallel).
+var stubYAML string
+
 // composeStub wires a docker stub that lists one project (via psJSON,
 // one `docker ps -a --format {{json .}}` line per container) and
 // answers probe/tar calls using exists (space-separated file names)
@@ -96,6 +104,7 @@ func composeStub(t *testing.T, psJSON []string, exists, payload string) (Options
 		"STUB_PS_OUTPUT="+psPath,
 		"STUB_EXISTS="+exists,
 		"STUB_TAR_PAYLOAD="+payload,
+		"STUB_YAML="+stubYAML,
 	)}
 	return Options{Runner: r, Docker: dockerhost.NewLocal(bin)}, logPath
 }
@@ -160,8 +169,8 @@ func TestComposeBackup(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Backup: %v", err)
 	}
-	if len(res.Artifacts) != 2 {
-		t.Fatalf("artifacts = %+v, want 2", res.Artifacts)
+	if len(res.Artifacts) != 3 {
+		t.Fatalf("artifacts = %+v, want 3", res.Artifacts)
 	}
 	if len(res.Skipped) != 0 {
 		t.Errorf("skipped = %v, want none (every declared file existed)", res.Skipped)
@@ -272,5 +281,67 @@ func TestComposeFileNames(t *testing.T) {
 				t.Errorf("composeFileNames(%v) = %v, want %v", tt.in, got, tt.want)
 			}
 		})
+	}
+}
+
+func TestComposeEnvFileRefs(t *testing.T) {
+	tests := []struct {
+		name        string
+		yaml        string
+		wantIn      []string
+		wantOutside []string
+		wantErr     bool
+	}{
+		{"none", "services:\n  a:\n    image: x\n", nil, nil, false},
+		{"string", "services:\n  a:\n    env_file: app.env\n", []string{"app.env"}, nil, false},
+		{"list and dedupe", "services:\n  a:\n    env_file: [a.env, ./b.env]\n  b:\n    env_file:\n      - a.env\n", []string{"a.env", "b.env"}, nil, false},
+		{"long form", "services:\n  a:\n    env_file:\n      - path: cfg/x.env\n        required: false\n", []string{"cfg/x.env"}, nil, false},
+		{"outside", "services:\n  a:\n    env_file: [../shared.env, /etc/x.env]\n", nil, []string{"../shared.env", "/etc/x.env"}, false},
+		{"bad yaml", "services: [", nil, nil, true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			in, out, err := composeEnvFileRefs([]byte(tt.yaml))
+			if (err != nil) != tt.wantErr {
+				t.Fatalf("err = %v, wantErr %v", err, tt.wantErr)
+			}
+			if strings.Join(in, ",") != strings.Join(tt.wantIn, ",") || strings.Join(out, ",") != strings.Join(tt.wantOutside, ",") {
+				t.Errorf("got inside=%v outside=%v, want %v / %v", in, out, tt.wantIn, tt.wantOutside)
+			}
+		})
+	}
+}
+
+func TestComposeBackupCapturesEnvFilesAndManifest(t *testing.T) {
+	stubYAML = "services:\n  app:\n    env_file: [secrets/app.env, ../up.env]\n    environment:\n      PW: hunter2\n"
+	defer func() { stubYAML = "" }()
+	opts, _ := composeStub(t, immichPSLines(), "docker-compose.yml .env secrets/app.env", "TARBYTES")
+	s, err := For(composeEntry("immich"), opts)
+	if err != nil {
+		t.Fatalf("For: %v", err)
+	}
+	res, err := s.Backup(context.Background(), Request{WorkDir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("Backup: %v", err)
+	}
+	if len(res.Artifacts) != 3 || res.Artifacts[2].Name != "compose-manifest" {
+		t.Fatalf("artifacts = %+v", res.Artifacts)
+	}
+	data, _ := os.ReadFile(res.Artifacts[2].Path)
+	var m composeManifest
+	if err := json.Unmarshal(data, &m); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Join(m.Captured, ",") != "docker-compose.yml,.env,secrets/app.env" || strings.Join(m.EnvFiles, ",") != "secrets/app.env" || !m.ProjectEnv {
+		t.Errorf("manifest = %+v", m)
+	}
+	if strings.Join(m.ConfigFiles, ",") != "docker-compose.yml" {
+		t.Errorf("merge order = %v", m.ConfigFiles)
+	}
+	if len(res.Skipped) != 1 || !strings.Contains(res.Skipped[0], "../up.env") {
+		t.Errorf("skipped = %v, want the outside env_file named", res.Skipped)
+	}
+	if strings.Contains(string(data), "hunter2") {
+		t.Error("manifest leaks a value from the compose file")
 	}
 }

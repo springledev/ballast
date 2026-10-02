@@ -89,6 +89,8 @@ func (s *Compose) Backup(ctx context.Context, req Request) (*Result, error) {
 	}
 	wanted := append(append([]string(nil), declared...), ".env")
 
+	// First pass: which of the declared files (and .env) exist. They
+	// are read to find the env_file targets the stack also needs.
 	existing, err := s.probeFiles(ctx, p.WorkingDir, wanted)
 	if err != nil {
 		return nil, fmt.Errorf("service %s: compose project %s: checking for config files: %w", s.entry.Service, project, err)
@@ -105,7 +107,42 @@ func (s *Compose) Backup(ctx context.Context, req Request) (*Result, error) {
 		}
 	}
 
-	cfg, err := s.archiveConfig(ctx, req.WorkDir, p.WorkingDir, existing)
+	var envInside, envOutside []string
+	for _, name := range declared {
+		if !slices.Contains(existing, name) {
+			continue
+		}
+		body, err := s.readFile(ctx, p.WorkingDir, name)
+		if err != nil {
+			return nil, fmt.Errorf("service %s: compose project %s: reading %s: %w", s.entry.Service, project, name, err)
+		}
+		in, out, err := composeEnvFileRefs(body)
+		if err != nil {
+			return nil, fmt.Errorf("service %s: compose project %s: %s: %w", s.entry.Service, project, name, err)
+		}
+		envInside = appendUnique(envInside, in...)
+		envOutside = appendUnique(envOutside, out...)
+	}
+	var envCaptured []string
+	if len(envInside) > 0 {
+		found, err := s.probeFiles(ctx, p.WorkingDir, envInside)
+		if err != nil {
+			return nil, fmt.Errorf("service %s: compose project %s: checking for env_file targets: %w", s.entry.Service, project, err)
+		}
+		for _, name := range envInside {
+			if slices.Contains(found, name) {
+				envCaptured = append(envCaptured, name)
+			} else {
+				res.Skipped = append(res.Skipped, name)
+			}
+		}
+	}
+	for _, name := range envOutside {
+		res.Skipped = append(res.Skipped, name+" (outside the project folder)")
+	}
+	toArchive := appendUnique(append([]string(nil), existing...), envCaptured...)
+
+	cfg, err := s.archiveConfig(ctx, req.WorkDir, p.WorkingDir, toArchive)
 	if err != nil {
 		return nil, fmt.Errorf("service %s: compose project %s: archiving config: %w", s.entry.Service, project, err)
 	}
@@ -116,7 +153,75 @@ func (s *Compose) Backup(ctx context.Context, req Request) (*Result, error) {
 		return nil, fmt.Errorf("service %s: compose project %s: writing labels: %w", s.entry.Service, project, err)
 	}
 	res.Artifacts = append(res.Artifacts, labels)
+
+	manifest, err := writeComposeManifest(req.WorkDir, composeManifest{
+		Project:     p.Name,
+		WorkingDir:  p.WorkingDir,
+		ConfigFiles: declared,
+		Captured:    toArchive,
+		EnvFiles:    envCaptured,
+		ProjectEnv:  slices.Contains(existing, ".env"),
+		Missing:     res.Skipped,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("service %s: compose project %s: writing manifest: %w", s.entry.Service, project, err)
+	}
+	res.Artifacts = append(res.Artifacts, manifest)
 	return res, nil
+}
+
+// readFile returns the contents of one plain file under workingDir,
+// read through a throwaway read-only helper container (name as argv,
+// never interpolated).
+func (s *Compose) readFile(ctx context.Context, workingDir, name string) ([]byte, error) {
+	helper := composeHelperName()
+	args := []string{"run", "--rm", "--name", helper, "--network", "none",
+		"-v", workingDir + ":/data:ro", s.opts.volumeHelperImage(),
+		"sh", "-c", `cd /data && cat "$1"`, "sh", name}
+	var out bytes.Buffer
+	if _, err := s.opts.Runner.Run(ctx, nil, &out, s.opts.Docker.Command(nil, args...)); err != nil {
+		s.opts.removeHelper(helper)
+		return nil, err
+	}
+	return out.Bytes(), nil
+}
+
+// appendUnique appends each item of more not already in list.
+func appendUnique(list []string, more ...string) []string {
+	for _, m := range more {
+		if !slices.Contains(list, m) {
+			list = append(list, m)
+		}
+	}
+	return list
+}
+
+// composeManifest is the JSON shape of compose-manifest.json: what the
+// snapshot holds and in which order Compose merges the files. It
+// records file names only — never file contents or values — so it is
+// safe to show in the UI and API (spec rule 2); the values live only
+// in compose-config.tar inside the encrypted restic repository.
+type composeManifest struct {
+	Project     string   `json:"project"`
+	WorkingDir  string   `json:"working_dir"`
+	ConfigFiles []string `json:"config_files_merge_order"`
+	Captured    []string `json:"captured_files"`
+	EnvFiles    []string `json:"env_files"`
+	ProjectEnv  bool     `json:"project_env_captured"`
+	Missing     []string `json:"not_captured,omitempty"`
+}
+
+// writeComposeManifest writes <workDir>/compose-manifest.json.
+func writeComposeManifest(workDir string, m composeManifest) (Artifact, error) {
+	p := filepath.Join(workDir, "compose-manifest.json")
+	data, err := json.MarshalIndent(m, "", "  ")
+	if err != nil {
+		return Artifact{}, fmt.Errorf("encoding manifest: %w", err)
+	}
+	if err := os.WriteFile(p, data, 0o600); err != nil {
+		return Artifact{}, fmt.Errorf("writing manifest file: %w", err)
+	}
+	return Artifact{Name: "compose-manifest", Path: p, Format: "json"}, nil
 }
 
 // probeFiles reports which of names exist as plain files directly

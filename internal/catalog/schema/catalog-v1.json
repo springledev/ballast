@@ -259,7 +259,7 @@
   },
   "$defs": {
     "verifyMethod": {
-      "enum": ["archive-integrity", "db-restore-drill", "container-restore", "read-back", "restart-smoke", "exec-script"]
+      "enum": ["archive-integrity", "db-restore-drill", "container-restore", "read-back", "restart-smoke", "exec-script", "compose-config"]
     },
     "port": { "type": "integer", "minimum": 1, "maximum": 65535 }
   }

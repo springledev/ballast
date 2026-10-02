@@ -32,7 +32,13 @@ func seedComposeProject(t *testing.T, ctx context.Context) (project, workingDir 
 	project = "ballast-compose-it-" + suffix
 
 	workingDir = t.TempDir()
-	composeYAML := "services:\n  web:\n    image: busybox\n  db:\n    image: busybox\n"
+	composeYAML := "services:\n  web:\n    image: busybox\n    env_file: secrets/web.env\n  db:\n    image: busybox\n"
+	if err := os.MkdirAll(filepath.Join(workingDir, "secrets"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(workingDir, "secrets", "web.env"), []byte("WEB_TOKEN=env-file-secret\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
 	if err := os.WriteFile(filepath.Join(workingDir, "docker-compose.yml"), []byte(composeYAML), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -141,14 +147,17 @@ func TestPipelineComposeRoundTripIntegration(t *testing.T) {
 	if err != nil {
 		t.Fatalf("VerificationResults: %v", err)
 	}
-	archiveChecked := false
+	archiveChecked, composeChecked := false, false
 	for _, res := range results {
-		if res.Method == "archive-integrity" {
+		switch res.Method {
+		case "archive-integrity":
 			archiveChecked = res.Passed
+		case "compose-config":
+			composeChecked = res.Passed
 		}
 	}
-	if !archiveChecked {
-		t.Errorf("no passing archive-integrity record: %+v", results)
+	if !archiveChecked || !composeChecked {
+		t.Errorf("want passing archive-integrity and compose-config records: %+v", results)
 	}
 
 	entries, err := repo.LS(ctx, "latest", "")
@@ -183,6 +192,23 @@ func TestPipelineComposeRoundTripIntegration(t *testing.T) {
 	members := strings.Fields(string(out))
 	if !slicesContain(members, "docker-compose.yml") || !slicesContain(members, ".env") {
 		t.Errorf("config archive members = %v, want docker-compose.yml and .env", members)
+	}
+
+	if !slicesContain(members, "secrets/web.env") {
+		t.Errorf("config archive members = %v, want the env_file target secrets/web.env", members)
+	}
+	// Up-from-scratch proof: unpack only what the snapshot holds and
+	// let Compose resolve the stack from it (fails if env_file is gone).
+	restored := filepath.Join(tmp, "restored")
+	if err := os.MkdirAll(restored, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if out, err := exec.CommandContext(ctx, "tar", "-xf", filepath.Join(tmp, "a.tar"), "-C", restored).CombinedOutput(); err != nil {
+		t.Fatalf("tar -xf: %v: %s", err, out)
+	}
+	if out, err := exec.CommandContext(ctx, "docker", "compose", "--project-directory", restored,
+		"-f", filepath.Join(restored, "docker-compose.yml"), "config", "-q").CombinedOutput(); err != nil {
+		t.Fatalf("restored snapshot cannot be read by docker compose: %v: %s", err, out)
 	}
 
 	var labelsJSON bytes.Buffer

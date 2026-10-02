@@ -133,6 +133,7 @@ const (
 	MethodArchiveIntegrity = "archive-integrity"
 	MethodDBRestoreDrill   = "db-restore-drill"
 	MethodRestartSmoke     = "restart-smoke"
+	MethodComposeConfig    = "compose-config"
 )
 
 // Factory builds the Checker for one method from a resolved catalog
@@ -204,6 +205,7 @@ func DefaultRegistry() *Registry {
 	})
 	r.Register(MethodDBRestoreDrill, newDBRestoreDrill)
 	r.Register(MethodRestartSmoke, newRestartSmoke)
+	r.Register(MethodComposeConfig, newComposeConfig)
 	return r
 }
 
