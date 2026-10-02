@@ -73,7 +73,9 @@ func newRouted(ch Channel, events, tiers []string) Channel {
 
 // Send delivers the event only if this channel is routed to want it.
 func (r *routedChannel) Send(ctx context.Context, ev Event) error {
-	if ev.Type != EventTest {
+	// Test messages and the weekly digest skip the filters: a digest is
+	// governed by the channel's own digest opt-in instead.
+	if ev.Type != EventTest && ev.Type != EventWeeklyDigest {
 		if len(r.events) > 0 && !r.events[string(ev.Type)] {
 			return nil
 		}

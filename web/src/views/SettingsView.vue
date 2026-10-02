@@ -15,6 +15,8 @@ const channelSaving = ref(false);
 const channelTesting = ref<Set<string>>(new Set());
 const channelTestResult = reactive<Record<string, { ok: boolean; text: string }>>({});
 const editingChannelName = ref<string | null>(null);
+const digestSending = ref(false);
+const digestResult = ref<{ ok: boolean; text: string } | null>(null);
 
 interface ChannelForm {
   type: ChannelType;
@@ -32,6 +34,7 @@ interface ChannelForm {
   clearToken: boolean;
   applyToAll: boolean;
   services: string[];
+  digest: boolean;
 }
 
 function blankChannelForm(): ChannelForm {
@@ -51,6 +54,7 @@ function blankChannelForm(): ChannelForm {
     clearToken: false,
     applyToAll: true,
     services: [],
+    digest: false,
   };
 }
 
@@ -105,6 +109,7 @@ function editChannel(ch: ChannelView) {
   channelForm.clearToken = false;
   channelForm.applyToAll = ch.apply_to_all;
   channelForm.services = [...ch.services];
+  channelForm.digest = !!ch.digest;
   showChannelForm.value = true;
 }
 
@@ -144,6 +149,7 @@ async function submitChannel() {
         type: channelForm.type,
         events: channelForm.events,
         tiers: channelForm.tiers.split(",").map((t) => t.trim()).filter(Boolean),
+        digest: channelForm.digest,
         email: {
           host: channelForm.smtpHost.trim(),
           port: Number(channelForm.smtpPort),
@@ -179,6 +185,21 @@ async function testChannel(name: string) {
     channelTestResult[name] = { ok: false, text: (e as Error).message };
   } finally {
     channelTesting.value.delete(name);
+  }
+}
+
+async function sendDigestNow() {
+  digestSending.value = true;
+  digestResult.value = null;
+  try {
+    const res = await api.sendDigest();
+    digestResult.value = res.error
+      ? { ok: false, text: res.error }
+      : { ok: true, text: res.message || `Digest sent to ${res.sent.join(", ")}.` };
+  } catch (e) {
+    digestResult.value = { ok: false, text: (e as Error).message };
+  } finally {
+    digestSending.value = false;
   }
 }
 
@@ -266,6 +287,7 @@ onMounted(() => {
                 {{ ch.url_display }}
                 <span v-if="ch.has_token" class="badge">protected</span>
               </div>
+              <div v-if="ch.digest" class="item-sub hint">Gets the weekly digest</div>
               <div v-if="ch.events?.length || ch.tiers?.length" class="item-sub hint">
                 Only sends: {{ [...(ch.events ?? []), ...(ch.tiers ?? []).map((t) => t + " copy")].join(", ") }}
               </div>
@@ -293,7 +315,21 @@ onMounted(() => {
         </li>
       </ul>
 
-      <button v-if="!showChannelForm" class="btn" type="button" @click="openChannelForm">Add a channel</button>
+      <div v-if="!showChannelForm" class="actions">
+        <button class="btn" type="button" @click="openChannelForm">Add a channel</button>
+        <button v-if="channels.length" class="btn" type="button" :disabled="digestSending" @click="sendDigestNow">
+          {{ digestSending ? "Sending…" : "Send weekly digest now" }}
+        </button>
+      </div>
+      <p
+        v-if="digestResult && !showChannelForm"
+        class="notice"
+        :class="digestResult.ok ? 'notice--ok' : 'notice--error'"
+        style="margin: 0.8rem 0 0"
+        role="status"
+      >
+        {{ digestResult.text }}
+      </p>
 
       <form v-else class="panel" @submit.prevent="submitChannel">
         <h4>{{ editingChannelName ? "Edit channel" : "Add a notification channel" }}</h4>
@@ -385,6 +421,11 @@ onMounted(() => {
           <input id="ch-tiers" v-model="channelForm.tiers" placeholder="restic" autocomplete="off" />
           <p class="hint">Leave blank to hear about every copy.</p>
         </div>
+
+        <label class="check">
+          <input v-model="channelForm.digest" type="checkbox" />
+          <span class="check-text">Send a weekly digest here (one summary message per week)</span>
+        </label>
 
         <label v-if="editingChannelName && channelForm.token === ''" class="check">
           <input v-model="channelForm.clearToken" type="checkbox" />

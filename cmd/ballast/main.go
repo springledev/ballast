@@ -186,7 +186,43 @@ func runScheduleLoop(ctx context.Context, a *app) {
 func sweepDue(ctx context.Context, a *app, now time.Time) error {
 	err := a.coord.RunDue(ctx, now)
 	maybeSweepFreshness(ctx, a)
+	maybeSendDigest(ctx, a, now)
 	return err
+}
+
+// digestMetaKey records when the weekly digest was last delivered.
+const digestMetaKey = "digest_last_sent"
+
+// digestInterval is how often the weekly digest is sent.
+const digestInterval = 7 * 24 * time.Hour
+
+// maybeSendDigest sends the weekly digest (api.Ops.SendDigest) when at
+// least digestInterval has passed since one was last delivered. It is
+// only recorded as sent when a channel delivered it, so turning the
+// digest on for a channel sends the first one at the next sweep. With
+// no opted-in channel it does nothing; other failures are logged, never
+// fatal, like the freshness sweep.
+func maybeSendDigest(ctx context.Context, a *app, now time.Time) {
+	if last, err := a.store.MetaGet(digestMetaKey); err == nil {
+		if t, perr := time.Parse(time.RFC3339, last); perr == nil && now.Sub(t) < digestInterval {
+			return
+		}
+	} else if !errors.Is(err, store.ErrMetaNotFound) {
+		a.logf("checking weekly digest schedule: %v", err)
+		return
+	}
+	res, err := a.ops.SendDigest(ctx)
+	if errors.Is(err, api.ErrNoDigestChannels) {
+		return
+	}
+	if err != nil {
+		a.logf("weekly digest: %v", err)
+	}
+	if len(res.Sent) > 0 {
+		if err := a.store.MetaSet(digestMetaKey, now.UTC().Format(time.RFC3339)); err != nil {
+			a.logf("recording weekly digest time: %v", err)
+		}
+	}
 }
 
 // nextMinuteBoundary returns the next wall-clock minute boundary

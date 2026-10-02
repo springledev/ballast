@@ -23,7 +23,7 @@ export function buildChannelInput(
   clearToken: boolean,
   applyToAll: boolean,
   services: string[],
-  extra: { type?: ChannelType; email?: EmailSettings; events?: string[]; tiers?: string[] } = {},
+  extra: { type?: ChannelType; email?: EmailSettings; events?: string[]; tiers?: string[]; digest?: boolean } = {},
 ): ChannelInput {
   const input: ChannelInput = {
     name,
@@ -33,6 +33,9 @@ export function buildChannelInput(
     events: extra.events ?? [],
     tiers: extra.tiers ?? [],
   };
+  if (extra.digest !== undefined) {
+    input.digest = extra.digest;
+  }
   // Blank means "keep the stored address" when editing; email has none.
   if (input.type !== "email" && url.trim() !== "") {
     input.url = url.trim();

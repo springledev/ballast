@@ -4,7 +4,8 @@ import { useRouter } from "vue-router";
 
 import TrafficLight from "@/components/TrafficLight.vue";
 import { api } from "@/api/client";
-import type { ServiceStatus } from "@/api/types";
+import type { HealthItem, ServiceStatus } from "@/api/types";
+import { anyServiceVerified, checklistComplete, firstRunChecklist } from "@/lib/checklist";
 import { formatAgeSeconds, formatDateTime, formatRelative } from "@/lib/format";
 import { describeSchedule } from "@/lib/schedule";
 import { describeTier, summarize, worstLight } from "@/lib/status";
@@ -14,6 +15,45 @@ const services = ref<ServiceStatus[]>([]);
 const loading = ref(true);
 const error = ref("");
 const starting = ref<Set<string>>(new Set());
+
+const healthItems = ref<HealthItem[]>([]);
+// Counts for the first-run checklist; null until known (or if they can't be read).
+const setupCounts = ref<{ destinations: number; channels: number } | null>(null);
+
+const problems = computed(() => healthItems.value.filter((h) => h.status !== "ok"));
+const checklist = computed(() =>
+  setupCounts.value
+    ? firstRunChecklist({
+        ...setupCounts.value,
+        services: services.value.length,
+        anyVerified: anyServiceVerified(services.value),
+      })
+    : [],
+);
+const showChecklist = computed(() => checklist.value.length > 0 && !checklistComplete(checklist.value));
+
+const healthLabels: Record<HealthItem["area"], string> = {
+  "self-backup": "Ballast's own backup",
+  disk: "Disk space",
+  credentials: "Credentials",
+};
+
+async function loadSetup() {
+  try {
+    const [destinations, channels] = await Promise.all([api.listDestinations(), api.listChannels()]);
+    setupCounts.value = { destinations: destinations.length, channels: channels.length };
+  } catch {
+    setupCounts.value = null;
+  }
+}
+
+async function loadHealth() {
+  try {
+    healthItems.value = (await api.ballastHealth()).items ?? [];
+  } catch {
+    healthItems.value = [];
+  }
+}
 
 const summary = computed(() => summarize(services.value));
 const anyRunning = computed(() => services.value.some((s) => s.tiers.some((t) => t.light === "running")));
@@ -29,6 +69,7 @@ async function load(quiet = false) {
   try {
     services.value = await api.status();
     error.value = "";
+    if (!quiet) await Promise.all([loadSetup(), loadHealth()]);
     if (services.value.length === 0 && !hasSeenWizardPrompt()) {
       markWizardPrompted();
       router.replace("/wizard");
@@ -89,6 +130,23 @@ onUnmounted(() => clearInterval(timer));
   <p v-if="loading" class="loading">Loading…</p>
 
   <template v-else>
+    <div v-if="problems.length" class="notice" :class="problems.some((h) => h.status === 'failed') ? 'notice--error' : 'notice--warn'" role="status">
+      <strong>Ballast health</strong>
+      <p v-for="h in problems" :key="h.area" class="health-line" :class="h.status === 'failed' ? 'notice--error' : 'notice--warn'" style="margin: 0.3rem 0 0">
+        <strong>{{ healthLabels[h.area] ?? h.area }}:</strong> {{ h.message }}
+      </p>
+    </div>
+
+    <div v-if="showChecklist" class="panel">
+      <h3 style="margin-top: 0">Getting started</h3>
+      <ul class="checklist" style="list-style: none; padding: 0; margin: 0">
+        <li v-for="item in checklist" :key="item.key" style="margin: 0.35rem 0">
+          <span v-if="item.done" class="muted"><span aria-hidden="true">✓</span> {{ item.label }}</span>
+          <router-link v-else :to="item.to">{{ item.label }}</router-link>
+        </li>
+      </ul>
+    </div>
+
     <div v-if="services.length === 0" class="empty">
       <p>Nothing is being backed up yet.</p>
       <router-link class="btn btn-primary" to="/wizard">Set up your first backup</router-link>

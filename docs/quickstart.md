@@ -163,6 +163,14 @@ openssl rand -hex 32 > ~/.config/ballast/credentials/ballast-api-token
 chmod 600 ~/.config/ballast/credentials/ballast-api-token
 ```
 
+The dashboard shows a short **Getting started** checklist (add a
+destination, add a service, set up notifications, run your first verified
+backup) until every step is done. Above it, a **Ballast health** banner
+appears only when Ballast itself needs attention: its own settings have not
+been backed up in the last week (`ballast self-backup <destination>`), the
+disk is running low for verification drills, or a password, key or `.env`
+file your setup points at has gone missing.
+
 ### Set up a schedule or change it later
 
 ```bash
@@ -178,6 +186,12 @@ ballast schedule disable <service>
 ballast notify show <service>
 ballast notify set <service> --heartbeat --max-age-hours 72
 ```
+
+For a weekly "Ballast is alive" message, turn on the digest for a channel
+(the checkbox in Settings, or `ballast notify channel edit <name> --digest`).
+Once a week you get one message: how many services are green, amber and
+red, when each one last passed a restore check, and free disk space.
+`ballast notify digest` sends one right away.
 
 ### Restore something
 

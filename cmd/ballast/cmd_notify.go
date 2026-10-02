@@ -78,6 +78,7 @@ var (
 	channelSMTPSec     string
 	channelFrom        string
 	channelTo          []string
+	channelDigest      bool
 )
 
 var notifySetCmd = &cobra.Command{
@@ -198,6 +199,7 @@ When no service flags are given, --all-services is the default.`,
 				Events:     channelEvents,
 				Tiers:      channelTiers,
 				Email:      channelEmailSettings(nil),
+				Digest:     &channelDigest,
 			}
 			v, err := a.ops.PutChannel(cmd.Context(), in)
 			if err != nil {
@@ -246,6 +248,9 @@ replacing it, use --clear-token.`,
 				Events:     channelEvents,
 				Tiers:      channelTiers,
 				Email:      channelEmailSettings(base),
+			}
+			if cmd.Flags().Changed("digest") {
+				in.Digest = &channelDigest
 			}
 			v, err := a.ops.PutChannel(cmd.Context(), in)
 			if err != nil {
@@ -343,6 +348,7 @@ func addChannelRoutingFlags(c *cobra.Command) {
 	f := c.Flags()
 	f.StringSliceVar(&channelEvents, "event", nil, "only send these events: job_failure, verification_failure, freshness_breached, success_heartbeat, recovery (default all)")
 	f.StringSliceVar(&channelTiers, "tier", nil, "only send for these backup copies, e.g. restic (default all)")
+	f.BoolVar(&channelDigest, "digest", false, "also send the weekly digest (a one-message summary of every service) here")
 	f.StringVar(&channelSMTPHost, "smtp-host", "", "email: mail server")
 	f.IntVar(&channelSMTPPort, "smtp-port", 0, "email: mail server port (587 by default)")
 	f.StringVar(&channelSMTPSec, "smtp-security", "", "email: starttls, tls or none")
@@ -368,6 +374,7 @@ func printChannelView(w io.Writer, c api.ChannelView) {
 		fmt.Fprintf(w, "  Username:  %s\n", c.Username)
 	}
 	fmt.Fprintf(w, "  Token:     %s\n", onOff(c.HasToken))
+	fmt.Fprintf(w, "  Weekly digest: %s\n", onOff(c.Digest))
 	if c.ApplyToAll {
 		fmt.Fprintf(w, "  Applies to: all services\n")
 	} else if len(c.Services) > 0 {
@@ -405,6 +412,33 @@ func registerNotifyCommands(root *cobra.Command) {
 	notifyChannelCmd.AddCommand(notifyChannelListCmd, notifyChannelAddCmd, notifyChannelEditCmd, notifyChannelRemoveCmd, notifyChannelTestCmd)
 
 	notifyCmd := &cobra.Command{Use: "notify", Short: "Choose when Ballast alerts you about each service"}
-	notifyCmd.AddCommand(notifyShowCmd, notifySetCmd, notifyChannelCmd)
+	notifyCmd.AddCommand(notifyShowCmd, notifySetCmd, notifyChannelCmd, notifyDigestCmd)
 	root.AddCommand(notifyCmd)
+}
+
+// notifyDigestCmd is `ballast notify digest`: it sends the weekly digest
+// now to every channel that has it turned on.
+var notifyDigestCmd = &cobra.Command{
+	Use:   "digest",
+	Short: "Send the weekly digest now",
+	Long: `Sends the weekly digest right away to every notification channel that
+has it turned on (ballast notify channel edit <name> --digest).
+
+The digest is one message: how many services are green, amber and red,
+when each one last had a verified restore, and free disk space.
+` + "`ballast serve`" + ` (or ` + "`ballast run-due`" + `) sends it automatically once a week.`,
+	Args: cobra.NoArgs,
+	RunE: func(cmd *cobra.Command, args []string) error {
+		cfg, err := loadConfig()
+		if err != nil {
+			return err
+		}
+		return withApp(cfg, cmd.ErrOrStderr(), func(a *app) error {
+			res, err := a.ops.SendDigest(cmd.Context())
+			for _, n := range res.Sent {
+				cmd.Printf("Sent the weekly digest to %s.\n", n)
+			}
+			return err
+		})
+	},
 }

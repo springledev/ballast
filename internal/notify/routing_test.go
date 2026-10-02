@@ -20,6 +20,7 @@ func TestRoutedChannelFilters(t *testing.T) {
 		{"tier allowed", nil, []string{"restic"}, Event{Type: EventJobFailure}, 1},
 		{"tier filtered", nil, []string{"restic"}, Event{Type: EventJobFailure, Tier: "rclone"}, 0},
 		{"test always passes", []string{"recovery"}, []string{"rclone"}, Event{Type: EventTest}, 1},
+		{"digest skips filters", []string{"job_failure"}, []string{"rclone"}, Event{Type: EventWeeklyDigest}, 1},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

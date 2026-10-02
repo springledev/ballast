@@ -3,10 +3,8 @@ package main
 import (
 	"fmt"
 	"os"
-	"path/filepath"
 
 	"github.com/springledev/ballast/internal/config"
-	"github.com/springledev/ballast/internal/inventory"
 	"github.com/spf13/cobra"
 )
 
@@ -64,54 +62,19 @@ func checkConfig(cmd *cobra.Command, cfg config.Config, a *app) (problems, notes
 		}
 	}
 
-	hasCred := func(name string) bool {
-		for _, d := range cfg.CredentialDirs() {
-			if _, statErr := os.Stat(filepath.Join(d, name)); statErr == nil {
-				return true
-			}
-		}
-		return false
+	creds, err := a.ops.CredentialProblems(cmd.Context())
+	if err != nil {
+		return nil, nil, err
 	}
-
+	problems = append(problems, creds...)
 	dests, err := a.ops.ListDestinations(cmd.Context())
 	if err != nil {
 		return nil, nil, fmt.Errorf("listing destinations: %w", err)
 	}
-	known := map[string]bool{}
-	for _, d := range dests {
-		known[d.Name] = true
-		for _, c := range []string{d.PasswordCredential, d.BackendCredential} {
-			if c != "" && !hasCred(c) {
-				problems = append(problems, fmt.Sprintf("destination %q needs the credential file %q, which was not found in %s", d.Name, c, cfg.CredentialDirs()))
-			}
-		}
-	}
 	notes = append(notes, fmt.Sprintf("%d destination(s) checked", len(dests)))
-
 	svcs, err := a.ops.ListServices(cmd.Context())
 	if err != nil {
 		return nil, nil, fmt.Errorf("listing services: %w", err)
-	}
-	for _, s := range svcs {
-		if !known[s.Destination] {
-			problems = append(problems, fmt.Sprintf("service %q backs up to %q, which is not a configured destination", s.Name, s.Destination))
-		}
-		for name, ref := range s.Secrets {
-			if path, key, isEnv := inventory.ParseEnvRef(ref); isEnv {
-				keys, kerr := a.ops.TestEnvSource(cmd.Context(), path)
-				if kerr != nil {
-					problems = append(problems, fmt.Sprintf("service %q: the .env file for %q cannot be read: %v", s.Name, name, kerr))
-					continue
-				}
-				if !containsString(keys, key) {
-					problems = append(problems, fmt.Sprintf("service %q: %s does not contain the key %s", s.Name, path, key))
-				}
-				continue
-			}
-			if !hasCred(ref) {
-				problems = append(problems, fmt.Sprintf("service %q needs the credential file %q for %q, which was not found", s.Name, ref, name))
-			}
-		}
 	}
 	notes = append(notes, fmt.Sprintf("%d service(s) checked", len(svcs)))
 	return problems, notes, nil

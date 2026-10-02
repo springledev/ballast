@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/springledev/ballast/internal/inventory"
 	"github.com/springledev/ballast/internal/restic"
@@ -103,6 +104,9 @@ func (o *Ops) SelfBackup(ctx context.Context, destination string) (SelfBackupRes
 		return res, o.redactErr(fmt.Errorf("self-backup to %s: saved as snapshot %s but it could not be read back, so it is NOT verified: %w", destination, br.SnapshotID, err))
 	}
 	res.Verified = true
+	if err := o.recordSelfBackup(ctx, time.Now()); err != nil {
+		return res, fmt.Errorf("self-backup to %s: %w", destination, err)
+	}
 	return res, nil
 }
 

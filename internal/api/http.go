@@ -51,6 +51,8 @@ func NewAuthedHandler(ops *Ops, auth *Auth) http.Handler {
 	protected.HandleFunc("GET /api/v1/doctor", h.doctor)
 	protected.HandleFunc("POST /api/v1/verify", h.verifyAll)
 	protected.HandleFunc("POST /api/v1/self-backup", h.selfBackup)
+	protected.HandleFunc("GET /api/v1/ballast-health", h.ballastHealth)
+	protected.HandleFunc("POST /api/v1/digest/send", h.sendDigest)
 
 	protected.HandleFunc("GET /api/v1/services", h.listServices)
 	protected.HandleFunc("POST /api/v1/services", h.createService)

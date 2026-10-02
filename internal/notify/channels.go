@@ -60,6 +60,8 @@ type ChannelConfig struct {
 	// Events and Tiers limit what the channel delivers; empty means all.
 	Events []string
 	Tiers  []string
+	// Digest opts the channel into the weekly summary (off by default).
+	Digest bool
 }
 
 // ValidateChannelName checks name is safe to use in a file name and
@@ -129,14 +131,14 @@ func PutChannel(db *sql.DB, c ChannelConfig) (ChannelConfig, error) {
 	}
 	defer tx.Rollback() //nolint:errcheck
 	if _, err := tx.Exec(`
-		INSERT INTO notification_channels (name, type, url_credential, username, token_credential, apply_to_all, settings_json, events, tiers, created_at, updated_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		INSERT INTO notification_channels (name, type, url_credential, username, token_credential, apply_to_all, settings_json, events, tiers, digest, created_at, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(name) DO UPDATE SET type = excluded.type, url_credential = excluded.url_credential,
 			username = excluded.username, token_credential = excluded.token_credential,
 			apply_to_all = excluded.apply_to_all, settings_json = excluded.settings_json,
-				events = excluded.events, tiers = excluded.tiers, updated_at = excluded.updated_at`,
+				events = excluded.events, tiers = excluded.tiers, digest = excluded.digest, updated_at = excluded.updated_at`,
 		c.Name, c.Type, c.URLCredential, c.Username, c.TokenCredential, boolToInt(c.ApplyToAll),
-		settings, strings.Join(c.Events, ","), strings.Join(c.Tiers, ","), now, now,
+		settings, strings.Join(c.Events, ","), strings.Join(c.Tiers, ","), boolToInt(c.Digest), now, now,
 	); err != nil {
 		return ChannelConfig{}, fmt.Errorf("channel %s: saving: %w", c.Name, err)
 	}
@@ -196,7 +198,7 @@ func ChannelsForService(db *sql.DB, service string) ([]ChannelConfig, error) {
 }
 
 func queryChannels(db *sql.DB, where string, args ...any) ([]ChannelConfig, error) {
-	rows, err := db.Query(`SELECT id, name, type, url_credential, username, token_credential, apply_to_all, settings_json, events, tiers
+	rows, err := db.Query(`SELECT id, name, type, url_credential, username, token_credential, apply_to_all, settings_json, events, tiers, digest
 		FROM notification_channels `+where+` ORDER BY name`, args...)
 	if err != nil {
 		return nil, fmt.Errorf("loading notification channels: %w", err)
@@ -207,10 +209,12 @@ func queryChannels(db *sql.DB, where string, args ...any) ([]ChannelConfig, erro
 		var c ChannelConfig
 		var all int
 		var settings, events, tiers string
-		if err := rows.Scan(&c.ID, &c.Name, &c.Type, &c.URLCredential, &c.Username, &c.TokenCredential, &all, &settings, &events, &tiers); err != nil {
+		var digest int
+		if err := rows.Scan(&c.ID, &c.Name, &c.Type, &c.URLCredential, &c.Username, &c.TokenCredential, &all, &settings, &events, &tiers, &digest); err != nil {
 			return nil, fmt.Errorf("loading notification channels: %w", err)
 		}
 		c.ApplyToAll = all != 0
+		c.Digest = digest != 0
 		c.Events, c.Tiers = splitList(events), splitList(tiers)
 		if c.Type == ChannelTypeEmail {
 			var es EmailSettings

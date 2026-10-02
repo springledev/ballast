@@ -3,10 +3,13 @@ package main
 import (
 	"bytes"
 	"context"
+	"net/http"
+	"net/http/httptest"
 	"path/filepath"
 	"testing"
 	"time"
 
+	"github.com/springledev/ballast/internal/api"
 	"github.com/springledev/ballast/internal/engine"
 	"github.com/springledev/ballast/internal/notify"
 	"github.com/springledev/ballast/internal/scheduler"
@@ -44,7 +47,8 @@ func sweepApp(t *testing.T, finalState engine.State) *app {
 	if err := scheduler.SetSchedule(st.DB(), "svc", "0 3 * * *"); err != nil {
 		t.Fatalf("SetSchedule: %v", err)
 	}
-	return &app{store: st, coord: coord, notifier: notify.NewNotifier(), logw: &bytes.Buffer{}}
+	ops := &api.Ops{DB: st.DB(), CredentialsDir: t.TempDir()}
+	return &app{store: st, coord: coord, ops: ops, notifier: notify.NewNotifier(), logw: &bytes.Buffer{}}
 }
 
 // TestSweepDueIsOneEnginePath proves the daemon's per-minute sweep and
@@ -89,5 +93,46 @@ func TestSweepDueIsOneEnginePath(t *testing.T) {
 				t.Errorf("error = %v, wantErr %v", errs[0], tc.wantErr)
 			}
 		})
+	}
+}
+
+// TestMaybeSendDigestWeekly checks the weekly digest goes out from the
+// shared sweep once, waits a week, and is not recorded as sent while
+// no channel has opted in.
+func TestMaybeSendDigestWeekly(t *testing.T) {
+	a := sweepApp(t, engine.SUCCESS)
+	ctx := context.Background()
+	sends := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Title") == "Ballast weekly digest" {
+			sends++
+		}
+	}))
+	defer srv.Close()
+	start := time.Date(2026, 3, 5, 3, 0, 0, 0, time.UTC)
+
+	maybeSendDigest(ctx, a, start)
+	if _, err := a.store.MetaGet(digestMetaKey); err == nil {
+		t.Fatal("digest recorded as sent with no opted-in channel")
+	}
+
+	on := true
+	if _, err := a.ops.PutChannel(ctx, api.ChannelInput{Name: "phone", URL: srv.URL + "/t", ApplyToAll: true, Digest: &on}); err != nil {
+		t.Fatal(err)
+	}
+	steps := []struct {
+		at   time.Time
+		want int
+	}{
+		{start, 1},
+		{start.Add(time.Hour), 1},
+		{start.Add(6 * 24 * time.Hour), 1},
+		{start.Add(digestInterval), 2},
+	}
+	for _, s := range steps {
+		maybeSendDigest(ctx, a, s.at)
+		if sends != s.want {
+			t.Fatalf("at %s: %d digests sent, want %d", s.at, sends, s.want)
+		}
 	}
 }

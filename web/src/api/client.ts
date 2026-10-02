@@ -1,6 +1,7 @@
 import { markSignedOut } from "./auth";
 import type {
   ApiErrorBody,
+  BallastHealth,
   CatalogSummary, EnvSourceProposal,
   ChannelInput,
   ChannelView,
@@ -9,6 +10,7 @@ import type {
   CreateDockerHostResponse,
   Destination,
   DetectResult,
+  DigestSendResult,
   DockerComposeProject,
   DockerHost,
   DockerHostTestResult,
@@ -194,6 +196,14 @@ export const api = {
   },
   testChannel(name: string): Promise<{ ok: boolean; detail?: string }> {
     return request("POST", `${base}/notification-channels/${encodeURIComponent(name)}/test`);
+  },
+
+  // --- ballast's own health & weekly digest ---
+  ballastHealth(): Promise<BallastHealth> {
+    return request("GET", `${base}/ballast-health`);
+  },
+  sendDigest(): Promise<DigestSendResult> {
+    return request("POST", `${base}/digest/send`);
   },
 
   // --- destinations ---

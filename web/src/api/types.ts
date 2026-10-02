@@ -233,6 +233,8 @@ export interface ChannelView {
   apply_to_all: boolean;
   /** List of service names this channel is used by (when not apply_to_all). */
   services: string[];
+  /** Whether this channel gets the weekly digest. */
+  digest: boolean;
 }
 
 /** Request body for POST /api/v1/notification-channels and PUT (create/edit). */
@@ -254,6 +256,28 @@ export interface ChannelInput {
   apply_to_all: boolean;
   /** List of service names to apply this channel to (when not apply_to_all). */
   services: string[];
+  /** Send the weekly digest here. Omitted = keep the stored value. */
+  digest?: boolean;
+}
+
+/** One thing Ballast itself needs attention on (its own backup, disk space, credentials). */
+export interface HealthItem {
+  area: "self-backup" | "disk" | "credentials";
+  status: "ok" | "warning" | "failed";
+  message: string;
+}
+
+/** GET /api/v1/ballast-health response. */
+export interface BallastHealth {
+  items: HealthItem[];
+  last_self_backup_at?: string;
+}
+
+/** POST /api/v1/digest/send response. */
+export interface DigestSendResult {
+  sent: string[];
+  message: string;
+  error?: string;
 }
 
 export interface DetectedContainer {

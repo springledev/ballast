@@ -31,6 +31,8 @@ type ChannelView struct {
 	// Events and Tiers are the routing filters; empty means everything.
 	Events []string `json:"events"`
 	Tiers  []string `json:"tiers"`
+	// Digest is true when the channel receives the weekly digest.
+	Digest bool `json:"digest"`
 }
 
 // ChannelInput is what a caller sends to create or change a channel.
@@ -52,6 +54,8 @@ type ChannelInput struct {
 	// Events and Tiers limit what the channel delivers; empty means all.
 	Events []string `json:"events"`
 	Tiers  []string `json:"tiers"`
+	// Digest turns the weekly digest on or off; nil keeps what is stored.
+	Digest *bool `json:"digest"`
 }
 
 // channelErr maps notify's channel errors onto the API's error kinds.
@@ -85,7 +89,7 @@ func (o *Ops) credDirs() []string {
 
 func (o *Ops) channelView(c notify.ChannelConfig) ChannelView {
 	v := ChannelView{Name: c.Name, Type: c.Type, Username: c.Username, HasToken: c.TokenCredential != "",
-		ApplyToAll: c.ApplyToAll, Services: c.Services, Email: c.Email, Events: c.Events, Tiers: c.Tiers}
+		ApplyToAll: c.ApplyToAll, Services: c.Services, Email: c.Email, Events: c.Events, Tiers: c.Tiers, Digest: c.Digest}
 	if v.Services == nil {
 		v.Services = []string{}
 	}
@@ -159,6 +163,10 @@ func (o *Ops) PutChannel(ctx context.Context, in ChannelInput) (ChannelView, err
 	}
 	if in.Tiers == nil {
 		cfg.Tiers = existing.Tiers
+	}
+	cfg.Digest = existing.Digest
+	if in.Digest != nil {
+		cfg.Digest = *in.Digest
 	}
 	if in.Type == notify.ChannelTypeEmail && in.Email == nil {
 		cfg.Email = existing.Email // editing keeps the stored server settings

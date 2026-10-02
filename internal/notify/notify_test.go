@@ -666,3 +666,48 @@ func TestSendTiersIsolationAndOrder(t *testing.T) {
 		})
 	}
 }
+
+func TestFormatWeeklyDigest(t *testing.T) {
+	day := 24 * time.Hour
+	tests := []struct {
+		name         string
+		services     []DigestService
+		disk         string
+		wantMessage  string
+		wantSeverity string
+		wantDetail   []string
+	}{
+		{"all green", []DigestService{{Name: "a", Light: "green", VerifiedAge: &day}}, "40.0 GiB free",
+			"Weekly digest: 1 green, 0 amber, 0 red", "info", []string{"a: green, last verified restore 1 days ago", "Disk space: 40.0 GiB free"}},
+		{"red wins", []DigestService{{Name: "a", Light: "amber"}, {Name: "b", Light: "red"}}, "",
+			"Weekly digest: 0 green, 1 amber, 1 red", "error", []string{"b: red, no verified backup yet"}},
+		{"never run", []DigestService{{Name: "a"}}, "",
+			"Weekly digest: 0 green, 0 amber, 0 red, 1 never backed up", "warning", []string{"a: none"}},
+		{"no services", nil, "", "Weekly digest: 0 green, 0 amber, 0 red", "info", []string{"No services are set up yet."}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ev := FormatWeeklyDigest(tt.services, tt.disk)
+			if ev.Type != EventWeeklyDigest || ev.Message != tt.wantMessage || ev.Severity != tt.wantSeverity {
+				t.Errorf("event = %+v", ev)
+			}
+			for _, w := range tt.wantDetail {
+				if !strings.Contains(ev.Detail, w) {
+					t.Errorf("detail %q missing %q", ev.Detail, w)
+				}
+			}
+		})
+	}
+}
+
+func TestNtfyDigestTitle(t *testing.T) {
+	var title string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { title = r.Header.Get("Title") }))
+	defer srv.Close()
+	if err := NewNtfyChannel(srv.URL+"/t").Send(context.Background(), FormatWeeklyDigest(nil, "")); err != nil {
+		t.Fatal(err)
+	}
+	if title != "Ballast weekly digest" {
+		t.Errorf("title = %q", title)
+	}
+}

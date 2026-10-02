@@ -67,8 +67,14 @@ func TestChannelStoreRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := PutChannel(d, ChannelConfig{Name: "all", Type: ChannelTypeNtfy, URLCredential: "u2", ApplyToAll: true}); err != nil {
+	if _, err := PutChannel(d, ChannelConfig{Name: "all", Type: ChannelTypeNtfy, URLCredential: "u2", ApplyToAll: true, Digest: true}); err != nil {
 		t.Fatal(err)
+	}
+	if all, err := GetChannel(d, "all"); err != nil || !all.Digest {
+		t.Errorf("digest opt-in not stored: %+v, %v", all, err)
+	}
+	if c.Digest {
+		t.Error("digest should default to off")
 	}
 	// Updating keeps the ID and replaces the links.
 	c2, err := PutChannel(d, ChannelConfig{Name: "phone", Type: ChannelTypeNtfy, URLCredential: "u", Services: []string{"a"}})

@@ -23,6 +23,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"strings"
 	"time"
 
 	"github.com/springledev/ballast/internal/scheduler"
@@ -52,6 +53,9 @@ const (
 	// EventTest is the "Ballast test notification" a channel's test-send
 	// button delivers through the very same Send path as real events.
 	EventTest EventType = "test"
+	// EventWeeklyDigest is the optional once-a-week summary of every
+	// service, sent only to channels that opted in.
+	EventWeeklyDigest EventType = "weekly_digest"
 )
 
 // Event describes a notification event.
@@ -183,8 +187,11 @@ func (n *NtfyChannel) Send(ctx context.Context, event Event) error {
 
 	// Set headers per ntfy API
 	title := fmt.Sprintf("[%s] [%s] %s", event.Service, event.TierName(), event.Type)
-	if event.Type == EventTest {
+	switch event.Type {
+	case EventTest:
 		title = "Ballast test notification"
+	case EventWeeklyDigest:
+		title = "Ballast weekly digest"
 	}
 	req.Header.Set("Title", title)
 	switch {
@@ -592,4 +599,62 @@ func maxFiringGap(sched scheduler.Schedule) (gap time.Duration, ok bool) {
 		last = t
 	}
 	return gap, count > 1
+}
+
+// DigestService is one service's line in the weekly digest.
+type DigestService struct {
+	Name string
+	// Light is the service's traffic light: green, amber, red, running
+	// or none (never run).
+	Light string
+	// VerifiedAge is how long ago the last verified backup finished,
+	// or nil if there never was one.
+	VerifiedAge *time.Duration
+}
+
+// FormatWeeklyDigest builds the once-a-week "Ballast is alive" summary:
+// how many services are green, amber and red, how old each service's
+// last verified restore is, and the free disk space for verification
+// drills (disk may be empty when unknown). The worst light sets the
+// severity, so a digest with a red service is not sent as low priority.
+func FormatWeeklyDigest(services []DigestService, disk string) Event {
+	counts := map[string]int{}
+	var lines []string
+	for _, s := range services {
+		light := s.Light
+		if light == "" {
+			light = "none"
+		}
+		counts[light]++
+		age := "no verified backup yet"
+		if s.VerifiedAge != nil {
+			age = "last verified restore " + formatDuration(*s.VerifiedAge) + " ago"
+		}
+		lines = append(lines, fmt.Sprintf("%s: %s, %s", s.Name, light, age))
+	}
+	if len(services) == 0 {
+		lines = append(lines, "No services are set up yet.")
+	}
+	if disk != "" {
+		lines = append(lines, "Disk space: "+disk)
+	}
+	severity := "info"
+	switch {
+	case counts["red"] > 0:
+		severity = "error"
+	case counts["amber"] > 0 || counts["none"] > 0:
+		severity = "warning"
+	}
+	msg := fmt.Sprintf("Weekly digest: %d green, %d amber, %d red", counts["green"], counts["amber"], counts["red"])
+	if n := counts["none"]; n > 0 {
+		msg += fmt.Sprintf(", %d never backed up", n)
+	}
+	return Event{
+		Service:   "ballast",
+		Type:      EventWeeklyDigest,
+		Message:   msg,
+		Detail:    strings.Join(lines, "\n"),
+		Severity:  severity,
+		Timestamp: time.Now().UTC(),
+	}
 }
