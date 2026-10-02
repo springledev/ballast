@@ -2,6 +2,8 @@ import { apiToken, clearApiToken } from "./auth";
 import type {
   ApiErrorBody,
   CatalogSummary,
+  ChannelInput,
+  ChannelView,
   CreateDestinationRequest,
   CreateDockerHostRequest,
   CreateDockerHostResponse,
@@ -160,6 +162,23 @@ export const api = {
   },
   setNotificationSettings(name: string, s: Omit<NotificationSettings, "service">): Promise<NotificationSettings> {
     return request("PUT", `${base}/services/${encodeURIComponent(name)}/notifications`, s);
+  },
+
+  // --- notification channels ---
+  listChannels(): Promise<ChannelView[]> {
+    return request("GET", `${base}/notification-channels`);
+  },
+  createChannel(ch: ChannelInput): Promise<ChannelView> {
+    return request("POST", `${base}/notification-channels`, ch);
+  },
+  updateChannel(name: string, ch: ChannelInput): Promise<ChannelView> {
+    return request("PUT", `${base}/notification-channels/${encodeURIComponent(name)}`, ch);
+  },
+  deleteChannel(name: string): Promise<void> {
+    return request("DELETE", `${base}/notification-channels/${encodeURIComponent(name)}`);
+  },
+  testChannel(name: string): Promise<{ ok: boolean }> {
+    return request("POST", `${base}/notification-channels/${encodeURIComponent(name)}/test`);
   },
 
   // --- destinations ---

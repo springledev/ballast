@@ -60,6 +60,12 @@ func NewHandler(ops *Ops, apiToken string) http.Handler {
 	protected.HandleFunc("PUT /api/v1/services/{name}/notifications", h.putNotificationSettings)
 	protected.HandleFunc("PUT /api/v1/services/{name}/secrets/{secret}", h.putSecret)
 
+	protected.HandleFunc("GET /api/v1/notification-channels", h.listChannels)
+	protected.HandleFunc("POST /api/v1/notification-channels", h.putChannel)
+	protected.HandleFunc("PUT /api/v1/notification-channels/{name}", h.putChannel)
+	protected.HandleFunc("DELETE /api/v1/notification-channels/{name}", h.deleteChannel)
+	protected.HandleFunc("POST /api/v1/notification-channels/{name}/test", h.testChannel)
+
 	protected.HandleFunc("GET /api/v1/destinations", h.listDestinations)
 	protected.HandleFunc("POST /api/v1/destinations", h.createDestination)
 	protected.HandleFunc("DELETE /api/v1/destinations/{name}", h.deleteDestination)

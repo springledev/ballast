@@ -101,6 +101,10 @@ func resetCLIFlags() {
 
 	notifyEnabled, notifyMaxAgeHours, notifyHeartbeat = true, 0, false
 
+	channelURL, channelUsername, channelTokenFile = "", "", ""
+	channelAllServices, channelClearToken, channelJSON = false, false, false
+	channelServices = nil
+
 	secretValueFlag = ""
 
 	verifyAll, verifyJSON = false, false

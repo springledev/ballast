@@ -1,6 +1,7 @@
 package pipeline
 
 import (
+	"database/sql"
 	"errors"
 	"fmt"
 	"io/fs"
@@ -45,9 +46,21 @@ import (
 // added to secrets, the Set shared with every Runner/Coordinator/
 // Pipeline, so it is redacted everywhere from the moment Ballast
 // first reads it.
-func BuildNotifier(credDirs []string, services []string, secrets *secret.Set) (*notify.Notifier, []error) {
+//
+// With a non-nil db, channels come from the notification_channels
+// table (reusable channels, spec §18.1); any legacy credential file
+// above is first migrated into a channel that points at that same
+// file, so old setups keep working and show up in the UI. A nil db
+// uses the credential files directly.
+func BuildNotifier(db *sql.DB, credDirs []string, services []string, secrets *secret.Set) (*notify.Notifier, []error) {
 	load := func(svc string) ([]notify.Channel, error) {
-		return loadChannels(credDirs, svc, secrets)
+		if db == nil {
+			return loadChannels(credDirs, svc, secrets)
+		}
+		if err := notify.MigrateLegacyChannels(db, credDirs, []string{svc}); err != nil {
+			return nil, err
+		}
+		return notify.ResolveChannels(db, credDirs, secrets, svc)
 	}
 	var problems []error
 	for _, svc := range uniqueSorted(services) {

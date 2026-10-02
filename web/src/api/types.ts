@@ -180,6 +180,40 @@ export interface NotificationSettings {
   heartbeat_enabled: boolean;
 }
 
+/** A saved notification channel (ntfy, webhook, etc). */
+export interface ChannelView {
+  name: string;
+  type: "ntfy";
+  /** The channel's address, safe to display (topic for ntfy). */
+  url_display: string;
+  /** Username for ntfy, if set. */
+  username?: string;
+  /** Whether this channel has a token/password stored. */
+  has_token: boolean;
+  /** Whether this channel applies to all services. */
+  apply_to_all: boolean;
+  /** List of service names this channel is used by (when not apply_to_all). */
+  services: string[];
+}
+
+/** Request body for POST /api/v1/notification-channels and PUT (create/edit). */
+export interface ChannelInput {
+  name: string;
+  type: "ntfy";
+  /** The full address (URL) for ntfy, e.g. https://ntfy.sh/my-topic or https://ntfy.example.com/topic. */
+  url: string;
+  /** Username for ntfy (optional). */
+  username?: string;
+  /** Token/password for ntfy (optional, write-only). Blank on edit = keep existing. */
+  token?: string;
+  /** When true, sending token via clear_token on edit. */
+  clear_token?: boolean;
+  /** Whether to apply this channel to all services. */
+  apply_to_all: boolean;
+  /** List of service names to apply this channel to (when not apply_to_all). */
+  services: string[];
+}
+
 export interface DetectedContainer {
   name: string;
   image: string;

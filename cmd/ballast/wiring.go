@@ -106,7 +106,7 @@ func openApp(cfg config.Config, logw io.Writer) (*app, error) {
 	// after startup) is redacted everywhere at once.
 	secrets := secret.NewSet()
 	credDirs := cfg.CredentialDirs()
-	notifier, notifyProblems := pipeline.BuildNotifier(credDirs, services, secrets)
+	notifier, notifyProblems := pipeline.BuildNotifier(st.DB(), credDirs, services, secrets)
 
 	apiToken, err := loadOptionalCredential(credDirs, apiTokenCredential)
 	if err != nil {

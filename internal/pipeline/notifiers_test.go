@@ -94,7 +94,7 @@ func TestBuildNotifierPreloadsSecrets(t *testing.T) {
 				writeCred(t, dir, name, v)
 			}
 			secrets := secret.NewSet()
-			if _, problems := BuildNotifier([]string{dir}, tt.services, secrets); problems != nil {
+			if _, problems := BuildNotifier(nil, []string{dir}, tt.services, secrets); problems != nil {
 				t.Fatalf("BuildNotifier: %v", problems)
 			}
 			got := secrets.Values()
@@ -121,7 +121,7 @@ func TestBuildNotifierServiceAddedAfterStartup(t *testing.T) {
 	writeCred(t, dir, "ballast-webhook-url", rs.URL+"/global")
 	secrets := secret.NewSet()
 
-	n, problems := BuildNotifier([]string{dir}, nil /* no services yet */, secrets)
+	n, problems := BuildNotifier(nil, []string{dir}, nil /* no services yet */, secrets)
 	if problems != nil {
 		t.Fatalf("BuildNotifier: %v", problems)
 	}
@@ -147,7 +147,7 @@ func TestBuildNotifierServiceAddedAfterStartup(t *testing.T) {
 }
 
 func TestBuildNotifierNoChannelIsLoud(t *testing.T) {
-	n, problems := BuildNotifier([]string{t.TempDir()}, nil, secret.NewSet())
+	n, problems := BuildNotifier(nil, []string{t.TempDir()}, nil, secret.NewSet())
 	if problems != nil {
 		t.Fatalf("BuildNotifier: %v", problems)
 	}
@@ -171,7 +171,7 @@ func TestBuildNotifierBrokenFileIsPerService(t *testing.T) {
 	}
 	writeCred(t, dir, "ballast-webhook-url.vault", rs.URL+"/vault")
 
-	n, problems := BuildNotifier([]string{dir}, []string{"immich", "vault"}, secret.NewSet())
+	n, problems := BuildNotifier(nil, []string{dir}, []string{"immich", "vault"}, secret.NewSet())
 	if len(problems) != 1 || !strings.Contains(problems[0].Error(), "immich") {
 		t.Fatalf("problems = %v, want exactly one, naming immich", problems)
 	}
@@ -200,7 +200,7 @@ func TestBuildNotifierSearchesEveryDir(t *testing.T) {
 	writeCred(t, systemd, "ballast-webhook-url.vault", rs.URL+"/systemd")
 	writeCred(t, own, "ballast-webhook-url.vault", rs.URL+"/shadowed")
 
-	n, problems := BuildNotifier([]string{systemd, own}, []string{"photos", "vault"}, secret.NewSet())
+	n, problems := BuildNotifier(nil, []string{systemd, own}, []string{"photos", "vault"}, secret.NewSet())
 	if problems != nil {
 		t.Fatalf("BuildNotifier: %v", problems)
 	}

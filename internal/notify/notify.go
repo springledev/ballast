@@ -46,6 +46,9 @@ const (
 	EventFreshnessBreached EventType = "freshness_breached"
 	// EventSuccessHeartbeat is an optional success notification (per-service config).
 	EventSuccessHeartbeat EventType = "success_heartbeat"
+	// EventTest is the "Ballast test notification" a channel's test-send
+	// button delivers through the very same Send path as real events.
+	EventTest EventType = "test"
 )
 
 // Event describes a notification event.
@@ -131,8 +134,13 @@ func stripURLSecret(err error) error {
 // NtfyChannel sends notifications via ntfy.sh HTTP POST.
 // Secrets (topic URL) are passed from the caller and never logged.
 type NtfyChannel struct {
-	Topic  string       // ntfy topic URL from credential file
-	Client *http.Client // injected for tests; nil defaults to clientWithTimeout()
+	Topic string // ntfy topic URL from credential file
+	// Secret is the optional access credential for a protected ntfy
+	// server, from the credential store: a bearer token, or — when
+	// Username is set — that user's password.
+	Secret   string
+	Username string
+	Client   *http.Client // injected for tests; nil defaults to clientWithTimeout()
 }
 
 // NewNtfyChannel creates a channel that sends to the given ntfy topic.
@@ -171,7 +179,17 @@ func (n *NtfyChannel) Send(ctx context.Context, event Event) error {
 	}
 
 	// Set headers per ntfy API
-	req.Header.Set("Title", fmt.Sprintf("[%s] [%s] %s", event.Service, event.TierName(), event.Type))
+	title := fmt.Sprintf("[%s] [%s] %s", event.Service, event.TierName(), event.Type)
+	if event.Type == EventTest {
+		title = "Ballast test notification"
+	}
+	req.Header.Set("Title", title)
+	switch {
+	case n.Secret != "" && n.Username != "":
+		req.SetBasicAuth(n.Username, n.Secret)
+	case n.Secret != "":
+		req.Header.Set("Authorization", "Bearer "+n.Secret)
+	}
 	req.Header.Set("Priority", priorityFromSeverity(event.Severity))
 
 	resp, err := client.Do(req)

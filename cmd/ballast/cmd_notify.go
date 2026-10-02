@@ -1,9 +1,13 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
 	"io"
+	"os"
+	"strings"
 
+	"github.com/springledev/ballast/internal/api"
 	"github.com/springledev/ballast/internal/notify"
 	"github.com/spf13/cobra"
 )
@@ -57,6 +61,15 @@ var (
 	notifyEnabled     bool
 	notifyMaxAgeHours int
 	notifyHeartbeat   bool
+
+	// channel command flags
+	channelURL        string
+	channelUsername   string
+	channelTokenFile  string
+	channelAllServices bool
+	channelServices   []string
+	channelClearToken bool
+	channelJSON       bool
 )
 
 var notifySetCmd = &cobra.Command{
@@ -103,13 +116,218 @@ ntfy topic URL or webhook URL (see the notifications guide).`,
 	},
 }
 
+var notifyChannelListCmd = &cobra.Command{
+	Use:   "list",
+	Short: "List notification channels",
+	RunE: func(cmd *cobra.Command, args []string) error {
+		cfg, err := loadConfig()
+		if err != nil {
+			return err
+		}
+		return withApp(cfg, cmd.ErrOrStderr(), func(a *app) error {
+			cs, err := a.ops.ListChannels(cmd.Context())
+			if err != nil {
+				return err
+			}
+			if channelJSON {
+				enc := json.NewEncoder(cmd.OutOrStdout())
+				enc.SetIndent("", "  ")
+				return enc.Encode(cs)
+			}
+			if len(cs) == 0 {
+				fmt.Fprintf(cmd.OutOrStdout(), "No notification channels yet. Add one with: ballast notify channel add ...\n")
+				return nil
+			}
+			for i, c := range cs {
+				if i > 0 {
+					fmt.Fprintln(cmd.OutOrStdout())
+				}
+				printChannelView(cmd.OutOrStdout(), c)
+			}
+			return nil
+		})
+	},
+}
+
+var notifyChannelAddCmd = &cobra.Command{
+	Use:   "add <name>",
+	Short: "Add a notification channel",
+	Long: `Add a notification channel.
+
+The address and token are saved as root-only credential files, never in the
+database. The token comes only from --token-file (a file whose contents are
+used) or the environment variable BALLAST_NTFY_TOKEN, so it does not appear
+in your shell history.
+
+When no service flags are given, --all-services is the default.`,
+	Args: cobra.ExactArgs(1),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		if channelURL == "" {
+			return fmt.Errorf("--url is required to add a channel")
+		}
+		cfg, err := loadConfig()
+		if err != nil {
+			return err
+		}
+		return withApp(cfg, cmd.ErrOrStderr(), func(a *app) error {
+			token, err := readChannelToken()
+			if err != nil {
+				return err
+			}
+			// Default to apply-to-all if no service flags given
+			applyToAll := channelAllServices || (len(channelServices) == 0 && !channelAllServices)
+			in := api.ChannelInput{
+				Name:       args[0],
+				Type:       notify.ChannelTypeNtfy,
+				URL:        channelURL,
+				Username:   channelUsername,
+				Token:      token,
+				ApplyToAll: applyToAll && len(channelServices) == 0,
+				Services:   channelServices,
+			}
+			v, err := a.ops.PutChannel(cmd.Context(), in)
+			if err != nil {
+				return err
+			}
+			printChannelView(cmd.OutOrStdout(), v)
+			return nil
+		})
+	},
+}
+
+var notifyChannelEditCmd = &cobra.Command{
+	Use:   "edit <name>",
+	Short: "Edit a notification channel",
+	Long: `Edit a notification channel.
+
+Any flag you omit keeps its current value. To clear the token without
+replacing it, use --clear-token.`,
+	Args: cobra.ExactArgs(1),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		cfg, err := loadConfig()
+		if err != nil {
+			return err
+		}
+		return withApp(cfg, cmd.ErrOrStderr(), func(a *app) error {
+			token, err := readChannelToken()
+			if err != nil {
+				return err
+			}
+			in := api.ChannelInput{
+				Name:       args[0],
+				Type:       notify.ChannelTypeNtfy,
+				URL:        channelURL,
+				Username:   channelUsername,
+				Token:      token,
+				ClearToken: channelClearToken,
+				ApplyToAll: channelAllServices,
+				Services:   channelServices,
+			}
+			v, err := a.ops.PutChannel(cmd.Context(), in)
+			if err != nil {
+				return err
+			}
+			printChannelView(cmd.OutOrStdout(), v)
+			return nil
+		})
+	},
+}
+
+var notifyChannelRemoveCmd = &cobra.Command{
+	Use:   "remove <name>",
+	Short: "Remove a notification channel",
+	Args:  cobra.ExactArgs(1),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		cfg, err := loadConfig()
+		if err != nil {
+			return err
+		}
+		return withApp(cfg, cmd.ErrOrStderr(), func(a *app) error {
+			if err := a.ops.DeleteChannel(cmd.Context(), args[0]); err != nil {
+				return err
+			}
+			fmt.Fprintf(cmd.OutOrStdout(), "Removed channel %q.\n", args[0])
+			return nil
+		})
+	},
+}
+
+var notifyChannelTestCmd = &cobra.Command{
+	Use:   "test <name>",
+	Short: "Send a test notification through a channel",
+	Args:  cobra.ExactArgs(1),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		cfg, err := loadConfig()
+		if err != nil {
+			return err
+		}
+		return withApp(cfg, cmd.ErrOrStderr(), func(a *app) error {
+			if err := a.ops.TestChannel(cmd.Context(), args[0]); err != nil {
+				return err
+			}
+			fmt.Fprintf(cmd.OutOrStdout(), "Sent. Check your phone.\n")
+			return nil
+		})
+	},
+}
+
+// readChannelToken reads the token from --token-file or BALLAST_NTFY_TOKEN
+// environment variable, trimming whitespace. Returns empty string if neither
+// is set.
+func readChannelToken() (string, error) {
+	if channelTokenFile != "" {
+		data, err := os.ReadFile(channelTokenFile)
+		if err != nil {
+			return "", fmt.Errorf("reading token file: %w", err)
+		}
+		return strings.TrimSpace(string(data)), nil
+	}
+	return strings.TrimSpace(os.Getenv("BALLAST_NTFY_TOKEN")), nil
+}
+
+// printChannelView prints a ChannelView in plain English.
+func printChannelView(w io.Writer, c api.ChannelView) {
+	fmt.Fprintf(w, "Channel: %s\n", c.Name)
+	fmt.Fprintf(w, "  Type:      %s\n", c.Type)
+	fmt.Fprintf(w, "  Address:   %s\n", c.URLDisplay)
+	if c.Username != "" {
+		fmt.Fprintf(w, "  Username:  %s\n", c.Username)
+	}
+	fmt.Fprintf(w, "  Token:     %s\n", onOff(c.HasToken))
+	if c.ApplyToAll {
+		fmt.Fprintf(w, "  Applies to: all services\n")
+	} else if len(c.Services) > 0 {
+		fmt.Fprintf(w, "  Applies to: %s\n", strings.Join(c.Services, ", "))
+	} else {
+		fmt.Fprintf(w, "  Applies to: (none)\n")
+	}
+}
+
 // registerNotifyCommands attaches `ballast notify ...` to root.
 func registerNotifyCommands(root *cobra.Command) {
 	notifySetCmd.Flags().BoolVar(&notifyEnabled, "enabled", true, "alert when no good backup has happened for too long")
 	notifySetCmd.Flags().IntVar(&notifyMaxAgeHours, "max-age-hours", 0, "hours without a good backup before alerting (0 = based on the schedule)")
 	notifySetCmd.Flags().BoolVar(&notifyHeartbeat, "heartbeat", false, "send a message after every verified backup")
 
+	notifyChannelListCmd.Flags().BoolVar(&channelJSON, "json", false, "output as JSON")
+
+	notifyChannelAddCmd.Flags().StringVar(&channelURL, "url", "", "channel address (required)")
+	notifyChannelAddCmd.Flags().StringVar(&channelUsername, "username", "", "optional username for authentication")
+	notifyChannelAddCmd.Flags().StringVar(&channelTokenFile, "token-file", "", "file containing the access token or password")
+	notifyChannelAddCmd.Flags().BoolVar(&channelAllServices, "all-services", false, "apply to all services (default if no --service flags given)")
+	notifyChannelAddCmd.Flags().StringSliceVar(&channelServices, "service", nil, "apply to this service (may be given multiple times)")
+
+	notifyChannelEditCmd.Flags().StringVar(&channelURL, "url", "", "new channel address (leave empty to keep current)")
+	notifyChannelEditCmd.Flags().StringVar(&channelUsername, "username", "", "new username (leave empty to keep current)")
+	notifyChannelEditCmd.Flags().StringVar(&channelTokenFile, "token-file", "", "file containing new access token or password")
+	notifyChannelEditCmd.Flags().BoolVar(&channelClearToken, "clear-token", false, "remove the access token")
+	notifyChannelEditCmd.Flags().BoolVar(&channelAllServices, "all-services", false, "apply to all services")
+	notifyChannelEditCmd.Flags().StringSliceVar(&channelServices, "service", nil, "apply to this service (may be given multiple times)")
+
+	notifyChannelCmd := &cobra.Command{Use: "channel", Short: "Manage notification channels"}
+	notifyChannelCmd.AddCommand(notifyChannelListCmd, notifyChannelAddCmd, notifyChannelEditCmd, notifyChannelRemoveCmd, notifyChannelTestCmd)
+
 	notifyCmd := &cobra.Command{Use: "notify", Short: "Choose when Ballast alerts you about each service"}
-	notifyCmd.AddCommand(notifyShowCmd, notifySetCmd)
+	notifyCmd.AddCommand(notifyShowCmd, notifySetCmd, notifyChannelCmd)
 	root.AddCommand(notifyCmd)
 }
