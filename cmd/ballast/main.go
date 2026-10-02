@@ -167,13 +167,26 @@ func runScheduleLoop(ctx context.Context, a *app) {
 			wg.Add(1)
 			go func() {
 				defer wg.Done()
-				if err := a.coord.RunDue(ctx, now); err != nil {
+				if err := sweepDue(ctx, a, now); err != nil {
 					a.logf("run-due sweep: %v", err)
 				}
-				maybeSweepFreshness(ctx, a)
 			}()
 		}
 	}
+}
+
+// sweepDue is the one job-engine entry point behind both triggers:
+// the daemon's scheduler loop calls it every minute and `ballast
+// run-due` calls it once. It runs every due job through the
+// Coordinator, then the nightly freshness sweep (for headless setups
+// that never run `ballast serve`), so a job started either way
+// produces the same run states, notifications and verification
+// results (spec §18.3). The freshness sweep never hides the sweep's
+// own error.
+func sweepDue(ctx context.Context, a *app, now time.Time) error {
+	err := a.coord.RunDue(ctx, now)
+	maybeSweepFreshness(ctx, a)
+	return err
 }
 
 // nextMinuteBoundary returns the next wall-clock minute boundary
@@ -348,12 +361,7 @@ var runDueCmd = &cobra.Command{
 			return err
 		}
 		return withApp(cfg, cmd.ErrOrStderr(), func(a *app) error {
-			err := a.coord.RunDue(cmd.Context(), time.Now())
-			// Freshness sweep runs at the end of run-due too (spec §14
-			// step 11 carry-over from step 10), for headless/cron-only
-			// setups that never run `ballast serve`.
-			maybeSweepFreshness(cmd.Context(), a)
-			return err
+			return sweepDue(cmd.Context(), a, time.Now())
 		})
 	},
 }
