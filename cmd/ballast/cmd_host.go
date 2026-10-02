@@ -5,6 +5,7 @@ import (
 	"os"
 
 	"github.com/springledev/ballast/internal/api"
+	"github.com/springledev/ballast/internal/inventory"
 	"github.com/spf13/cobra"
 	"github.com/springledev/keel/dockerhost"
 )
@@ -172,6 +173,80 @@ var hostRemoveCmd = &cobra.Command{
 	},
 }
 
+var composeDirScan bool
+
+var hostComposeDirAddCmd = &cobra.Command{
+	Use:   "add <host> <folder>",
+	Short: "Tell Ballast where a compose stack lives on a Docker host",
+	Long: `Running stacks are found automatically. Use this for stacks that are not
+running: give the folder of one stack, or with --scan a parent folder
+whose sub-folders each hold a stack. The folder is a path on the Docker host.`,
+	Args: cobra.ExactArgs(2),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		cfg, err := loadConfig()
+		if err != nil {
+			return err
+		}
+		kind := inventory.ComposeDirProject
+		if composeDirScan {
+			kind = inventory.ComposeDirScan
+		}
+		return withApp(cfg, cmd.ErrOrStderr(), func(a *app) error {
+			saved, err := a.ops.AddComposeDir(cmd.Context(), inventory.ComposeDir{DockerHost: args[0], Path: args[1], Kind: kind})
+			if err != nil {
+				return err
+			}
+			cmd.Printf("%s: will look for compose stacks in %s (%s)\n", args[0], saved.Path, saved.Kind)
+			return nil
+		})
+	},
+}
+
+var hostComposeDirListCmd = &cobra.Command{
+	Use:   "list <host>",
+	Short: "List the folders Ballast checks for compose stacks on a Docker host",
+	Args:  cobra.ExactArgs(1),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		cfg, err := loadConfig()
+		if err != nil {
+			return err
+		}
+		return withApp(cfg, cmd.ErrOrStderr(), func(a *app) error {
+			list, err := a.ops.ListComposeDirs(cmd.Context(), args[0])
+			if err != nil {
+				return err
+			}
+			if len(list) == 0 {
+				cmd.Println("No extra compose folders. Running stacks are still found automatically.")
+				return nil
+			}
+			for _, d := range list {
+				cmd.Printf("%s\t%s\n", d.Path, d.Kind)
+			}
+			return nil
+		})
+	},
+}
+
+var hostComposeDirRemoveCmd = &cobra.Command{
+	Use:   "remove <host> <folder>",
+	Short: "Stop checking a folder for compose stacks",
+	Args:  cobra.ExactArgs(2),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		cfg, err := loadConfig()
+		if err != nil {
+			return err
+		}
+		return withApp(cfg, cmd.ErrOrStderr(), func(a *app) error {
+			if err := a.ops.RemoveComposeDir(cmd.Context(), args[0], args[1]); err != nil {
+				return err
+			}
+			cmd.Printf("%s: no longer checking %s\n", args[0], args[1])
+			return nil
+		})
+	},
+}
+
 // registerHostCommands attaches `ballast host ...` (spec §14 step 18,
 // §17.2) to root.
 func registerHostCommands(root *cobra.Command) {
@@ -185,6 +260,9 @@ func registerHostCommands(root *cobra.Command) {
 	_ = hostAddCmd.MarkFlagRequired("kind")
 
 	hostCmd := &cobra.Command{Use: "host", Short: "Manage the Docker hosts services run on"}
-	hostCmd.AddCommand(hostAddCmd, hostListCmd, hostTestCmd, hostRemoveCmd)
+	hostComposeDirAddCmd.Flags().BoolVar(&composeDirScan, "scan", false, "the folder holds several stacks, one per sub-folder, instead of being a stack itself")
+	composeDirCmd := &cobra.Command{Use: "compose-dir", Short: "Choose extra folders to look in for compose stacks that are not running"}
+	composeDirCmd.AddCommand(hostComposeDirAddCmd, hostComposeDirListCmd, hostComposeDirRemoveCmd)
+	hostCmd.AddCommand(hostAddCmd, hostListCmd, hostTestCmd, hostRemoveCmd, composeDirCmd)
 	root.AddCommand(hostCmd)
 }

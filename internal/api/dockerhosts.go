@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 
 	"github.com/springledev/ballast/internal/inventory"
+	"github.com/springledev/ballast/internal/strategy"
 	"github.com/springledev/keel/dockerhost"
 )
 
@@ -61,10 +62,13 @@ func (o *Ops) ListDockerHostVolumes(ctx context.Context, name string) ([]dockerh
 }
 
 // ListDockerHostComposeProjects lists the Docker Compose projects on a
-// saved host, for the "compose-project" parameter picker in a
-// service's setup form. Listing projects is a best-effort
-// convenience: the caller falls back to a plain text box when this
-// fails.
+// saved host: running stacks from container labels first (the
+// authoritative source), then folders the user registered, then
+// defined-but-not-running stacks found by scanning scan folders (spec
+// §18.4). Listing is a best-effort convenience for the setup forms: the
+// caller falls back to a plain text box when this fails. A folder that
+// cannot be read fails the listing with an error naming it, so a typo
+// in a registered path is never silently ignored.
 func (o *Ops) ListDockerHostComposeProjects(ctx context.Context, name string) ([]dockerhost.ComposeProject, error) {
 	h, err := inventory.GetDockerHost(o.DB, name)
 	if err != nil {
@@ -77,11 +81,58 @@ func (o *Ops) ListDockerHostComposeProjects(ctx context.Context, name string) ([
 	if err != nil {
 		return nil, o.redactErr(err)
 	}
-	list, err := dockerhost.ListComposeProjects(ctx, o.Runner, d)
+	labelled, err := dockerhost.ListComposeProjects(ctx, o.Runner, d)
 	if err != nil {
 		return nil, o.redactErr(err)
 	}
-	return list, nil
+	dirs, err := inventory.ListComposeDirs(o.DB, h.Name)
+	if err != nil {
+		return nil, err
+	}
+	var projectDirs, scanDirs []string
+	for _, cd := range dirs {
+		if cd.Kind == inventory.ComposeDirProject {
+			projectDirs = append(projectDirs, cd.Path)
+		} else {
+			scanDirs = append(scanDirs, cd.Path)
+		}
+	}
+	registered, err := dockerhost.ScanComposeDirs(ctx, o.Runner, d, strategy.DefaultVolumeHelperImage, projectDirs, false, dockerhost.ComposeSourceRegistered)
+	if err != nil {
+		return nil, o.redactErr(err)
+	}
+	scanned, err := dockerhost.ScanComposeDirs(ctx, o.Runner, d, strategy.DefaultVolumeHelperImage, scanDirs, true, dockerhost.ComposeSourceScan)
+	if err != nil {
+		return nil, o.redactErr(err)
+	}
+	return dockerhost.MergeComposeProjects(labelled, registered, scanned), nil
+}
+
+// AddComposeDir saves a folder on a Docker host for compose discovery
+// (kind "project" or "scan"). A bad path or kind is a validation
+// error.
+func (o *Ops) AddComposeDir(ctx context.Context, d inventory.ComposeDir) (inventory.ComposeDir, error) {
+	saved, err := inventory.PutComposeDir(o.DB, d)
+	if err != nil {
+		if !errors.Is(err, inventory.ErrNotFound) {
+			err = fmt.Errorf("%w: %w", ErrValidation, err)
+		}
+		return inventory.ComposeDir{}, wrapf("docker host "+d.DockerHost, err)
+	}
+	return saved, nil
+}
+
+// ListComposeDirs returns the compose folders saved for a Docker host.
+func (o *Ops) ListComposeDirs(ctx context.Context, host string) ([]inventory.ComposeDir, error) {
+	if _, err := inventory.GetDockerHost(o.DB, host); err != nil {
+		return nil, wrapf("docker host "+host, err)
+	}
+	return inventory.ListComposeDirs(o.DB, host)
+}
+
+// RemoveComposeDir forgets a compose folder on a Docker host.
+func (o *Ops) RemoveComposeDir(ctx context.Context, host, path string) error {
+	return wrapf("docker host "+host, inventory.DeleteComposeDir(o.DB, host, path))
 }
 
 // GetDockerHost returns one Docker host.

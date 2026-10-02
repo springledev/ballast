@@ -34,6 +34,7 @@
         "database",
         "server"
       ],
+      "source": "labels",
       "working_dir": "/opt/immich"
     }
   ]

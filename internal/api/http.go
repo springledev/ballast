@@ -82,6 +82,9 @@ func NewHandler(ops *Ops, apiToken string) http.Handler {
 	protected.HandleFunc("POST /api/v1/docker-hosts/{name}/test", h.testDockerHost)
 	protected.HandleFunc("GET /api/v1/docker-hosts/{name}/volumes", h.listDockerHostVolumes)
 	protected.HandleFunc("GET /api/v1/docker-hosts/{name}/compose-projects", h.listDockerHostComposeProjects)
+	protected.HandleFunc("GET /api/v1/docker-hosts/{name}/compose-dirs", h.listComposeDirs)
+	protected.HandleFunc("POST /api/v1/docker-hosts/{name}/compose-dirs", h.addComposeDir)
+	protected.HandleFunc("DELETE /api/v1/docker-hosts/{name}/compose-dirs", h.removeComposeDir)
 
 	protected.HandleFunc("GET /api/v1/proxmox", h.getProxmoxConnection)
 	protected.HandleFunc("PUT /api/v1/proxmox", h.putProxmoxConnection)
@@ -740,6 +743,51 @@ func (h *handler) listDockerHostComposeProjects(w http.ResponseWriter, r *http.R
 		return
 	}
 	writeJSON(w, http.StatusOK, list)
+}
+
+func (h *handler) listComposeDirs(w http.ResponseWriter, r *http.Request) {
+	list, err := h.ops.ListComposeDirs(r.Context(), pathName(r))
+	if err != nil {
+		h.writeErr(w, err, http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, http.StatusOK, list)
+}
+
+// composeDirBody is the request shape of POST/DELETE
+// /api/v1/docker-hosts/{name}/compose-dirs: the folder on the host and,
+// when adding, whether it is one stack's folder ("project") or a parent
+// to scan ("scan").
+type composeDirBody struct {
+	Path string `json:"path"`
+	Kind string `json:"kind"`
+}
+
+func (h *handler) addComposeDir(w http.ResponseWriter, r *http.Request) {
+	var body composeDirBody
+	if err := decodeJSON(r, &body); err != nil {
+		h.writeErr(w, err, http.StatusBadRequest)
+		return
+	}
+	saved, err := h.ops.AddComposeDir(r.Context(), inventory.ComposeDir{DockerHost: pathName(r), Path: body.Path, Kind: body.Kind})
+	if err != nil {
+		h.writeErr(w, err, http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, http.StatusCreated, saved)
+}
+
+func (h *handler) removeComposeDir(w http.ResponseWriter, r *http.Request) {
+	var body composeDirBody
+	if err := decodeJSON(r, &body); err != nil {
+		h.writeErr(w, err, http.StatusBadRequest)
+		return
+	}
+	if err := h.ops.RemoveComposeDir(r.Context(), pathName(r), body.Path); err != nil {
+		h.writeErr(w, err, http.StatusInternalServerError)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
 }
 
 func (h *handler) getProxmoxConnection(w http.ResponseWriter, r *http.Request) {

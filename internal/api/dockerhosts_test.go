@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"reflect"
 	"testing"
 
 	"github.com/springledev/ballast/internal/inventory"
@@ -364,5 +365,71 @@ func TestListDockerHostComposeProjectsNoRunner(t *testing.T) {
 	_, err := h.ops.ListDockerHostComposeProjects(context.Background(), dockerhost.LocalName)
 	if err == nil {
 		t.Fatal("want an error when no runner is configured")
+	}
+}
+
+// dockerPsComposeScanStub answers `docker ps -a` with one running
+// project and `docker run` (the folder-scan helper) with stacks for a
+// registered folder and a scan folder — including a duplicate of the
+// running project, which discovery must not list twice.
+const dockerPsComposeScanStub = dockerPsComposeStubHead +
+	`case "$*" in` + "\n" +
+	`*"-v /srv/blog:/data:ro"*) printf '%s\n' './compose.yaml' './compose.override.yaml';;` + "\n" +
+	`*"-v /srv/stacks:/data:ro"*) printf '%s\n' 'wiki/docker-compose.yml' 'immich/compose.yaml';;` + "\n" +
+	"esac\nexit 0\n"
+
+const dockerPsComposeStubHead = "#!/bin/sh\n" +
+	`if [ "$1 $2 $3 $4" = "ps -a --format {{json .}}" ]; then` + "\n" +
+	`  printf '%s\n' '{"Names":"immich_server","Image":"immich/server","Labels":"com.docker.compose.project=immich,com.docker.compose.service=server,com.docker.compose.project.working_dir=/srv/stacks/immich,com.docker.compose.project.config_files=/srv/stacks/immich/compose.yaml"}'` + "\n" +
+	"  exit 0\nfi\n"
+
+// TestListDockerHostComposeProjectsFolders checks that registered and
+// scanned folders add stacks after the label-found ones, without
+// listing a running stack twice.
+func TestListDockerHostComposeProjectsFolders(t *testing.T) {
+	h := newHarness(t)
+	h.ops.Runner = &runner.Runner{}
+	h.ops.DockerHosts = dockerhost.Resolver{DockerBin: writeDockerStub(t, dockerPsComposeScanStub)}
+	ctx := context.Background()
+	for _, d := range []inventory.ComposeDir{
+		{DockerHost: dockerhost.LocalName, Path: "/srv/blog", Kind: inventory.ComposeDirProject},
+		{DockerHost: dockerhost.LocalName, Path: "/srv/stacks", Kind: inventory.ComposeDirScan},
+	} {
+		if _, err := h.ops.AddComposeDir(ctx, d); err != nil {
+			t.Fatalf("AddComposeDir: %v", err)
+		}
+	}
+	got, err := h.ops.ListDockerHostComposeProjects(ctx, dockerhost.LocalName)
+	if err != nil {
+		t.Fatalf("ListDockerHostComposeProjects: %v", err)
+	}
+	var seen []string
+	for _, p := range got {
+		seen = append(seen, p.Name+":"+p.Source)
+	}
+	want := []string{"blog:registered", "immich:labels", "wiki:scan"}
+	if !reflect.DeepEqual(seen, want) {
+		t.Fatalf("projects = %v, want %v", seen, want)
+	}
+	if len(got[0].ConfigFiles) != 2 {
+		t.Errorf("blog config files = %v, want base + override in merge order", got[0].ConfigFiles)
+	}
+}
+
+// TestComposeDirsValidation checks that a relative path is a
+// validation error and an unknown host is not-found.
+func TestComposeDirsValidation(t *testing.T) {
+	h := newHarness(t)
+	ctx := context.Background()
+	_, err := h.ops.AddComposeDir(ctx, inventory.ComposeDir{DockerHost: dockerhost.LocalName, Path: "relative", Kind: inventory.ComposeDirScan})
+	if !errors.Is(err, ErrValidation) {
+		t.Errorf("relative path err = %v, want ErrValidation", err)
+	}
+	_, err = h.ops.AddComposeDir(ctx, inventory.ComposeDir{DockerHost: "nope", Path: "/srv", Kind: inventory.ComposeDirScan})
+	if !errors.Is(err, inventory.ErrNotFound) {
+		t.Errorf("unknown host err = %v, want ErrNotFound", err)
+	}
+	if err := h.ops.RemoveComposeDir(ctx, dockerhost.LocalName, "/srv"); !errors.Is(err, inventory.ErrNotFound) {
+		t.Errorf("remove missing err = %v, want ErrNotFound", err)
 	}
 }
