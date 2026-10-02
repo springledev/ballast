@@ -57,6 +57,7 @@ func stripLogLines(out string) string {
 // one test binary's rootCmd.
 func resetCLIFlags() {
 	triggerToken, triggerTokenFile = "", ""
+	daemonURL = ""
 
 	statusService, statusJSON, statusVerify = "", false, false
 	snapshotsJSON = false

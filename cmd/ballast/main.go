@@ -31,6 +31,7 @@ import (
 	"github.com/springledev/ballast/internal/store"
 	"github.com/springledev/ballast/web"
 	"github.com/spf13/cobra"
+	"github.com/spf13/pflag"
 	execrunner "github.com/springledev/keel/runner"
 )
 
@@ -94,7 +95,14 @@ var serveCmd = &cobra.Command{
 		mux.Handle("/api/v1/", api.NewHandler(a.ops, a.apiToken))
 		mux.Handle("/", webUI)
 
-		ln, err := net.Listen("tcp", serveAddr)
+		listen := cfg.Listen
+		if cmd.Flags().Changed("listen") {
+			listen = serveAddr
+			if err := config.ValidateListen(listen); err != nil {
+				return fmt.Errorf("--listen: %w", err)
+			}
+		}
+		ln, err := net.Listen("tcp", listen)
 		if err != nil {
 			return fmt.Errorf("starting web server: %w", err)
 		}
@@ -375,7 +383,14 @@ then gives up without starting a second run.`,
 }
 
 func init() {
-	serveCmd.Flags().StringVar(&serveAddr, "addr", "127.0.0.1:8000", "listen address for the web server")
+	serveCmd.Flags().StringVar(&serveAddr, "listen", config.DefaultListen, "host:port for the web server (default: the `listen` setting in ballast.yaml)")
+	// --addr is the older name for --listen and keeps working.
+	serveCmd.Flags().SetNormalizeFunc(func(_ *pflag.FlagSet, name string) pflag.NormalizedName {
+		if name == "addr" {
+			name = "listen"
+		}
+		return pflag.NormalizedName(name)
+	})
 	triggerCmd.Flags().StringVar(&triggerToken, "token", "", "external trigger token for the service (visible in the process list; prefer --token-file)")
 	triggerCmd.Flags().StringVar(&triggerTokenFile, "token-file", "", "path to a file (mode 0600) holding the trigger token")
 	rootCmd.AddCommand(serveCmd, versionCmd, runDueCmd, triggerCmd)

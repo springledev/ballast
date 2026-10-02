@@ -101,8 +101,25 @@ func cliEnv(t *testing.T, r scheduler.Runner) string {
 	t.Helper()
 	data := filepath.Join(t.TempDir(), "data")
 	t.Setenv("BALLAST_DATA_DIR", data)
-	t.Setenv("BALLAST_CONFIG_DIR", filepath.Join(t.TempDir(), "config"))
+	cfgDir := filepath.Join(t.TempDir(), "config")
+	t.Setenv("BALLAST_CONFIG_DIR", cfgDir)
+	t.Setenv("BALLAST_URL", "")
 	t.Setenv("CREDENTIALS_DIRECTORY", "")
+	// Point the daemon lookup at a port nothing listens on, so commands
+	// that prefer a running daemon fall back to running on their own
+	// even if the developer has a real daemon on the default port.
+	if err := os.MkdirAll(cfgDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	addr := ln.Addr().String()
+	ln.Close()
+	if err := os.WriteFile(filepath.Join(cfgDir, "ballast.yaml"), []byte("listen: "+addr+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
 	prev := runner
 	runner = r
 	t.Cleanup(func() {

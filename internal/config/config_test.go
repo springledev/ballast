@@ -233,3 +233,41 @@ func TestLoadMaxParallelJobs(t *testing.T) {
 		})
 	}
 }
+
+func TestLoadListen(t *testing.T) {
+	tests := []struct {
+		name    string
+		yaml    string
+		want    string
+		wantErr string
+	}{
+		{name: "default", yaml: "", want: DefaultListen},
+		{name: "from file", yaml: "listen: 0.0.0.0:9090\n", want: "0.0.0.0:9090"},
+		{name: "all interfaces shorthand", yaml: "listen: \":8080\"\n", want: ":8080"},
+		{name: "missing port", yaml: "listen: localhost\n", wantErr: "not a valid listen address"},
+		{name: "bad port", yaml: "listen: 127.0.0.1:99999\n", wantErr: "invalid port"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			dir := t.TempDir()
+			if tt.yaml != "" {
+				if err := os.WriteFile(filepath.Join(dir, "ballast.yaml"), []byte(tt.yaml), 0o600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			cfg, err := Load(getenv(map[string]string{"BALLAST_CONFIG_DIR": dir}), home(t))
+			if tt.wantErr != "" {
+				if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
+					t.Fatalf("Load error = %v, want containing %q", err, tt.wantErr)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("Load: %v", err)
+			}
+			if cfg.Listen != tt.want {
+				t.Errorf("Listen = %q, want %q", cfg.Listen, tt.want)
+			}
+		})
+	}
+}

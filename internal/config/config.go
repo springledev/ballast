@@ -11,8 +11,10 @@ package config
 
 import (
 	"fmt"
+	"net"
 	"os"
 	"path/filepath"
+	"strconv"
 
 	"gopkg.in/yaml.v3"
 )
@@ -52,6 +54,32 @@ type Config struct {
 	// never runs twice at once regardless. Always between 1 and
 	// ParallelJobsLimit.
 	MaxParallelJobs int
+
+	// Listen is the host:port `ballast serve` listens on and the
+	// address CLI commands look for a running daemon at. It comes from
+	// the `listen` key in ballast.yaml, else DefaultListen. The
+	// `--listen` flag overrides it for one `serve` run.
+	Listen string
+}
+
+// DefaultListen is Listen when ballast.yaml does not set `listen`. It
+// stays on the loopback address until the authentication layer ships
+// (PLAN.md step 37), so a default install is never reachable from the
+// network.
+const DefaultListen = "127.0.0.1:8000"
+
+// ValidateListen checks that addr looks like host:port with a port from 0
+// to 65535 (0 picks any free port; the host may be empty, meaning every
+// interface).
+func ValidateListen(addr string) error {
+	_, port, err := net.SplitHostPort(addr)
+	if err != nil {
+		return fmt.Errorf("%q is not a valid listen address; use host:port, for example 127.0.0.1:8000", addr)
+	}
+	if n, err := strconv.Atoi(port); err != nil || n < 0 || n > 65535 {
+		return fmt.Errorf("%q has an invalid port %q; the port must be a number from 0 to 65535", addr, port)
+	}
+	return nil
 }
 
 // DefaultMaxParallelJobs is MaxParallelJobs when ballast.yaml does not
@@ -74,6 +102,7 @@ type fileConfig struct {
 	DataDir         string   `yaml:"data_dir"`
 	CatalogDirs     []string `yaml:"catalog_dirs"`
 	MaxParallelJobs *int     `yaml:"max_parallel_jobs"`
+	Listen          string   `yaml:"listen"`
 }
 
 // Load resolves the effective configuration.
@@ -92,6 +121,7 @@ func Load(getenv func(string) string, homeDir func() (string, error)) (Config, e
 		return Config{}, err
 	}
 	cfg.MaxParallelJobs = DefaultMaxParallelJobs
+	cfg.Listen = DefaultListen
 
 	if path := getenv("BALLAST_CONFIG_DIR"); path != "" {
 		cfg.ConfigDir = filepath.Clean(path)
@@ -111,6 +141,12 @@ func Load(getenv func(string) string, homeDir func() (string, error)) (Config, e
 		}
 		if len(fc.CatalogDirs) > 0 {
 			cfg.CatalogDirs = cleanAll(fc.CatalogDirs)
+		}
+		if fc.Listen != "" {
+			if err := ValidateListen(fc.Listen); err != nil {
+				return Config{}, fmt.Errorf("%s: listen: %w", configFilePath(cfg.ConfigDir), err)
+			}
+			cfg.Listen = fc.Listen
 		}
 		if fc.MaxParallelJobs != nil {
 			if n := *fc.MaxParallelJobs; n < 1 || n > ParallelJobsLimit {
@@ -146,6 +182,9 @@ func (c Config) CredentialDirs() []string {
 }
 
 // configFilePath returns the config file path for an error message.
+// ConfigFilePath returns where ballast.yaml lives for this config.
+func (c Config) ConfigFilePath() string { return configFilePath(c.ConfigDir) }
+
 func configFilePath(dir string) string {
 	return filepath.Join(dir, configFile)
 }

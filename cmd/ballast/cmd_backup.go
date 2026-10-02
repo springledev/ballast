@@ -2,6 +2,8 @@ package main
 
 import (
 	"fmt"
+	"net/http"
+	"net/url"
 
 	"github.com/springledev/ballast/internal/api"
 	"github.com/spf13/cobra"
@@ -20,6 +22,13 @@ var backupCmd = &cobra.Command{
 		if err != nil {
 			return err
 		}
+		client, err := useDaemon(cmd, cfg)
+		if err != nil {
+			return err
+		}
+		if client != nil {
+			return backupViaDaemon(cmd, client, args[0])
+		}
 		return withApp(cfg, cmd.ErrOrStderr(), func(a *app) error {
 			runErr := a.ops.Backup(cmd.Context(), args[0])
 			if runErr != nil {
@@ -37,6 +46,23 @@ var backupCmd = &cobra.Command{
 			return nil
 		})
 	},
+}
+
+// backupViaDaemon asks the running daemon to start the backup. The
+// daemon runs it in the background (a backup can take hours), so this
+// returns once it has started; the result shows up in `ballast status`.
+func backupViaDaemon(cmd *cobra.Command, c *daemonClient, service string) error {
+	var res struct {
+		Interrupted bool `json:"previous_run_interrupted"`
+	}
+	if err := c.call(cmd.Context(), http.MethodPost, "/api/v1/services/"+url.PathEscape(service)+"/backup", nil, &res); err != nil {
+		return fmt.Errorf("starting backup of %s: %w", service, err)
+	}
+	if res.Interrupted {
+		fmt.Fprintf(cmd.ErrOrStderr(), "ballast: warning: an earlier backup of %s was found unfinished and has been marked failed\n", service)
+	}
+	cmd.Printf("%s: backup started by the Ballast daemon. It is verified when it finishes; check progress with `ballast status`.\n", service)
+	return nil
 }
 
 func init() {

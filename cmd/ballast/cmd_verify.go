@@ -3,6 +3,9 @@ package main
 import (
 	"encoding/json"
 	"fmt"
+	"net/http"
+	"net/url"
+	"strings"
 
 	"github.com/springledev/ballast/internal/api"
 	"github.com/spf13/cobra"
@@ -29,6 +32,13 @@ var verifyCmd = &cobra.Command{
 		cfg, err := loadConfig()
 		if err != nil {
 			return err
+		}
+		client, err := useDaemon(cmd, cfg)
+		if err != nil {
+			return err
+		}
+		if client != nil {
+			return verifyViaDaemon(cmd, client, args)
 		}
 		return withApp(cfg, cmd.ErrOrStderr(), func(a *app) error {
 			var reports []api.VerifyReport
@@ -59,6 +69,42 @@ var verifyCmd = &cobra.Command{
 			return err
 		})
 	},
+}
+
+// verifyViaDaemon runs the verification inside the daemon and prints
+// the same output the single-shot path does.
+func verifyViaDaemon(cmd *cobra.Command, c *daemonClient, args []string) error {
+	var reports []api.VerifyReport
+	if verifyAll {
+		if err := c.call(cmd.Context(), http.MethodPost, "/api/v1/verify", nil, &reports); err != nil {
+			return fmt.Errorf("verifying all services: %w", err)
+		}
+	} else {
+		var rep api.VerifyReport
+		if err := c.call(cmd.Context(), http.MethodPost, "/api/v1/services/"+url.PathEscape(args[0])+"/verify", nil, &rep); err != nil {
+			return fmt.Errorf("verifying %s: %w", args[0], err)
+		}
+		reports = []api.VerifyReport{rep}
+	}
+	if verifyJSON {
+		enc := json.NewEncoder(cmd.OutOrStdout())
+		enc.SetIndent("", "  ")
+		if err := enc.Encode(reports); err != nil {
+			return err
+		}
+	} else {
+		printVerifyReports(cmd, reports)
+	}
+	var bad []string
+	for _, r := range reports {
+		if r.Light == "red" {
+			bad = append(bad, r.Service)
+		}
+	}
+	if len(bad) > 0 {
+		return fmt.Errorf("verification failed for: %s", strings.Join(bad, ", "))
+	}
+	return nil
 }
 
 // printVerifyReports renders each report in plain English (spec §10
