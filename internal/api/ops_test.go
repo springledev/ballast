@@ -2,10 +2,12 @@ package api
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"sync"
 	"testing"
@@ -1558,5 +1560,64 @@ func TestOpsTestDestinationRepoMissing(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "no backup repository there yet") {
 		t.Errorf("error = %q, want it to say there is no backup repository there yet", err)
+	}
+}
+
+func TestOpsEnvSecret(t *testing.T) {
+	h := newHarness(t)
+	h.addDestination("local")
+	ctx := context.Background()
+	if err := h.ops.PutService(ctx, inventory.Service{Name: "svc", CatalogEntry: "folder", Destination: "local", Params: map[string]string{"path": "/x"}}); err != nil {
+		t.Fatal(err)
+	}
+	h.ops.Redact = secretpkg.NewSet()
+	envPath := filepath.Join(t.TempDir(), ".env")
+	if err := os.WriteFile(envPath, []byte("DB_PASSWORD=s3cr3t-pw\nDB_USERNAME=immich\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	keys, err := h.ops.TestEnvSource(ctx, envPath)
+	if err != nil || !reflect.DeepEqual(keys, []string{"DB_PASSWORD", "DB_USERNAME"}) {
+		t.Fatalf("TestEnvSource = %v, %v", keys, err)
+	}
+	if _, err := h.ops.TestEnvSource(ctx, "relative/.env"); !errors.Is(err, ErrValidation) {
+		t.Errorf("relative path err = %v, want ErrValidation", err)
+	}
+
+	tests := []struct {
+		name, path, key string
+		wantErr         string
+	}{
+		{"ok", envPath, "DB_PASSWORD", ""},
+		{"missing key", envPath, "NOPE", "NOPE"},
+		{"missing file", envPath + ".gone", "DB_PASSWORD", "cannot read"},
+		{"relative", "x/.env", "DB_PASSWORD", "absolute"},
+		{"bad key", envPath, "A B", "plain variable name"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := h.ops.SetEnvSecret(ctx, "svc", "db_password", tt.path, tt.key)
+			if tt.wantErr == "" {
+				if err != nil {
+					t.Fatal(err)
+				}
+				return
+			}
+			if !errors.Is(err, ErrValidation) || !strings.Contains(err.Error(), tt.wantErr) {
+				t.Fatalf("err = %v, want ErrValidation containing %q", err, tt.wantErr)
+			}
+		})
+	}
+
+	got, _ := h.ops.GetService(ctx, "svc")
+	if got.Secrets["db_password"] != inventory.EnvRef(envPath, "DB_PASSWORD") {
+		t.Errorf("stored ref = %q", got.Secrets["db_password"])
+	}
+	b, _ := json.Marshal(got)
+	if strings.Contains(string(b), "s3cr3t-pw") {
+		t.Error("service API shape leaks the value")
+	}
+	if strings.Contains(h.ops.Redact.Redact("x s3cr3t-pw"), "s3cr3t-pw") {
+		t.Error("value not registered for redaction")
 	}
 }

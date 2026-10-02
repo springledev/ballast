@@ -20,6 +20,7 @@ import (
 
 	"github.com/springledev/ballast/internal/catalog"
 	"github.com/springledev/ballast/internal/detect"
+	"github.com/springledev/ballast/internal/dotenv"
 	"github.com/springledev/ballast/internal/engine"
 	"github.com/springledev/ballast/internal/inventory"
 	"github.com/springledev/ballast/internal/restic"
@@ -475,6 +476,15 @@ func (p *Pipeline) resolveSecrets(svc inventory.Service) (map[string]string, err
 	}
 	out := make(map[string]string, len(svc.Secrets))
 	for name, cred := range svc.Secrets {
+		if path, key, ok := inventory.ParseEnvRef(cred); ok {
+			v, err := dotenv.Lookup(path, key)
+			if err != nil {
+				return nil, fmt.Errorf("secret %q: could not read %s from %s: %w", name, key, path, err)
+			}
+			p.Redact.Add(v)
+			out[name] = v
+			continue
+		}
 		dir := runner.FindCredentialDir(cred, p.CredDir, p.OwnCredDir)
 		v, err := runner.LoadCredentialValue(dir, cred)
 		if err != nil {

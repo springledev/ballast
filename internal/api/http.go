@@ -59,6 +59,8 @@ func NewHandler(ops *Ops, apiToken string) http.Handler {
 	protected.HandleFunc("GET /api/v1/services/{name}/notifications", h.getNotificationSettings)
 	protected.HandleFunc("PUT /api/v1/services/{name}/notifications", h.putNotificationSettings)
 	protected.HandleFunc("PUT /api/v1/services/{name}/secrets/{secret}", h.putSecret)
+	protected.HandleFunc("PUT /api/v1/services/{name}/secrets/{secret}/env-file", h.putEnvSecret)
+	protected.HandleFunc("POST /api/v1/env-sources/test", h.testEnvSource)
 
 	protected.HandleFunc("GET /api/v1/notification-channels", h.listChannels)
 	protected.HandleFunc("POST /api/v1/notification-channels", h.putChannel)
@@ -492,6 +494,40 @@ func (h *handler) putSecret(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Cache-Control", "no-store")
 	writeJSON(w, http.StatusOK, map[string]bool{"set": true})
+}
+
+// envSecretBody names a key inside an app's .env file; it carries no value.
+type envSecretBody struct {
+	Path string `json:"path"`
+	Key  string `json:"key"`
+}
+
+func (h *handler) putEnvSecret(w http.ResponseWriter, r *http.Request) {
+	var body envSecretBody
+	if err := decodeJSON(r, &body); err != nil {
+		h.writeErr(w, err, http.StatusBadRequest)
+		return
+	}
+	if err := h.ops.SetEnvSecret(r.Context(), pathName(r), r.PathValue("secret"), body.Path, body.Key); err != nil {
+		h.writeErr(w, err, http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]bool{"set": true})
+}
+
+// testEnvSource lists the key names (never values) in a .env file.
+func (h *handler) testEnvSource(w http.ResponseWriter, r *http.Request) {
+	var body envSecretBody
+	if err := decodeJSON(r, &body); err != nil {
+		h.writeErr(w, err, http.StatusBadRequest)
+		return
+	}
+	keys, err := h.ops.TestEnvSource(r.Context(), body.Path)
+	if err != nil {
+		h.writeErr(w, err, http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string][]string{"keys": keys})
 }
 
 // --- trigger tokens & trigger --------------------------------------------

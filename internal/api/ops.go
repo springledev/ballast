@@ -24,6 +24,7 @@ import (
 	"github.com/springledev/ballast/internal/backend"
 	"github.com/springledev/ballast/internal/catalog"
 	"github.com/springledev/ballast/internal/detect"
+	"github.com/springledev/ballast/internal/dotenv"
 	"github.com/springledev/ballast/internal/engine"
 	"github.com/springledev/ballast/internal/inventory"
 	"github.com/springledev/ballast/internal/notify"
@@ -721,7 +722,7 @@ func (o *Ops) SetSecret(ctx context.Context, service, name, value string) error 
 		return fmt.Errorf("service %s: %w: no writable credential directory is configured", service, ErrValidation)
 	}
 	cred := svc.Secrets[name]
-	if cred == "" {
+	if _, _, isEnv := inventory.ParseEnvRef(cred); isEnv || cred == "" {
 		cred = "ballast-secret." + service + "." + name
 	}
 	// A credential file of this name already provided elsewhere (e.g.
@@ -764,6 +765,50 @@ func (o *Ops) SetSecret(ctx context.Context, service, name, value string) error 
 		}
 	}
 	return nil
+}
+
+// SetEnvSecret points one of a service's {{ .Secrets.<name> }}
+// references at a key in an application's .env file (spec §18.2)
+// instead of storing a copy. Only the path and key are saved; the value
+// is read on every run, so a password rotated in the app's .env works
+// with no change here. The file and key are checked now so a typo is
+// caught at setup, but the value itself is never stored or returned.
+func (o *Ops) SetEnvSecret(ctx context.Context, service, name, path, key string) error {
+	ref := inventory.EnvRef(path, key)
+	if _, _, err := inventory.ValidateEnvRef(ref); err != nil {
+		return fmt.Errorf("service %s: %w: %v", service, ErrValidation, err)
+	}
+	svc, err := inventory.GetService(o.DB, service)
+	if err != nil {
+		return wrapf("service "+service, err)
+	}
+	v, err := dotenv.Lookup(path, key)
+	if err != nil {
+		return fmt.Errorf("service %s: %w: %v", service, ErrValidation, err)
+	}
+	o.Redact.Add(v)
+	if svc.Secrets == nil {
+		svc.Secrets = map[string]string{}
+	}
+	svc.Secrets[name] = ref
+	if err := inventory.PutService(o.DB, svc); err != nil {
+		return wrapf("service "+service, err)
+	}
+	return nil
+}
+
+// TestEnvSource checks that the .env file at path can be read and
+// returns the key names found in it — never any values — so the UI and
+// CLI can offer "test this source" before anything is saved.
+func (o *Ops) TestEnvSource(ctx context.Context, path string) ([]string, error) {
+	if !filepath.IsAbs(path) {
+		return nil, fmt.Errorf("%w: the .env file path %q must be an absolute path (for example /opt/immich/.env)", ErrValidation, path)
+	}
+	keys, err := dotenv.Keys(path)
+	if err != nil {
+		return nil, fmt.Errorf("%w: %v", ErrValidation, err)
+	}
+	return keys, nil
 }
 
 // --- Destinations --------------------------------------------------------

@@ -62,11 +62,59 @@ inside a dump's secretEnv (see the catalog contributing guide).`,
 	},
 }
 
+var secretSetEnvCmd = &cobra.Command{
+	Use:   "set-env <service> <name> <path-to-.env> <KEY>",
+	Short: "Read a secret from a key in an app's .env file instead of storing a copy",
+	Long: `Point a secret at a key in an application's own .env file.
+
+Ballast stores only the file path and key name, never the value, and reads
+the file fresh on every backup — so if you change the password in that .env,
+the next backup uses it with no changes here.`,
+	Example: `  ballast secret set-env immich db_password /opt/immich/.env DB_PASSWORD`,
+	Args:    cobra.ExactArgs(4),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		cfg, err := loadConfig()
+		if err != nil {
+			return err
+		}
+		return withApp(cfg, cmd.ErrOrStderr(), func(a *app) error {
+			if err := a.ops.SetEnvSecret(cmd.Context(), args[0], args[1], args[2], args[3]); err != nil {
+				return err
+			}
+			cmd.Printf("%s: secret %q will be read from %s (%s) on every backup\n", args[0], args[1], args[2], args[3])
+			return nil
+		})
+	},
+}
+
+var secretTestEnvCmd = &cobra.Command{
+	Use:   "test-env <path-to-.env>",
+	Short: "Check an app's .env file is readable and list its key names (never values)",
+	Args:  cobra.ExactArgs(1),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		cfg, err := loadConfig()
+		if err != nil {
+			return err
+		}
+		return withApp(cfg, cmd.ErrOrStderr(), func(a *app) error {
+			keys, err := a.ops.TestEnvSource(cmd.Context(), args[0])
+			if err != nil {
+				return err
+			}
+			cmd.Printf("%s is readable and contains %d keys:\n", args[0], len(keys))
+			for _, k := range keys {
+				cmd.Println("  " + k)
+			}
+			return nil
+		})
+	},
+}
+
 // registerSecretCommands attaches `ballast secret ...` to root.
 func registerSecretCommands(root *cobra.Command) {
 	secretSetCmd.Flags().StringVar(&secretValueFlag, "value", "", "the secret value (prefer piping it on stdin instead; this flag is visible in your shell history)")
 
 	secretCmd := &cobra.Command{Use: "secret", Short: "Manage secret values for catalog {{ .Secrets.<name> }} references"}
-	secretCmd.AddCommand(secretSetCmd)
+	secretCmd.AddCommand(secretSetCmd, secretSetEnvCmd, secretTestEnvCmd)
 	root.AddCommand(secretCmd)
 }

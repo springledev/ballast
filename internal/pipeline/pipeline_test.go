@@ -853,3 +853,66 @@ func TestRunEveryDeclaredMethodEnforced(t *testing.T) {
 		})
 	}
 }
+
+// TestRunEnvFileSecret checks the spec §18.2 path: a secret that points
+// at a key in an app's .env is read at run time (so a rotated password
+// is used with no re-setup), is forwarded like any other secret without
+// reaching argv or the log, and a missing key fails the run at PREPARING
+// naming the exact file and key.
+func TestRunEnvFileSecret(t *testing.T) {
+	h := newHarness(t)
+	envPath := filepath.Join(t.TempDir(), ".env")
+	writeEnv := func(content string) {
+		t.Helper()
+		if err := os.WriteFile(envPath, []byte(content), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	writeEnv("DB_PASSWORD=hunter2\n")
+	if err := inventory.PutService(h.db, inventory.Service{
+		Name: "dumpsecret", CatalogEntry: "dumpsecret", Destination: "local",
+		Secrets: map[string]string{"db_password": inventory.EnvRef(envPath, "DB_PASSWORD")},
+	}); err != nil {
+		t.Fatalf("PutService: %v", err)
+	}
+	var logBuf strings.Builder
+	p := h.pipeline()
+	p.Catalog = registryWith(t, map[string]string{"dumpsecret.yaml": dumpSecretEntryYAML})
+	p.Log = &logBuf
+
+	if state, err := p.Run(context.Background(), "dumpsecret"); err != nil || state != engine.SUCCESS {
+		t.Fatalf("Run = %s, %v; want SUCCESS", state, err)
+	}
+	// Rotation: new password in the .env is picked up and redacted.
+	writeEnv("DB_PASSWORD=rotated-pw\n")
+	if state, err := p.Run(context.Background(), "dumpsecret"); err != nil || state != engine.SUCCESS {
+		t.Fatalf("Run after rotation = %s, %v", state, err)
+	}
+	dockerLog, _ := os.ReadFile(h.dockerLog)
+	for _, leak := range []string{"hunter2", "rotated-pw"} {
+		if strings.Contains(string(dockerLog), leak) || strings.Contains(logBuf.String(), leak) {
+			t.Errorf("secret %q leaked into docker argv or log", leak)
+		}
+	}
+	var dbDump strings.Builder
+	rows, err := h.db.Query(`SELECT name, secrets_json FROM services`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for rows.Next() {
+		var a, b string
+		_ = rows.Scan(&a, &b)
+		dbDump.WriteString(a + b)
+	}
+	rows.Close()
+	if strings.Contains(dbDump.String(), "rotated-pw") || strings.Contains(dbDump.String(), "hunter2") {
+		t.Error("resolved value found in the database")
+	}
+
+	// Loud failure: key removed.
+	writeEnv("OTHER=1\n")
+	state, err := p.Run(context.Background(), "dumpsecret")
+	if state != engine.FAILED || err == nil || !strings.Contains(err.Error(), envPath) || !strings.Contains(err.Error(), "DB_PASSWORD") {
+		t.Fatalf("Run = %s, %v; want FAILED naming %s and DB_PASSWORD", state, err, envPath)
+	}
+}

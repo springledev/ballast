@@ -824,3 +824,23 @@ func TestRetentionPolicy(t *testing.T) {
 		})
 	}
 }
+
+func TestEnvRef(t *testing.T) {
+	ref := EnvRef("/opt/a#b/.env", "DB_PASSWORD")
+	path, key, ok := ParseEnvRef(ref)
+	if !ok || path != "/opt/a#b/.env" || key != "DB_PASSWORD" {
+		t.Fatalf("ParseEnvRef = %q %q %v", path, key, ok)
+	}
+	if _, _, ok := ParseEnvRef("ballast-secret.x.y"); ok {
+		t.Error("plain credential name parsed as env ref")
+	}
+	for _, bad := range []string{EnvRef("rel/.env", "K"), EnvRef("/a/.env", ""), EnvRef("/a/.env", "A B")} {
+		if _, err := defaultedSecretNames("svc", map[string]string{"x": bad}); err == nil {
+			t.Errorf("defaultedSecretNames accepted %q", bad)
+		}
+	}
+	got, err := defaultedSecretNames("svc", map[string]string{"x": ref, "y": ""})
+	if err != nil || got["x"] != ref || got["y"] != "ballast-secret.svc.y" {
+		t.Fatalf("defaultedSecretNames = %v, %v", got, err)
+	}
+}

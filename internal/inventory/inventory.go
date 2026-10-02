@@ -590,6 +590,13 @@ func defaultedSecretNames(service string, secrets map[string]string) (map[string
 	}
 	out := make(map[string]string, len(secrets))
 	for name, cred := range secrets {
+		if _, _, ok := ParseEnvRef(cred); ok {
+			if _, _, err := validEnvRef(cred); err != nil {
+				return nil, fmt.Errorf("secret %s: %w", name, err)
+			}
+			out[name] = cred
+			continue
+		}
 		if cred == "" {
 			cred = "ballast-secret." + service + "." + name
 		}
@@ -627,3 +634,42 @@ func unmarshalMap(s string) (map[string]string, error) {
 	}
 	return m, nil
 }
+
+// EnvRefPrefix marks a Service.Secrets value as a reference to a key in
+// an application's .env file ("env-file:<absolute path>#<KEY>") rather
+// than the name of a Ballast credential file (spec §18.2). Only the
+// path and key are stored; the value is read at job-run time.
+const EnvRefPrefix = "env-file:"
+
+// EnvRef builds the Service.Secrets value pointing at key in the .env
+// file at path.
+func EnvRef(path, key string) string { return EnvRefPrefix + path + "#" + key }
+
+// ParseEnvRef splits an env-file reference into its path and key. ok is
+// false when ref is an ordinary credential file name.
+func ParseEnvRef(ref string) (path, key string, ok bool) {
+	rest, found := strings.CutPrefix(ref, EnvRefPrefix)
+	if !found {
+		return "", "", false
+	}
+	i := strings.LastIndex(rest, "#")
+	if i < 0 {
+		return rest, "", true
+	}
+	return rest[:i], rest[i+1:], true
+}
+
+// validEnvRef checks that ref names an absolute path and a plain key.
+func validEnvRef(ref string) (path, key string, err error) {
+	path, key, _ = ParseEnvRef(ref)
+	if !filepath.IsAbs(path) {
+		return "", "", fmt.Errorf("the .env file path %q must be an absolute path (for example /opt/immich/.env)", path)
+	}
+	if key == "" || strings.ContainsAny(key, " \t=#") {
+		return "", "", fmt.Errorf("the .env key %q must be a plain variable name such as DB_PASSWORD", key)
+	}
+	return path, key, nil
+}
+
+// ValidateEnvRef checks an env-file reference and returns its path and key.
+func ValidateEnvRef(ref string) (path, key string, err error) { return validEnvRef(ref) }
