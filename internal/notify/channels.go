@@ -3,6 +3,7 @@ package notify
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io/fs"
@@ -16,8 +17,8 @@ import (
 	"github.com/springledev/keel/secret"
 )
 
-// ChannelTypeNtfy is the only channel type v0.3 step 30 delivers;
-// email and webhook channels join it in step 31.
+// ChannelTypeNtfy is the ntfy channel type; ChannelTypeWebhook and
+// ChannelTypeEmail (email.go) are the others.
 const ChannelTypeNtfy = "ntfy"
 
 // DefaultNtfyURL is the starting value of an ntfy channel's address.
@@ -36,7 +37,8 @@ var channelNameRE = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{0,39}$`)
 // ChannelURLCredential names the credential file holding a channel's
 // address. It is derived from the channel name, so the secret itself
 // never needs to appear in the database.
-func ChannelURLCredential(name string) string   { return "ballast-channel." + name + ".url" }
+func ChannelURLCredential(name string) string { return "ballast-channel." + name + ".url" }
+
 // ChannelTokenCredential names the credential file holding a channel's
 // optional access token (or password, when it has a username).
 func ChannelTokenCredential(name string) string { return "ballast-channel." + name + ".token" }
@@ -53,6 +55,11 @@ type ChannelConfig struct {
 	TokenCredential string
 	ApplyToAll      bool
 	Services        []string
+	// Email holds an email channel's non-secret settings (nil for other types).
+	Email *EmailSettings
+	// Events and Tiers limit what the channel delivers; empty means all.
+	Events []string
+	Tiers  []string
 }
 
 // ValidateChannelName checks name is safe to use in a file name and
@@ -90,11 +97,30 @@ func PutChannel(db *sql.DB, c ChannelConfig) (ChannelConfig, error) {
 	if err := ValidateChannelName(c.Name); err != nil {
 		return ChannelConfig{}, err
 	}
-	if c.Type != ChannelTypeNtfy {
-		return ChannelConfig{}, fmt.Errorf("channel %s: %w: type %q is not supported yet (use ntfy)", c.Name, ErrInvalidChannel, c.Type)
+	settings := "{}"
+	switch c.Type {
+	case ChannelTypeNtfy, ChannelTypeWebhook:
+		if c.URLCredential == "" {
+			return ChannelConfig{}, fmt.Errorf("channel %s: %w: an address is required", c.Name, ErrInvalidChannel)
+		}
+	case ChannelTypeEmail:
+		if c.Email == nil {
+			return ChannelConfig{}, fmt.Errorf("channel %s: %w: mail server settings are required", c.Name, ErrInvalidChannel)
+		}
+		if err := c.Email.Validate(); err != nil {
+			return ChannelConfig{}, fmt.Errorf("channel %s: %w", c.Name, err)
+		}
+		b, err := json.Marshal(c.Email)
+		if err != nil {
+			return ChannelConfig{}, fmt.Errorf("channel %s: saving: %w", c.Name, err)
+		}
+		settings = string(b)
+	default:
+		return ChannelConfig{}, fmt.Errorf("channel %s: %w: type %q is not supported (use ntfy, webhook or email)", c.Name, ErrInvalidChannel, c.Type)
 	}
-	if c.URLCredential == "" {
-		return ChannelConfig{}, fmt.Errorf("channel %s: %w: an address is required", c.Name, ErrInvalidChannel)
+	var err error
+	if c.Events, c.Tiers, err = ValidateRouting(c.Events, c.Tiers); err != nil {
+		return ChannelConfig{}, fmt.Errorf("channel %s: %w", c.Name, err)
 	}
 	now := time.Now().UTC().Format(time.RFC3339Nano)
 	tx, err := db.Begin()
@@ -103,12 +129,14 @@ func PutChannel(db *sql.DB, c ChannelConfig) (ChannelConfig, error) {
 	}
 	defer tx.Rollback() //nolint:errcheck
 	if _, err := tx.Exec(`
-		INSERT INTO notification_channels (name, type, url_credential, username, token_credential, apply_to_all, created_at, updated_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+		INSERT INTO notification_channels (name, type, url_credential, username, token_credential, apply_to_all, settings_json, events, tiers, created_at, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(name) DO UPDATE SET type = excluded.type, url_credential = excluded.url_credential,
 			username = excluded.username, token_credential = excluded.token_credential,
-			apply_to_all = excluded.apply_to_all, updated_at = excluded.updated_at`,
-		c.Name, c.Type, c.URLCredential, c.Username, c.TokenCredential, boolToInt(c.ApplyToAll), now, now,
+			apply_to_all = excluded.apply_to_all, settings_json = excluded.settings_json,
+				events = excluded.events, tiers = excluded.tiers, updated_at = excluded.updated_at`,
+		c.Name, c.Type, c.URLCredential, c.Username, c.TokenCredential, boolToInt(c.ApplyToAll),
+		settings, strings.Join(c.Events, ","), strings.Join(c.Tiers, ","), now, now,
 	); err != nil {
 		return ChannelConfig{}, fmt.Errorf("channel %s: saving: %w", c.Name, err)
 	}
@@ -168,7 +196,7 @@ func ChannelsForService(db *sql.DB, service string) ([]ChannelConfig, error) {
 }
 
 func queryChannels(db *sql.DB, where string, args ...any) ([]ChannelConfig, error) {
-	rows, err := db.Query(`SELECT id, name, type, url_credential, username, token_credential, apply_to_all
+	rows, err := db.Query(`SELECT id, name, type, url_credential, username, token_credential, apply_to_all, settings_json, events, tiers
 		FROM notification_channels `+where+` ORDER BY name`, args...)
 	if err != nil {
 		return nil, fmt.Errorf("loading notification channels: %w", err)
@@ -178,10 +206,19 @@ func queryChannels(db *sql.DB, where string, args ...any) ([]ChannelConfig, erro
 	for rows.Next() {
 		var c ChannelConfig
 		var all int
-		if err := rows.Scan(&c.ID, &c.Name, &c.Type, &c.URLCredential, &c.Username, &c.TokenCredential, &all); err != nil {
+		var settings, events, tiers string
+		if err := rows.Scan(&c.ID, &c.Name, &c.Type, &c.URLCredential, &c.Username, &c.TokenCredential, &all, &settings, &events, &tiers); err != nil {
 			return nil, fmt.Errorf("loading notification channels: %w", err)
 		}
 		c.ApplyToAll = all != 0
+		c.Events, c.Tiers = splitList(events), splitList(tiers)
+		if c.Type == ChannelTypeEmail {
+			var es EmailSettings
+			if err := json.Unmarshal([]byte(settings), &es); err != nil {
+				return nil, fmt.Errorf("channel %s: reading its mail settings: %w", c.Name, err)
+			}
+			c.Email = &es
+		}
 		out = append(out, c)
 	}
 	if err := rows.Err(); err != nil {
@@ -223,18 +260,48 @@ func (c ChannelConfig) Build(credDirs []string, secrets *secret.Set) (Channel, e
 		secrets.Add(v)
 		return v, nil
 	}
-	u, err := read(c.URLCredential)
-	if err != nil {
-		return nil, fmt.Errorf("channel %s: reading its address: %w", c.Name, err)
-	}
-	n := NewNtfyChannel(u)
-	n.Username = c.Username
-	if c.TokenCredential != "" {
-		if n.Secret, err = read(c.TokenCredential); err != nil {
-			return nil, fmt.Errorf("channel %s: reading its access token: %w", c.Name, err)
+	var ch Channel
+	switch c.Type {
+	case ChannelTypeEmail:
+		if c.Email == nil {
+			return nil, fmt.Errorf("channel %s: its mail settings are missing", c.Name)
 		}
+		e := &EmailChannel{EmailSettings: *c.Email, Username: c.Username}
+		if c.TokenCredential != "" {
+			p, err := read(c.TokenCredential)
+			if err != nil {
+				return nil, fmt.Errorf("channel %s: reading its mail password: %w", c.Name, err)
+			}
+			e.Password = p
+		}
+		ch = e
+	case ChannelTypeWebhook:
+		u, err := read(c.URLCredential)
+		if err != nil {
+			return nil, fmt.Errorf("channel %s: reading its address: %w", c.Name, err)
+		}
+		w := NewWebhookChannel(u)
+		if c.TokenCredential != "" {
+			if w.Secret, err = read(c.TokenCredential); err != nil {
+				return nil, fmt.Errorf("channel %s: reading its signing secret: %w", c.Name, err)
+			}
+		}
+		ch = w
+	default:
+		u, err := read(c.URLCredential)
+		if err != nil {
+			return nil, fmt.Errorf("channel %s: reading its address: %w", c.Name, err)
+		}
+		n := NewNtfyChannel(u)
+		n.Username = c.Username
+		if c.TokenCredential != "" {
+			if n.Secret, err = read(c.TokenCredential); err != nil {
+				return nil, fmt.Errorf("channel %s: reading its access token: %w", c.Name, err)
+			}
+		}
+		ch = n
 	}
-	return n, nil
+	return newRouted(ch, c.Events, c.Tiers), nil
 }
 
 // ResolveChannels builds every channel that delivers for service from

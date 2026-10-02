@@ -6,6 +6,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/springledev/ballast/internal/engine"
 )
 
 func TestEngineAdapter_NotifyJobFailure(t *testing.T) {
@@ -224,3 +226,96 @@ func TestEngineAdapter_NotifySuccessHeartbeat_ExplicitlyDisabled(t *testing.T) {
 // an any so the comparison is made on the interface, not on the
 // concrete pointer type the caller started with.
 func isNilInterface(v any) bool { return v == nil }
+
+func TestEngineAdapter_DedupAndRecovery(t *testing.T) {
+	db := testDB(t)
+	defer db.Close()
+	notifier := NewNotifier()
+	ch := &fakeChannel{}
+	notifier.RegisterChannel("svc", ch)
+	a := &EngineAdapter{DB: db.DB(), Notifier: notifier}
+	ctx := context.Background()
+
+	// A service failing every night: one alert, not a stream.
+	for i := 0; i < 3; i++ {
+		if err := a.NotifyJobFailure(ctx, "svc", int64(i), "boom"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if len(ch.events) != 1 {
+		t.Fatalf("after 3 failures sent %d alerts, want 1", len(ch.events))
+	}
+	// Verified success: exactly one recovery notice (heartbeat is off).
+	if err := a.NotifySuccessHeartbeat(ctx, "svc", 4); err != nil {
+		t.Fatal(err)
+	}
+	if len(ch.events) != 2 || ch.events[1].Type != EventRecovery {
+		t.Fatalf("events = %+v, want a recovery notice", ch.events)
+	}
+	// Staying green sends nothing more; a new failure alerts again.
+	a.NotifySuccessHeartbeat(ctx, "svc", 5)                   //nolint:errcheck
+	a.NotifyVerificationFailure(ctx, "svc", 6, "bad restore") //nolint:errcheck
+	if len(ch.events) != 3 || ch.events[2].Type != EventVerificationFailure {
+		t.Fatalf("events = %+v", ch.events)
+	}
+}
+
+func TestEngineAdapter_UndeliveredAlertRetries(t *testing.T) {
+	db := testDB(t)
+	defer db.Close()
+	a := &EngineAdapter{DB: db.DB(), Notifier: NewNotifier()} // nobody listening
+	if err := a.NotifyJobFailure(context.Background(), "svc", 1, "boom"); !errors.Is(err, ErrNoChannels) {
+		t.Fatalf("err = %v, want ErrNoChannels", err)
+	}
+	ch := &fakeChannel{}
+	a.Notifier.RegisterChannel("svc", ch)
+	a.NotifyJobFailure(context.Background(), "svc", 2, "boom") //nolint:errcheck
+	if len(ch.events) != 1 {
+		t.Fatal("an alert nobody received must be retried, not recorded as sent")
+	}
+}
+
+// TestEngineAdapter_EndToEndThroughStateMachine drives real runs through
+// the engine state machine (spec §18.1): repeated failures alert once,
+// and a run that passes VERIFYING and reaches SUCCESS sends exactly one
+// recovery notice. CLI and scheduled runs share this path.
+func TestEngineAdapter_EndToEndThroughStateMachine(t *testing.T) {
+	db := testDB(t)
+	defer db.Close()
+	notifier := NewNotifier()
+	ch := &fakeChannel{}
+	notifier.RegisterChannel("svc", ch)
+	adapter := &EngineAdapter{DB: db.DB(), Notifier: notifier}
+
+	run := func(path []engine.State, final engine.State, detail string) *engine.Machine {
+		t.Helper()
+		m, err := engine.StartRun(db.DB(), "svc")
+		if err != nil {
+			t.Fatal(err)
+		}
+		m.SetNotifier(context.Background(), adapter)
+		for _, s := range append(path, final) {
+			if err := m.Transition(s, detail); err != nil {
+				t.Fatalf("Transition to %s: %v", s, err)
+			}
+		}
+		if err := m.NotifyErr(); err != nil {
+			t.Fatalf("NotifyErr: %v", err)
+		}
+		return m
+	}
+	toVerify := []engine.State{engine.PREPARING, engine.DUMPING, engine.UPLOADING, engine.VERIFYING}
+
+	run([]engine.State{engine.PREPARING}, engine.FAILED, "night 1")
+	run([]engine.State{engine.PREPARING}, engine.FAILED, "night 2")
+	if len(ch.events) != 1 || ch.events[0].Type != EventJobFailure {
+		t.Fatalf("two failing nights sent %+v, want one job_failure alert", ch.events)
+	}
+	m := run(toVerify, engine.SUCCESS, "")
+	if m.Run().State != engine.SUCCESS {
+		t.Fatalf("run ended %s, want SUCCESS", m.Run().State)
+	}
+	if len(ch.events) != 2 || ch.events[1].Type != EventRecovery {
+		t.Fatalf("after a verified success sent %+v, want one recovery notice", ch.events)
+	}
+}

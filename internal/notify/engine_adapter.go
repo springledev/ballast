@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/springledev/ballast/internal/engine"
 )
@@ -50,6 +51,31 @@ var _ engine.Notifier = (*EngineAdapter)(nil)
 type EngineAdapter struct {
 	DB       *sql.DB
 	Notifier *Notifier
+	// Cooldown is how long a still-failing service stays quiet before a
+	// reminder; zero means DefaultAlertCooldown.
+	Cooldown time.Duration
+}
+
+func (a *EngineAdapter) gate() *AlertGate {
+	return &AlertGate{DB: a.DB, Cooldown: a.Cooldown}
+}
+
+// sendAlert delivers a failure event unless the service was already
+// alerted about within the cool-down. The alert is recorded only once
+// delivery succeeded, so an unreachable channel is retried next time.
+func (a *EngineAdapter) sendAlert(ctx context.Context, ev Event) error {
+	g := a.gate()
+	ok, err := g.ShouldAlert(ev.Service)
+	if err != nil {
+		return err
+	}
+	if !ok {
+		return nil
+	}
+	if err := a.Notifier.Send(ctx, ev); err != nil {
+		return err
+	}
+	return g.RecordAlert(ev.Service)
 }
 
 // NotifyJobFailure delivers a job-failure event (spec §11 "job
@@ -58,7 +84,7 @@ func (a *EngineAdapter) NotifyJobFailure(ctx context.Context, service string, ru
 	if a == nil || a.Notifier == nil {
 		return fmt.Errorf("%s: %w", service, errNoNotifier)
 	}
-	return a.Notifier.Send(ctx, FormatJobFailure(service, fmt.Sprint(runID), detail))
+	return a.sendAlert(ctx, FormatJobFailure(service, fmt.Sprint(runID), detail))
 }
 
 // NotifyVerificationFailure delivers a verification-failure event,
@@ -70,7 +96,7 @@ func (a *EngineAdapter) NotifyVerificationFailure(ctx context.Context, service s
 	if a == nil || a.Notifier == nil {
 		return fmt.Errorf("%s: %w", service, errNoNotifier)
 	}
-	return a.Notifier.Send(ctx, FormatVerificationFailure(service, fmt.Sprint(runID), "backup verification", detail))
+	return a.sendAlert(ctx, FormatVerificationFailure(service, fmt.Sprint(runID), "backup verification", detail))
 }
 
 // NotifySuccessHeartbeat delivers a success heartbeat only when the
@@ -82,16 +108,26 @@ func (a *EngineAdapter) NotifySuccessHeartbeat(ctx context.Context, service stri
 	if a == nil || a.Notifier == nil {
 		return fmt.Errorf("%s: %w", service, errNoNotifier)
 	}
+	// A verified success after an alert closes it with one recovery notice.
+	g := a.gate()
+	var recoverErr error
+	if alerting, err := g.IsAlerting(service); err != nil {
+		return err
+	} else if alerting {
+		if recoverErr = a.Notifier.Send(ctx, FormatRecovery(service)); recoverErr == nil {
+			recoverErr = g.Clear(service)
+		}
+	}
 	enabled, err := a.heartbeatEnabled(service)
 	if err != nil {
-		return err
+		return errors.Join(recoverErr, err)
 	}
 	if !enabled {
-		return nil
+		return recoverErr
 	}
 	// The run that just succeeded is the freshest possible backup, so
 	// its age is effectively zero.
-	return a.Notifier.Send(ctx, FormatSuccessHeartbeat(service, 0))
+	return errors.Join(recoverErr, a.Notifier.Send(ctx, FormatSuccessHeartbeat(service, 0)))
 }
 
 // heartbeatEnabled reports whether service has opted in to success

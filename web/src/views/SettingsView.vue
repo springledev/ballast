@@ -2,7 +2,8 @@
 import { computed, onMounted, reactive, ref } from "vue";
 
 import { api } from "@/api/client";
-import type { ChannelView, NotificationSettings, Service } from "@/api/types";
+import { channelEvents } from "@/api/types";
+import type { ChannelType, ChannelView, NotificationSettings, Service } from "@/api/types";
 import { buildChannelInput, defaultNtfyUrl } from "@/lib/channels";
 
 // --- Notification Channels ---
@@ -16,6 +17,14 @@ const channelTestResult = reactive<Record<string, { ok: boolean; text: string }>
 const editingChannelName = ref<string | null>(null);
 
 interface ChannelForm {
+  type: ChannelType;
+  smtpHost: string;
+  smtpPort: number;
+  smtpSecurity: "starttls" | "tls" | "none";
+  mailFrom: string;
+  mailTo: string;
+  events: string[];
+  tiers: string;
   name: string;
   url: string;
   username: string;
@@ -27,6 +36,14 @@ interface ChannelForm {
 
 function blankChannelForm(): ChannelForm {
   return {
+    type: "ntfy",
+    smtpHost: "",
+    smtpPort: 587,
+    smtpSecurity: "starttls",
+    mailFrom: "",
+    mailTo: "",
+    events: [],
+    tiers: "",
     name: "",
     url: defaultNtfyUrl,
     username: "",
@@ -73,7 +90,16 @@ function openChannelForm() {
 function editChannel(ch: ChannelView) {
   editingChannelName.value = ch.name;
   channelForm.name = ch.name;
-  channelForm.url = ch.url_display;
+  channelForm.type = ch.type;
+  // The stored address is secret and never sent to the browser; blank keeps it.
+  channelForm.url = "";
+  channelForm.smtpHost = ch.email?.host ?? "";
+  channelForm.smtpPort = ch.email?.port ?? 587;
+  channelForm.smtpSecurity = ch.email?.security ?? "starttls";
+  channelForm.mailFrom = ch.email?.from ?? "";
+  channelForm.mailTo = (ch.email?.to ?? []).join(", ");
+  channelForm.events = [...(ch.events ?? [])];
+  channelForm.tiers = (ch.tiers ?? []).join(", ");
   channelForm.username = ch.username || "";
   channelForm.token = "";
   channelForm.clearToken = false;
@@ -84,7 +110,13 @@ function editChannel(ch: ChannelView) {
 
 function validateChannel(): string {
   if (!channelForm.name.trim()) return "Give this notification channel a name.";
-  if (!channelForm.url.trim()) return "Enter the ntfy address.";
+  if (channelForm.type === "email") {
+    if (!channelForm.smtpHost.trim()) return "Enter your mail server (SMTP host).";
+    if (!channelForm.mailFrom.includes("@")) return "Enter the address emails should come from.";
+    if (!channelForm.mailTo.includes("@")) return "Enter at least one address to send to.";
+  } else if (!channelForm.url.trim() && !editingChannelName.value) {
+    return channelForm.type === "webhook" ? "Enter the webhook address." : "Enter the ntfy address.";
+  }
   if (!channelForm.applyToAll && channelForm.services.length === 0) {
     return "Select at least one service or turn on 'Apply to all services'.";
   }
@@ -108,6 +140,18 @@ async function submitChannel() {
       channelForm.clearToken,
       channelForm.applyToAll,
       channelForm.services,
+      {
+        type: channelForm.type,
+        events: channelForm.events,
+        tiers: channelForm.tiers.split(",").map((t) => t.trim()).filter(Boolean),
+        email: {
+          host: channelForm.smtpHost.trim(),
+          port: Number(channelForm.smtpPort),
+          security: channelForm.smtpSecurity,
+          from: channelForm.mailFrom.trim(),
+          to: channelForm.mailTo.split(",").map((t) => t.trim()).filter(Boolean),
+        },
+      },
     );
 
     if (editingChannelName.value) {
@@ -129,8 +173,8 @@ async function testChannel(name: string) {
   channelTesting.value.add(name);
   delete channelTestResult[name];
   try {
-    await api.testChannel(name);
-    channelTestResult[name] = { ok: true, text: "Sent — check your phone." };
+    const res = await api.testChannel(name);
+    channelTestResult[name] = { ok: true, text: res.detail || "Test message delivered." };
   } catch (e) {
     channelTestResult[name] = { ok: false, text: (e as Error).message };
   } finally {
@@ -222,6 +266,9 @@ onMounted(() => {
                 {{ ch.url_display }}
                 <span v-if="ch.has_token" class="badge">protected</span>
               </div>
+              <div v-if="ch.events?.length || ch.tiers?.length" class="item-sub hint">
+                Only sends: {{ [...(ch.events ?? []), ...(ch.tiers ?? []).map((t) => t + " copy")].join(", ") }}
+              </div>
               <div v-if="!ch.apply_to_all && ch.services.length" class="item-sub hint" style="margin-top: 0.3rem">
                 {{ ch.services.join(", ") }}
               </div>
@@ -258,28 +305,85 @@ onMounted(() => {
         </div>
 
         <div class="field">
-          <label for="ch-url">ntfy address</label>
+          <label for="ch-type">Kind of channel</label>
+          <select id="ch-type" v-model="channelForm.type" :disabled="!!editingChannelName">
+            <option value="ntfy">ntfy (push notifications)</option>
+            <option value="email">Email</option>
+            <option value="webhook">Webhook (your own script or service)</option>
+          </select>
+        </div>
+
+        <div v-if="channelForm.type !== 'email'" class="field">
+          <label for="ch-url">{{ channelForm.type === "webhook" ? "Webhook address" : "ntfy address" }}</label>
           <input
             id="ch-url"
             v-model="channelForm.url"
             autocomplete="off"
-            placeholder="https://ntfy.sh/my-secret-topic"
+            :placeholder="editingChannelName ? 'Leave blank to keep the current address' : 'https://ntfy.sh/my-secret-topic'"
           />
-          <p class="hint">
+          <p v-if="channelForm.type === 'ntfy'" class="hint">
             Default is <code>https://ntfy.sh/</code>. For self-hosted ntfy, use <code>https://ntfy.example.com/my-topic</code>. The topic acts like a password.
           </p>
+          <p v-else class="hint">Ballast sends a JSON message to this address. It is stored privately, never shown again.</p>
         </div>
+
+        <template v-else>
+          <div class="field">
+            <label for="ch-host">Mail server (SMTP host)</label>
+            <input id="ch-host" v-model="channelForm.smtpHost" placeholder="smtp.example.com" autocomplete="off" />
+          </div>
+          <div class="field">
+            <label for="ch-port">Port</label>
+            <input id="ch-port" v-model.number="channelForm.smtpPort" type="number" min="1" max="65535" />
+            <p class="hint">587 is usual with STARTTLS, 465 with TLS.</p>
+          </div>
+          <div class="field">
+            <label for="ch-sec">Connection security</label>
+            <select id="ch-sec" v-model="channelForm.smtpSecurity">
+              <option value="starttls">STARTTLS (recommended)</option>
+              <option value="tls">TLS</option>
+              <option value="none">None (only on a trusted network)</option>
+            </select>
+          </div>
+          <div class="field">
+            <label for="ch-from">Send from</label>
+            <input id="ch-from" v-model="channelForm.mailFrom" placeholder="ballast@example.com" autocomplete="off" />
+          </div>
+          <div class="field">
+            <label for="ch-to">Send to</label>
+            <input id="ch-to" v-model="channelForm.mailTo" placeholder="you@example.com, other@example.com" autocomplete="off" />
+            <p class="hint">Separate several addresses with commas.</p>
+          </div>
+        </template>
 
         <div class="field">
           <label for="ch-user">Username (optional)</label>
           <input id="ch-user" v-model="channelForm.username" autocomplete="off" />
-          <p class="hint">If your ntfy instance requires authentication.</p>
+          <p class="hint">{{ channelForm.type === "email" ? "Your mail server login, if it needs one." : "If your server requires authentication." }}</p>
         </div>
 
         <div class="field">
-          <label for="ch-token">Access token or password (optional)</label>
+          <label for="ch-token">
+            {{ channelForm.type === "email" ? "Mail password (optional)" : channelForm.type === "webhook" ? "Signing secret (optional)" : "Access token or password (optional)" }}
+          </label>
           <input id="ch-token" v-model="channelForm.token" type="password" autocomplete="off" />
-          <p class="hint">If your ntfy instance requires authentication. Blank when editing = keep existing.</p>
+          <p class="hint">
+            {{ channelForm.type === "webhook" ? "If set, each message is signed so your receiver can check it came from Ballast (X-Ballast-Signature)." : "Stored privately." }}
+            Blank when editing = keep existing.
+          </p>
+        </div>
+
+        <fieldset style="margin: 0.8rem 0; border: none; padding: 0">
+          <legend>Tell me when… (none ticked = everything)</legend>
+          <label v-for="ev in channelEvents" :key="ev.id" class="check">
+            <input v-model="channelForm.events" type="checkbox" :value="ev.id" /> {{ ev.label }}
+          </label>
+        </fieldset>
+
+        <div class="field">
+          <label for="ch-tiers">Only for these backup copies (optional)</label>
+          <input id="ch-tiers" v-model="channelForm.tiers" placeholder="restic" autocomplete="off" />
+          <p class="hint">Leave blank to hear about every copy.</p>
         </div>
 
         <label v-if="editingChannelName && channelForm.token === ''" class="check">

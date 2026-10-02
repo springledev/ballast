@@ -181,9 +181,34 @@ export interface NotificationSettings {
 }
 
 /** A saved notification channel (ntfy, webhook, etc). */
+export type ChannelType = "ntfy" | "webhook" | "email";
+
+/** Event types a channel can be limited to. */
+export const channelEvents: { id: string; label: string }[] = [
+  { id: "job_failure", label: "A backup fails" },
+  { id: "verification_failure", label: "A backup can't be verified" },
+  { id: "freshness_breached", label: "No good backup for too long" },
+  { id: "success_heartbeat", label: "Every verified backup (if the service asks for it)" },
+  { id: "recovery", label: "A service is back to normal" },
+];
+
+/** Non-secret mail server settings of an email channel. */
+export interface EmailSettings {
+  host: string;
+  port: number;
+  security: "starttls" | "tls" | "none";
+  from: string;
+  to: string[];
+}
+
 export interface ChannelView {
   name: string;
-  type: "ntfy";
+  type: ChannelType;
+  email?: EmailSettings;
+  /** Events this channel is limited to; empty = all. */
+  events: string[];
+  /** Backup copies (tiers) this channel is limited to; empty = all. */
+  tiers: string[];
   /** The channel's address, safe to display (topic for ntfy). */
   url_display: string;
   /** Username for ntfy, if set. */
@@ -199,10 +224,13 @@ export interface ChannelView {
 /** Request body for POST /api/v1/notification-channels and PUT (create/edit). */
 export interface ChannelInput {
   name: string;
-  type: "ntfy";
+  type: ChannelType;
+  email?: EmailSettings;
+  events?: string[];
+  tiers?: string[];
   /** The full address (URL) for ntfy, e.g. https://ntfy.sh/my-topic or https://ntfy.example.com/topic. */
-  url: string;
-  /** Username for ntfy (optional). */
+  url?: string;
+  /** Username for ntfy or the mail server (optional). */
   username?: string;
   /** Token/password for ntfy (optional, write-only). Blank on edit = keep existing. */
   token?: string;

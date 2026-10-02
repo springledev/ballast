@@ -10,7 +10,29 @@ describe("channels", () => {
       url: "https://ntfy.sh/my-topic",
       apply_to_all: true,
       services: [],
+      events: [],
+      tiers: [],
     });
+  });
+
+  it("buildChannelInput leaves the address out when blank (keep on edit)", () => {
+    const input = buildChannelInput("hook", " ", undefined, undefined, false, true, [], { type: "webhook" });
+    expect(input.url).toBeUndefined();
+    expect(input.type).toBe("webhook");
+  });
+
+  it("buildChannelInput sends mail settings and routing for email, never a url", () => {
+    const email = { host: "smtp.example.com", port: 587, security: "starttls" as const, from: "a@b.c", to: ["d@e.f"] };
+    const input = buildChannelInput("mail", "https://ignored", undefined, "pw", false, true, [], {
+      type: "email",
+      email,
+      events: ["job_failure"],
+      tiers: ["restic"],
+    });
+    expect(input.url).toBeUndefined();
+    expect(input.email).toEqual(email);
+    expect(input.events).toEqual(["job_failure"]);
+    expect(input.tiers).toEqual(["restic"]);
   });
 
   it("buildChannelInput includes username when provided", () => {

@@ -2,7 +2,11 @@ package notify
 
 import (
 	"context"
+	"crypto/hmac"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -194,5 +198,69 @@ func TestMigrateLegacyChannels(t *testing.T) {
 	c, _ := GetChannel(db2.DB(), "ntfy")
 	if c.URLCredential != "mine" {
 		t.Errorf("user's channel overwritten: %+v", c)
+	}
+}
+
+func TestChannelEmailWebhookRoundTripAndBuild(t *testing.T) {
+	db := testDB(t)
+	defer db.Close()
+	dir := t.TempDir()
+	writeCred(t, dir, "ballast-channel.mail.token", "mailpw")
+	writeCred(t, dir, "ballast-channel.hook.url", "https://example.com/hook-secret")
+	writeCred(t, dir, "ballast-channel.hook.token", "hmac-key")
+
+	es := &EmailSettings{Host: "smtp.example.com", Port: 587, Security: "starttls", From: "a@b.c", To: []string{"d@e.f"}}
+	if _, err := PutChannel(db.DB(), ChannelConfig{Name: "mail", Type: ChannelTypeEmail, Username: "me", TokenCredential: "ballast-channel.mail.token", ApplyToAll: true, Email: es, Events: []string{"job_failure"}, Tiers: []string{"restic"}}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := PutChannel(db.DB(), ChannelConfig{Name: "hook", Type: ChannelTypeWebhook, URLCredential: "ballast-channel.hook.url", TokenCredential: "ballast-channel.hook.token", ApplyToAll: true}); err != nil {
+		t.Fatal(err)
+	}
+	got, err := GetChannel(db.DB(), "mail")
+	if err != nil || got.Email == nil || got.Email.Host != "smtp.example.com" || len(got.Events) != 1 || got.Tiers[0] != "restic" {
+		t.Fatalf("round trip = %+v, %v", got, err)
+	}
+	secrets := secret.NewSet()
+	chs, err := ResolveChannels(db.DB(), []string{dir}, secrets, "any")
+	if err != nil || len(chs) != 2 {
+		t.Fatalf("ResolveChannels = %d, %v", len(chs), err)
+	}
+	if ChannelAddress(chs[0]) != "smtp.example.com" && ChannelAddress(chs[1]) != "smtp.example.com" {
+		t.Error("email address not displayed")
+	}
+	// Invalid definitions are refused.
+	for name, c := range map[string]ChannelConfig{
+		"email without settings": {Name: "x", Type: ChannelTypeEmail},
+		"email bad settings":     {Name: "x", Type: ChannelTypeEmail, Email: &EmailSettings{}},
+		"webhook without url":    {Name: "x", Type: ChannelTypeWebhook},
+		"unknown event":          {Name: "x", Type: ChannelTypeWebhook, URLCredential: "u", Events: []string{"nope"}},
+	} {
+		if _, err := PutChannel(db.DB(), c); !errors.Is(err, ErrInvalidChannel) {
+			t.Errorf("%s: err = %v", name, err)
+		}
+	}
+}
+
+func TestWebhookSignsBodyAndReportsStatus(t *testing.T) {
+	var sig string
+	var body []byte
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		sig = r.Header.Get("X-Ballast-Signature")
+		body, _ = io.ReadAll(r.Body)
+		w.WriteHeader(http.StatusAccepted)
+	}))
+	defer srv.Close()
+	w := NewWebhookChannel(srv.URL)
+	w.Secret = "k"
+	if err := SendTest(context.Background(), w); err != nil {
+		t.Fatal(err)
+	}
+	mac := hmac.New(sha256.New, []byte("k"))
+	mac.Write(body)
+	if want := "sha256=" + hex.EncodeToString(mac.Sum(nil)); sig != want {
+		t.Errorf("signature = %q, want %q", sig, want)
+	}
+	if LastStatus(w) != 202 {
+		t.Errorf("LastStatus = %d", LastStatus(w))
 	}
 }

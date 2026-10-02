@@ -13,6 +13,7 @@ import (
 	"testing"
 
 	"github.com/springledev/ballast/internal/inventory"
+	"github.com/springledev/ballast/internal/notify"
 )
 
 func TestChannelsLifecycleAndSecrets(t *testing.T) {
@@ -152,4 +153,51 @@ func toString(v any) string {
 		return string(x)
 	}
 	return ""
+}
+
+func TestWebhookAndEmailChannels(t *testing.T) {
+	h := newHarness(t)
+	ctx := context.Background()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusNoContent) }))
+	defer srv.Close()
+
+	v, err := h.ops.PutChannel(ctx, ChannelInput{Name: "hook", Type: "webhook", URL: srv.URL + "/secret-path", Token: "hmac-key", ApplyToAll: true, Events: []string{"job_failure"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(v.URLDisplay, "secret-path") || !v.HasToken || len(v.Events) != 1 {
+		t.Errorf("view = %+v", v)
+	}
+	detail, err := h.ops.TestChannelResult(ctx, "hook")
+	if err != nil || !strings.Contains(detail, "204") {
+		t.Fatalf("test detail = %q, %v", detail, err)
+	}
+
+	es := &notify.EmailSettings{Host: "smtp.example.com", Port: 587, Security: "starttls", From: "a@b.c", To: []string{"d@e.f"}}
+	mv, err := h.ops.PutChannel(ctx, ChannelInput{Name: "mail", Type: "email", Email: es, Token: "mail-pw-secret", ApplyToAll: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if mv.Email == nil || mv.URLDisplay != "smtp.example.com" {
+		t.Errorf("mail view = %+v", mv)
+	}
+	b, _ := json.Marshal(mv)
+	if strings.Contains(string(b), "mail-pw-secret") {
+		t.Error("password in API view")
+	}
+	// Editing without mail settings or filters keeps the stored ones.
+	mv, err = h.ops.PutChannel(ctx, ChannelInput{Name: "mail", ApplyToAll: true})
+	if err != nil || mv.Email == nil || mv.Type != "email" {
+		t.Fatalf("edit = %+v, %v", mv, err)
+	}
+	for name, in := range map[string]ChannelInput{
+		"email needs settings":     {Name: "m2", Type: "email"},
+		"email has no url":         {Name: "m3", Type: "email", Email: es, URL: "https://x.example"},
+		"type cannot change":       {Name: "hook", Type: "email", Email: es},
+		"unknown event is refused": {Name: "w2", Type: "webhook", URL: "https://x.example", Events: []string{"nope"}},
+	} {
+		if _, err := h.ops.PutChannel(ctx, in); !errors.Is(err, ErrValidation) {
+			t.Errorf("%s: err = %v", name, err)
+		}
+	}
 }

@@ -26,6 +26,11 @@ type ChannelView struct {
 	HasToken   bool     `json:"has_token"`
 	ApplyToAll bool     `json:"apply_to_all"`
 	Services   []string `json:"services"`
+	// Email is an email channel's mail server settings (never the password).
+	Email *notify.EmailSettings `json:"email,omitempty"`
+	// Events and Tiers are the routing filters; empty means everything.
+	Events []string `json:"events"`
+	Tiers  []string `json:"tiers"`
 }
 
 // ChannelInput is what a caller sends to create or change a channel.
@@ -41,6 +46,12 @@ type ChannelInput struct {
 	ClearToken bool     `json:"clear_token"`
 	ApplyToAll bool     `json:"apply_to_all"`
 	Services   []string `json:"services"`
+	// Email holds the mail server settings for an email channel; the
+	// password goes in Token.
+	Email *notify.EmailSettings `json:"email"`
+	// Events and Tiers limit what the channel delivers; empty means all.
+	Events []string `json:"events"`
+	Tiers  []string `json:"tiers"`
 }
 
 // channelErr maps notify's channel errors onto the API's error kinds.
@@ -74,14 +85,18 @@ func (o *Ops) credDirs() []string {
 
 func (o *Ops) channelView(c notify.ChannelConfig) ChannelView {
 	v := ChannelView{Name: c.Name, Type: c.Type, Username: c.Username, HasToken: c.TokenCredential != "",
-		ApplyToAll: c.ApplyToAll, Services: c.Services}
+		ApplyToAll: c.ApplyToAll, Services: c.Services, Email: c.Email, Events: c.Events, Tiers: c.Tiers}
 	if v.Services == nil {
 		v.Services = []string{}
 	}
+	if v.Events == nil {
+		v.Events = []string{}
+	}
+	if v.Tiers == nil {
+		v.Tiers = []string{}
+	}
 	if ch, err := c.Build(o.credDirs(), o.secretSet()); err == nil {
-		if n, ok := ch.(*notify.NtfyChannel); ok {
-			v.URLDisplay = notify.DisplayURL(n.Topic)
-		}
+		v.URLDisplay = notify.ChannelAddress(ch)
 	}
 	return v
 }
@@ -114,9 +129,6 @@ func (o *Ops) ListChannels(ctx context.Context) ([]ChannelView, error) {
 // PutChannel creates or updates a channel, saving its address and
 // token as root-only credential files (never the database).
 func (o *Ops) PutChannel(ctx context.Context, in ChannelInput) (ChannelView, error) {
-	if in.Type == "" {
-		in.Type = notify.ChannelTypeNtfy
-	}
 	if err := notify.ValidateChannelName(in.Name); err != nil {
 		return ChannelView{}, channelErr(err)
 	}
@@ -129,9 +141,31 @@ func (o *Ops) PutChannel(ctx context.Context, in ChannelInput) (ChannelView, err
 	if err != nil && !errors.Is(err, notify.ErrChannelNotFound) {
 		return ChannelView{}, err
 	}
+	if in.Type == "" {
+		in.Type = notify.ChannelTypeNtfy
+		if existing.ID != 0 {
+			in.Type = existing.Type
+		}
+	}
+	if existing.ID != 0 && existing.Type != in.Type {
+		return ChannelView{}, channelErr(fmt.Errorf("channel %s: %w: a %s channel cannot be changed into a %s one; remove it and add a new one", in.Name, notify.ErrInvalidChannel, existing.Type, in.Type))
+	}
 	cfg := notify.ChannelConfig{Name: in.Name, Type: in.Type, Username: in.Username,
-		ApplyToAll: in.ApplyToAll, Services: in.Services,
+		ApplyToAll: in.ApplyToAll, Services: in.Services, Email: in.Email, Events: in.Events, Tiers: in.Tiers,
 		URLCredential: existing.URLCredential, TokenCredential: existing.TokenCredential}
+	// A missing (null) filter keeps what is stored; an empty list clears it.
+	if in.Events == nil {
+		cfg.Events = existing.Events
+	}
+	if in.Tiers == nil {
+		cfg.Tiers = existing.Tiers
+	}
+	if in.Type == notify.ChannelTypeEmail && in.Email == nil {
+		cfg.Email = existing.Email // editing keeps the stored server settings
+	}
+	if in.Type == notify.ChannelTypeEmail && in.URL != "" {
+		return ChannelView{}, channelErr(fmt.Errorf("channel %s: %w: an email channel has no web address", in.Name, notify.ErrInvalidChannel))
+	}
 	if in.URL != "" {
 		if err := notify.ValidateChannelURL(in.URL); err != nil {
 			return ChannelView{}, channelErr(err)
@@ -141,7 +175,7 @@ func (o *Ops) PutChannel(ctx context.Context, in ChannelInput) (ChannelView, err
 			return ChannelView{}, err
 		}
 	}
-	if cfg.URLCredential == "" {
+	if cfg.URLCredential == "" && in.Type != notify.ChannelTypeEmail {
 		return ChannelView{}, channelErr(fmt.Errorf("channel %s: %w: an address is required", in.Name, notify.ErrInvalidChannel))
 	}
 	switch {
@@ -180,18 +214,28 @@ func (o *Ops) DeleteChannel(ctx context.Context, name string) error {
 // TestChannel sends the "Ballast test notification" through the named
 // channel, using exactly the code that delivers real alerts.
 func (o *Ops) TestChannel(ctx context.Context, name string) error {
+	_, err := o.TestChannelResult(ctx, name)
+	return err
+}
+
+// TestChannelResult is TestChannel plus a short plain-English note on
+// what happened (for a webhook, the HTTP status code it answered with).
+func (o *Ops) TestChannelResult(ctx context.Context, name string) (string, error) {
 	c, err := notify.GetChannel(o.DB, name)
 	if err != nil {
-		return channelErr(err)
+		return "", channelErr(err)
 	}
 	ch, err := c.Build(o.credDirs(), o.secretSet())
 	if err != nil {
-		return err
+		return "", err
 	}
 	if err := notify.SendTest(ctx, ch); err != nil {
-		return fmt.Errorf("channel %s: the test message could not be delivered: %w", name, err)
+		return "", fmt.Errorf("channel %s: the test message could not be delivered: %w", name, err)
 	}
-	return nil
+	if st := notify.LastStatus(ch); st != 0 {
+		return fmt.Sprintf("The webhook answered with HTTP status %d.", st), nil
+	}
+	return "Test message delivered.", nil
 }
 
 func (o *Ops) writeChannelSecret(cred, value string) error {
@@ -265,9 +309,10 @@ func (h *handler) deleteChannel(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *handler) testChannel(w http.ResponseWriter, r *http.Request) {
-	if err := h.ops.TestChannel(r.Context(), pathName(r)); err != nil {
+	detail, err := h.ops.TestChannelResult(r.Context(), pathName(r))
+	if err != nil {
 		h.writeErr(w, err, http.StatusBadGateway)
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "detail": detail})
 }

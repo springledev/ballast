@@ -218,6 +218,8 @@ func (f *FreshnessChecker) SweepFreshness(ctx context.Context, notifier *Notifie
 			// Was stale, now fresh again: clear the alert
 			if err := f.clearFreshnessAlert(service); err != nil {
 				errs = append(errs, fmt.Errorf("clearing freshness alert for %s: %w", service, err))
+			} else if err := notifier.Send(ctx, FormatRecovery(service)); err != nil && !errors.Is(err, ErrNoChannels) {
+				errs = append(errs, fmt.Errorf("sending recovery notice for %s: %w", service, err))
 			}
 		} else if stale && !wasReported {
 			// Newly stale: send notification; only record if Send succeeded.

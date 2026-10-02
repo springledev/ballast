@@ -14,6 +14,9 @@ package notify
 import (
 	"bytes"
 	"context"
+	"crypto/hmac"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -216,6 +219,11 @@ func (n *NtfyChannel) Type() string { return "ntfy" }
 type WebhookChannel struct {
 	URL    string       // webhook URL from credential file
 	Client *http.Client // injected for tests; nil defaults to clientWithTimeout()
+	// Secret, when set, signs each body: the X-Ballast-Signature header
+	// carries "sha256=" and the hex HMAC-SHA256 of the body.
+	Secret string
+
+	lastStatus int // HTTP status of the latest delivery, shown on test-send
 }
 
 // NewWebhookChannel creates a channel that POSTs to the given URL.
@@ -273,12 +281,19 @@ func (w *WebhookChannel) Send(ctx context.Context, event Event) error {
 		return fmt.Errorf("%s: creating webhook request: %w", event.Service, stripURLSecret(err))
 	}
 	req.Header.Set("Content-Type", "application/json")
+	if w.Secret != "" {
+		mac := hmac.New(sha256.New, []byte(w.Secret))
+		mac.Write(data)
+		req.Header.Set("X-Ballast-Signature", "sha256="+hex.EncodeToString(mac.Sum(nil)))
+	}
 
+	w.lastStatus = 0
 	resp, err := client.Do(req)
 	if err != nil {
 		return fmt.Errorf("%s: sending webhook: %w", event.Service, stripURLSecret(err))
 	}
 	defer resp.Body.Close()
+	w.lastStatus = resp.StatusCode
 	// Drain (without keeping) the body so the connection can be reused;
 	// its contents are never included in the error (finding: response
 	// bodies must not be echoed into logs).

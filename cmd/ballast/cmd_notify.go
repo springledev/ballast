@@ -63,13 +63,21 @@ var (
 	notifyHeartbeat   bool
 
 	// channel command flags
-	channelURL        string
-	channelUsername   string
-	channelTokenFile  string
+	channelURL         string
+	channelUsername    string
+	channelTokenFile   string
 	channelAllServices bool
-	channelServices   []string
-	channelClearToken bool
-	channelJSON       bool
+	channelServices    []string
+	channelClearToken  bool
+	channelJSON        bool
+	channelType        string
+	channelEvents      []string
+	channelTiers       []string
+	channelSMTPHost    string
+	channelSMTPPort    int
+	channelSMTPSec     string
+	channelFrom        string
+	channelTo          []string
 )
 
 var notifySetCmd = &cobra.Command{
@@ -162,7 +170,10 @@ in your shell history.
 When no service flags are given, --all-services is the default.`,
 	Args: cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		if channelURL == "" {
+		if channelType == "" {
+			channelType = notify.ChannelTypeNtfy
+		}
+		if channelURL == "" && channelType != notify.ChannelTypeEmail {
 			return fmt.Errorf("--url is required to add a channel")
 		}
 		cfg, err := loadConfig()
@@ -178,12 +189,15 @@ When no service flags are given, --all-services is the default.`,
 			applyToAll := channelAllServices || (len(channelServices) == 0 && !channelAllServices)
 			in := api.ChannelInput{
 				Name:       args[0],
-				Type:       notify.ChannelTypeNtfy,
+				Type:       channelType,
 				URL:        channelURL,
 				Username:   channelUsername,
 				Token:      token,
 				ApplyToAll: applyToAll && len(channelServices) == 0,
 				Services:   channelServices,
+				Events:     channelEvents,
+				Tiers:      channelTiers,
+				Email:      channelEmailSettings(nil),
 			}
 			v, err := a.ops.PutChannel(cmd.Context(), in)
 			if err != nil {
@@ -213,15 +227,25 @@ replacing it, use --clear-token.`,
 			if err != nil {
 				return err
 			}
+			var base *notify.EmailSettings
+			if cs, err := a.ops.ListChannels(cmd.Context()); err == nil {
+				for _, c := range cs {
+					if c.Name == args[0] {
+						base = c.Email
+					}
+				}
+			}
 			in := api.ChannelInput{
 				Name:       args[0],
-				Type:       notify.ChannelTypeNtfy,
 				URL:        channelURL,
 				Username:   channelUsername,
 				Token:      token,
 				ClearToken: channelClearToken,
 				ApplyToAll: channelAllServices,
 				Services:   channelServices,
+				Events:     channelEvents,
+				Tiers:      channelTiers,
+				Email:      channelEmailSettings(base),
 			}
 			v, err := a.ops.PutChannel(cmd.Context(), in)
 			if err != nil {
@@ -262,10 +286,11 @@ var notifyChannelTestCmd = &cobra.Command{
 			return err
 		}
 		return withApp(cfg, cmd.ErrOrStderr(), func(a *app) error {
-			if err := a.ops.TestChannel(cmd.Context(), args[0]); err != nil {
+			detail, err := a.ops.TestChannelResult(cmd.Context(), args[0])
+			if err != nil {
 				return err
 			}
-			fmt.Fprintf(cmd.OutOrStdout(), "Sent. Check your phone.\n")
+			fmt.Fprintf(cmd.OutOrStdout(), "Sent. %s\n", detail)
 			return nil
 		})
 	},
@@ -285,11 +310,60 @@ func readChannelToken() (string, error) {
 	return strings.TrimSpace(os.Getenv("BALLAST_NTFY_TOKEN")), nil
 }
 
+// channelEmailSettings builds mail settings from the --smtp-* flags on
+// top of base (the stored settings, when editing). It returns nil when
+// no mail flag was given, which keeps the stored settings.
+func channelEmailSettings(base *notify.EmailSettings) *notify.EmailSettings {
+	if channelSMTPHost == "" && channelSMTPPort == 0 && channelSMTPSec == "" && channelFrom == "" && len(channelTo) == 0 {
+		return nil
+	}
+	e := notify.EmailSettings{Security: notify.EmailSecurityStartTLS, Port: 587}
+	if base != nil {
+		e = *base
+	}
+	if channelSMTPHost != "" {
+		e.Host = channelSMTPHost
+	}
+	if channelSMTPPort != 0 {
+		e.Port = channelSMTPPort
+	}
+	if channelSMTPSec != "" {
+		e.Security = channelSMTPSec
+	}
+	if channelFrom != "" {
+		e.From = channelFrom
+	}
+	if len(channelTo) > 0 {
+		e.To = channelTo
+	}
+	return &e
+}
+
+func addChannelRoutingFlags(c *cobra.Command) {
+	f := c.Flags()
+	f.StringSliceVar(&channelEvents, "event", nil, "only send these events: job_failure, verification_failure, freshness_breached, success_heartbeat, recovery (default all)")
+	f.StringSliceVar(&channelTiers, "tier", nil, "only send for these backup copies, e.g. restic (default all)")
+	f.StringVar(&channelSMTPHost, "smtp-host", "", "email: mail server")
+	f.IntVar(&channelSMTPPort, "smtp-port", 0, "email: mail server port (587 by default)")
+	f.StringVar(&channelSMTPSec, "smtp-security", "", "email: starttls, tls or none")
+	f.StringVar(&channelFrom, "from", "", "email: sender address")
+	f.StringSliceVar(&channelTo, "to", nil, "email: recipient address (may be given multiple times)")
+}
+
 // printChannelView prints a ChannelView in plain English.
 func printChannelView(w io.Writer, c api.ChannelView) {
 	fmt.Fprintf(w, "Channel: %s\n", c.Name)
 	fmt.Fprintf(w, "  Type:      %s\n", c.Type)
 	fmt.Fprintf(w, "  Address:   %s\n", c.URLDisplay)
+	if c.Email != nil {
+		fmt.Fprintf(w, "  Mail:      %s -> %s via %s:%d (%s)\n", c.Email.From, strings.Join(c.Email.To, ", "), c.Email.Host, c.Email.Port, c.Email.Security)
+	}
+	if len(c.Events) > 0 {
+		fmt.Fprintf(w, "  Sends:     %s\n", strings.Join(c.Events, ", "))
+	}
+	if len(c.Tiers) > 0 {
+		fmt.Fprintf(w, "  Copies:    %s\n", strings.Join(c.Tiers, ", "))
+	}
 	if c.Username != "" {
 		fmt.Fprintf(w, "  Username:  %s\n", c.Username)
 	}
@@ -317,6 +391,9 @@ func registerNotifyCommands(root *cobra.Command) {
 	notifyChannelAddCmd.Flags().BoolVar(&channelAllServices, "all-services", false, "apply to all services (default if no --service flags given)")
 	notifyChannelAddCmd.Flags().StringSliceVar(&channelServices, "service", nil, "apply to this service (may be given multiple times)")
 
+	notifyChannelAddCmd.Flags().StringVar(&channelType, "type", notify.ChannelTypeNtfy, "ntfy, webhook or email")
+	addChannelRoutingFlags(notifyChannelAddCmd)
+	addChannelRoutingFlags(notifyChannelEditCmd)
 	notifyChannelEditCmd.Flags().StringVar(&channelURL, "url", "", "new channel address (leave empty to keep current)")
 	notifyChannelEditCmd.Flags().StringVar(&channelUsername, "username", "", "new username (leave empty to keep current)")
 	notifyChannelEditCmd.Flags().StringVar(&channelTokenFile, "token-file", "", "file containing new access token or password")

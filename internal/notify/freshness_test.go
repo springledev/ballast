@@ -259,7 +259,7 @@ func TestSweepFreshness(t *testing.T) {
 			steps: []sweepStep{
 				{label: "first stale sweep", clock: 48 * time.Hour, wantEvents: 1},
 				{
-					label: "fresh again after a new backup", clock: 50 * time.Hour, resucceed: true, wantEvents: 0,
+					label: "fresh again after a new backup", clock: 50 * time.Hour, resucceed: true, wantEvents: 1, // the recovery notice
 					checkDB: func(t *testing.T, db *sql.DB, service string) {
 						var isStale int
 						var reportedAt sql.NullString

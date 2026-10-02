@@ -177,7 +177,7 @@ export const api = {
   deleteChannel(name: string): Promise<void> {
     return request("DELETE", `${base}/notification-channels/${encodeURIComponent(name)}`);
   },
-  testChannel(name: string): Promise<{ ok: boolean }> {
+  testChannel(name: string): Promise<{ ok: boolean; detail?: string }> {
     return request("POST", `${base}/notification-channels/${encodeURIComponent(name)}/test`);
   },
 

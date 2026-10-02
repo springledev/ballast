@@ -1,7 +1,7 @@
 // Notification channels (ntfy, webhooks, etc) let Ballast tell you about
 // backups. This file keeps the plain-English labels, per-type hints, and
 // credential shaping in one place as pure functions so they're easy to test.
-import type { ChannelInput } from "@/api/types";
+import type { ChannelInput, ChannelType, EmailSettings } from "@/api/types";
 
 /** Raw form values a notification channel form can collect. */
 export interface ChannelFormFields {
@@ -23,14 +23,23 @@ export function buildChannelInput(
   clearToken: boolean,
   applyToAll: boolean,
   services: string[],
+  extra: { type?: ChannelType; email?: EmailSettings; events?: string[]; tiers?: string[] } = {},
 ): ChannelInput {
   const input: ChannelInput = {
     name,
-    type: "ntfy",
-    url,
+    type: extra.type ?? "ntfy",
     apply_to_all: applyToAll,
     services,
+    events: extra.events ?? [],
+    tiers: extra.tiers ?? [],
   };
+  // Blank means "keep the stored address" when editing; email has none.
+  if (input.type !== "email" && url.trim() !== "") {
+    input.url = url.trim();
+  }
+  if (input.type === "email" && extra.email) {
+    input.email = extra.email;
+  }
 
   if (username && username.trim() !== "") {
     input.username = username.trim();

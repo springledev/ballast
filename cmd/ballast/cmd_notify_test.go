@@ -151,10 +151,10 @@ func TestNotifyChannelTokens(t *testing.T) {
 	tmpdir := t.TempDir()
 
 	tests := []struct {
-		name     string
-		args     []string
-		env      map[string]string
-		wantHas  string
+		name      string
+		args      []string
+		env       map[string]string
+		wantHas   string
 		wantNotIn string
 	}{
 		{
