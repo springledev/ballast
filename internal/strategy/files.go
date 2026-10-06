@@ -15,15 +15,47 @@ import (
 // written to the work directory.
 type Files struct {
 	entry *catalog.Entry
+	opts  Options
+}
+
+// Preflight checks, for hostPaths entries, that every folder exists on
+// the service's Docker host (spec §19.2). Local files are checked by
+// Backup itself.
+func (s *Files) Preflight(ctx context.Context) error {
+	if len(s.entry.Backup.HostPaths) == 0 {
+		return nil
+	}
+	_, err := s.opts.prepareHostPaths(ctx, s.entry.Service, s.entry.Backup.HostPaths)
+	return err
 }
 
 // Backup validates every configured path and returns it for upload.
-func (s *Files) Backup(_ context.Context, req Request) (*Result, error) {
+func (s *Files) Backup(ctx context.Context, req Request) (*Result, error) {
+	if len(s.entry.Backup.HostPaths) > 0 {
+		return s.backupHostPaths(ctx, req)
+	}
 	paths, err := validatePaths(s.entry.Service, s.entry.Backup.Files)
 	if err != nil {
 		return nil, err
 	}
 	return &Result{Paths: paths}, nil
+}
+
+// backupHostPaths archives the service's Docker-host folders live,
+// through the helper container, into one tar artifact.
+func (s *Files) backupHostPaths(ctx context.Context, req Request) (*Result, error) {
+	if err := ensureWorkDir(req.WorkDir); err != nil {
+		return nil, fmt.Errorf("service %s: %w", s.entry.Service, err)
+	}
+	srcs, err := s.opts.prepareHostPaths(ctx, s.entry.Service, s.entry.Backup.HostPaths)
+	if err != nil {
+		return nil, err
+	}
+	a, err := s.opts.archiveHostPaths(ctx, req.WorkDir, srcs)
+	if err != nil {
+		return nil, fmt.Errorf("service %s: archiving host folders: %w", s.entry.Service, err)
+	}
+	return &Result{Artifacts: []Artifact{a}}, nil
 }
 
 // validatePaths checks that every catalog file path is absolute and

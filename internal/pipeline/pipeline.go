@@ -204,6 +204,14 @@ func (p *Pipeline) Run(ctx context.Context, service string) (engine.State, error
 	if err != nil {
 		return fail(err)
 	}
+	// Check on the service's own host that what will be read exists,
+	// before the run touches anything (a wrong path must never cost a
+	// stopped container).
+	if pf, ok := strat.(strategy.Preflighter); ok {
+		if err := pf.Preflight(ctx); err != nil {
+			return fail(err)
+		}
+	}
 	// SUCCESS is refused by the engine unless every declared method
 	// and restic's read-back recorded a passing result (spec §17.6).
 	m.RequireVerifications(append(entry.Verify.MethodList(), readBackMethod)...)

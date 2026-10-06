@@ -31,6 +31,7 @@ import (
 	"github.com/springledev/ballast/internal/proxmox"
 	"github.com/springledev/ballast/internal/restic"
 	"github.com/springledev/ballast/internal/scheduler"
+	"github.com/springledev/ballast/internal/strategy"
 	"github.com/springledev/keel/runner"
 	"github.com/springledev/keel/secret"
 )
@@ -688,6 +689,19 @@ func (o *Ops) PutService(ctx context.Context, s inventory.Service) error {
 	}
 	if _, err := inventory.GetDestination(o.DB, s.Destination); err != nil {
 		return wrapf("service "+s.Name, err)
+	}
+	// Folders on the service's Docker host are checked on that host
+	// now, so a typo shows up when the service is added, not at 3am.
+	if len(entry.Backup.HostPaths) > 0 && o.Runner != nil {
+		strat, err := strategy.For(entry, strategy.Options{Runner: o.Runner, Docker: docker})
+		if err != nil {
+			return fmt.Errorf("service %s: %w: %w", s.Name, ErrValidation, err)
+		}
+		if pf, ok := strat.(strategy.Preflighter); ok {
+			if err := pf.Preflight(ctx); err != nil {
+				return fmt.Errorf("%w: %w", ErrValidation, o.redactErr(err))
+			}
+		}
 	}
 	if err := inventory.PutService(o.DB, s); err != nil {
 		return fmt.Errorf("%w: %w", ErrValidation, wrapf("service "+s.Name, err))

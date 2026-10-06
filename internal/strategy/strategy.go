@@ -102,6 +102,16 @@ type Result struct {
 	Skipped []string
 }
 
+// Preflighter is implemented by strategies that can check, before
+// anything is stopped or written, that everything they will read
+// exists on the service's own host. The pipeline calls it during
+// PREPARING; a failure there stops the run with the service untouched.
+type Preflighter interface {
+	// Preflight returns a plain-English error naming the service and
+	// the problem, or nil.
+	Preflight(ctx context.Context) error
+}
+
 // Options are the shared dependencies of the strategy
 // implementations.
 type Options struct {
@@ -184,10 +194,13 @@ func For(entry *catalog.Entry, opts Options) (Strategy, error) {
 	}
 	switch entry.Backup.Strategy {
 	case "files":
-		if len(entry.Backup.Files) == 0 {
+		if err := validateHostPathUse(entry, opts); err != nil {
+			return nil, err
+		}
+		if len(entry.Backup.Files) == 0 && len(entry.Backup.HostPaths) == 0 {
 			return nil, fmt.Errorf("service %s: files strategy needs at least one backup.files entry", entry.Service)
 		}
-		return &Files{entry: entry}, nil
+		return &Files{entry: entry, opts: opts}, nil
 	case "dump":
 		if opts.Runner == nil {
 			return nil, fmt.Errorf("service %s: dump strategy needs a command runner", entry.Service)
@@ -225,8 +238,11 @@ func For(entry *catalog.Entry, opts Options) (Strategy, error) {
 		if entry.Backup.StopStart == nil || len(entry.Backup.StopStart.Containers) == 0 {
 			return nil, fmt.Errorf("service %s: stop-start strategy needs backup.stopStart.containers", entry.Service)
 		}
-		if len(entry.Backup.Files) == 0 {
-			return nil, fmt.Errorf("service %s: stop-start strategy needs at least one backup.files data directory to archive", entry.Service)
+		if err := validateHostPathUse(entry, opts); err != nil {
+			return nil, err
+		}
+		if len(entry.Backup.Files) == 0 && len(entry.Backup.HostPaths) == 0 {
+			return nil, fmt.Errorf("service %s: stop-start strategy needs at least one backup.files data directory to archive (or backup.hostPaths for folders on a remote Docker host)", entry.Service)
 		}
 		return &StopStart{entry: entry, opts: opts}, nil
 	case "exec":
@@ -259,6 +275,23 @@ func For(entry *catalog.Entry, opts Options) (Strategy, error) {
 	default:
 		return nil, fmt.Errorf("service %s: unknown backup strategy %q (want one of: files, dump, stop-start, exec, volume, compose)", entry.Service, entry.Backup.Strategy)
 	}
+}
+
+// validateHostPathUse checks the hostPaths of a files or stop-start
+// entry: well-formed, not mixed with backup.files (which means paths on
+// the Ballast machine), and a runner to reach the Docker host with.
+func validateHostPathUse(entry *catalog.Entry, opts Options) error {
+	hp := entry.Backup.HostPaths
+	if len(hp) == 0 {
+		return nil
+	}
+	if len(entry.Backup.Files) != 0 {
+		return fmt.Errorf("service %s: backup.files (folders on the Ballast machine) and backup.hostPaths (folders on the Docker host) cannot be mixed in one service; split it in two", entry.Service)
+	}
+	if opts.Runner == nil {
+		return fmt.Errorf("service %s: hostPaths need a command runner", entry.Service)
+	}
+	return validateHostPathSpecs(entry.Service, hp)
 }
 
 // validArtifactName rejects names that could escape the work

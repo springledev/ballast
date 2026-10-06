@@ -36,6 +36,7 @@ func (e *Entry) DeepCopy() *Entry {
 	}
 	c.Backup.Files = append([]FileSpec(nil), e.Backup.Files...)
 	c.Backup.Volumes = append([]VolumeSpec(nil), e.Backup.Volumes...)
+	c.Backup.HostPaths = append([]HostPathSpec(nil), e.Backup.HostPaths...)
 	if e.Backup.StopStart != nil {
 		ss := *e.Backup.StopStart
 		ss.Containers = append([]string(nil), e.Backup.StopStart.Containers...)
@@ -224,6 +225,18 @@ func (e *Entry) Resolve(ctx TemplateContext) error {
 			return fmt.Errorf("file %q: %w", f.Path, err)
 		}
 		e.Backup.Files[i].Path = p
+	}
+	for i, h := range e.Backup.HostPaths {
+		for _, f := range []struct {
+			what string
+			v    *string
+		}{{"path", &e.Backup.HostPaths[i].Path}, {"mount", &e.Backup.HostPaths[i].Mount}, {"container", &e.Backup.HostPaths[i].Container}} {
+			out, err := substitute(*f.v, ctx)
+			if err != nil {
+				return fmt.Errorf("hostPaths entry %d %s %q: %w", i+1, f.what, h.Path+h.Mount, err)
+			}
+			*f.v = out
+		}
 	}
 	for i, v := range e.Backup.Volumes {
 		n, err := substitute(v.Name, ctx)

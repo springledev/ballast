@@ -35,12 +35,13 @@ printf '%s\n' "$*" >> "$STUB_LOG"
 cmd="$1"
 for a in "$@"; do
   case "$a" in
-    "fail-$cmd"|"fail-$cmd":*)
+    "fail-$cmd"|"fail-$cmd":*|*source=*/fail-"$cmd",*)
       echo "stub: simulated $cmd failure" >&2
       exit 1 ;;
   esac
 done
 case "$cmd" in
+  inspect) if [ -n "$STUB_INSPECT" ]; then cat "$STUB_INSPECT"; fi ;;
   exec) printf 'CREATE TABLE stub(id int);\n' ;;
   run)
     if [ -n "$STUB_STDIN" ]; then cat > "$STUB_STDIN"

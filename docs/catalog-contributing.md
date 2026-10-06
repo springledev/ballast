@@ -53,6 +53,7 @@ backup:                      # required
       format: sql              # optional; free text (drives the output file's extension)
   files:                      # optional (any strategy): plain paths backed up directly via restic
     - path: "{{ .Params.data_dir }}"
+  hostPaths:                  # files / stop-start: folders on the service's Docker host (path, or container + mount)
   volumes:                    # required when strategy is volume: named Docker volumes to archive
     - name: "{{ .Params.volume }}"
   stopStart:                  # optional; used by the stop-start and volume strategies
@@ -252,15 +253,20 @@ in this repo, or ask before submitting.
   yet, so this entry asks for `db_container` as an ordinary parameter
   instead, matching how the generic `postgres` entry does it.
 
-### `catalog/vaultwarden.yaml` — stop-start + files, archive-integrity + restart-smoke
+### `catalog/vaultwarden.yaml` — stop-start + hostPaths, archive-integrity + restart-smoke
 
 - Vaultwarden keeps its database (SQLite) and everything else in one data
   folder. Copying a live SQLite file risks catching it mid-write, so this
   entry uses `strategy: stop-start` instead of `dump`.
 - `backup.stopStart.containers` names the one container to stop
-  (`{{ .Params.container }}`, defaulting to `vaultwarden`); `backup.files`
-  backs up `{{ .Params.data_dir }}` (the folder mounted at `/data`) while
-  the container is down.
+  (`{{ .Params.container }}`, defaulting to `vaultwarden`); `backup.hostPaths`
+  names the container's mount point (`mount: /data`); Ballast asks Docker
+  which folder on the service's Docker host is mounted there and archives
+  it through a read-only helper container while the container is down. A
+  `hostPaths` entry is either `path:` (an absolute path on that host) or
+  `container:` plus `mount:`. It works the same on remote Docker hosts;
+  `backup.files` keeps meaning paths on the Ballast machine, and the two
+  cannot be mixed in one entry.
 - `verify.methods` declares two checks, both of which must pass:
   - `archive-integrity` — the resulting archive is complete and readable,
     plus the automatic restic read-back.
@@ -271,14 +277,13 @@ in this repo, or ask before submitting.
   engine itself guarantees the restart regardless of what this field says;
   it's not a switch you can use to skip restarting.
 
-### `catalog/couchdb.yaml` — stop-start + files, archive-integrity + restart-smoke
+### `catalog/couchdb.yaml` — stop-start + hostPaths, archive-integrity + restart-smoke
 
 - Structurally identical to Vaultwarden's entry: CouchDB's data files are
   append-only, but a copy taken mid-compaction can still be caught in an
   inconsistent state, so `stop-start` is used again.
-- `container` defaults to `couchdb`; `data_dir` has no default because the
-  mount path varies by install (the prompt tells the user it's normally
-  mounted at `/opt/couchdb/data`).
+- `container` defaults to `couchdb`; the data folder is found from the
+  container's mount at `/opt/couchdb/data`, so the user types no path.
 - Same `verify.methods: [archive-integrity, restart-smoke]` and
   `restartPolicy: always` as Vaultwarden, for the same reasons. The
   restart-smoke probe checks that CouchDB's health endpoint (`/_up` on

@@ -19,6 +19,7 @@ import (
 
 	bundledcatalog "github.com/springledev/ballast/catalog"
 
+	"github.com/moby/moby/api/types/container"
 	"github.com/testcontainers/testcontainers-go"
 	"github.com/testcontainers/testcontainers-go/wait"
 )
@@ -295,6 +296,11 @@ func TestPipelineVaultwardenCatalogIntegration(t *testing.T) {
 				Image: fixtureImage,
 				Name:  containerName,
 				Cmd:   []string{"sh", "-c", "mkdir -p /www && echo ok > /www/alive && exec httpd -f -p 80 -h /www"},
+				// The bundled entry finds the data folder from this
+				// mount at run time (hostPaths mount: /data).
+				HostConfigModifier: func(hc *container.HostConfig) {
+					hc.Binds = append(hc.Binds, dataDir+":/data")
+				},
 			},
 			Started: true,
 		})
@@ -310,7 +316,6 @@ func TestPipelineVaultwardenCatalogIntegration(t *testing.T) {
 			Destination:  "local",
 			Params: map[string]string{
 				"container": containerName,
-				"data_dir":  dataDir,
 			},
 		}); err != nil {
 			t.Fatalf("PutService: %v", err)
@@ -370,13 +375,11 @@ func TestPipelineVaultwardenCatalogIntegration(t *testing.T) {
 		}
 	})
 
-	t.Run("archive failure still restarts the container", func(t *testing.T) {
+	t.Run("a missing data folder fails before the container is stopped", func(t *testing.T) {
 		ctx := context.Background()
-		dataDir := t.TempDir()
-		if err := os.WriteFile(filepath.Join(dataDir, "db.sqlite3"), []byte("fake-sqlite-bytes"), 0o644); err != nil {
-			t.Fatal(err)
-		}
 
+		// No bind mount at /data: the bundled entry cannot find the
+		// data folder, and must say so before stopping anything.
 		containerName := fmt.Sprintf("ballast-vaultwarden-failure-%d", time.Now().UnixNano())
 		fixC, err := testcontainers.GenericContainer(ctx, testcontainers.GenericContainerRequest{
 			ContainerRequest: testcontainers.ContainerRequest{
@@ -391,36 +394,25 @@ func TestPipelineVaultwardenCatalogIntegration(t *testing.T) {
 		}
 		t.Cleanup(func() { terminateContainer(fixC) })
 
-		// Make the data directory unreadable so the stop-start
-		// strategy's archive step fails while the container is down.
-		if err := os.Chmod(dataDir, 0o000); err != nil {
-			t.Fatal(err)
-		}
-		t.Cleanup(func() { _ = os.Chmod(dataDir, 0o755) })
-
 		p, _ := newPipelineHarness(t, bin)
 		if err := inventory.PutService(p.DB, inventory.Service{
 			Name:         "vaultwarden-fail",
 			CatalogEntry: "vaultwarden",
 			Destination:  "local",
-			Params: map[string]string{
-				"container": containerName,
-				"data_dir":  dataDir,
-			},
+			Params:       map[string]string{"container": containerName},
 		}); err != nil {
 			t.Fatalf("PutService: %v", err)
 		}
 
 		state, err := p.Run(ctx, "vaultwarden-fail")
-		if err == nil {
-			t.Fatal("Run: want an error when the data directory cannot be archived")
+		if err == nil || !strings.Contains(err.Error(), "nothing mounted at /data") {
+			t.Fatalf("Run error = %v, want it to say nothing is mounted at /data", err)
 		}
 		if state == engine.SUCCESS {
 			t.Fatalf("state = %s, want anything but SUCCESS", state)
 		}
-
 		if !dockerContainerRunning(t, containerName) {
-			t.Error("fixture container is not running after a failed backup; stop-start must still restart it")
+			t.Error("fixture container was stopped even though the data folder could not be found")
 		}
 	})
 }

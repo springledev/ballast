@@ -92,6 +92,7 @@ func NewAuthedHandler(ops *Ops, auth *Auth) http.Handler {
 	protected.HandleFunc("DELETE /api/v1/docker-hosts/{name}", h.deleteDockerHost)
 	protected.HandleFunc("POST /api/v1/docker-hosts/{name}/test", h.testDockerHost)
 	protected.HandleFunc("GET /api/v1/docker-hosts/{name}/volumes", h.listDockerHostVolumes)
+	protected.HandleFunc("GET /api/v1/docker-hosts/{name}/containers/{container}/mounts", h.listContainerMounts)
 	protected.HandleFunc("GET /api/v1/docker-hosts/{name}/compose-projects", h.listDockerHostComposeProjects)
 	protected.HandleFunc("GET /api/v1/docker-hosts/{name}/compose-dirs", h.listComposeDirs)
 	protected.HandleFunc("POST /api/v1/docker-hosts/{name}/compose-dirs", h.addComposeDir)
@@ -749,6 +750,15 @@ func (h *handler) testDockerHost(w http.ResponseWriter, r *http.Request) {
 
 func (h *handler) listDockerHostVolumes(w http.ResponseWriter, r *http.Request) {
 	list, err := h.ops.ListDockerHostVolumes(r.Context(), pathName(r))
+	if err != nil {
+		h.writeErr(w, err, http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, http.StatusOK, list)
+}
+
+func (h *handler) listContainerMounts(w http.ResponseWriter, r *http.Request) {
+	list, err := h.ops.ListContainerMounts(r.Context(), pathName(r), r.PathValue("container"))
 	if err != nil {
 		h.writeErr(w, err, http.StatusInternalServerError)
 		return

@@ -7,6 +7,11 @@
 # starts the container again — even when the backup fails or is
 # cancelled.
 #
+# The data folder is found from the container itself: Ballast asks Docker
+# which folder on the host is mounted at /opt/couchdb/data (on whichever Docker host
+# the service lives) and reads it through a read-only helper container,
+# so nothing needs to be typed and a moved folder is followed.
+#
 # Verification: the archive is fully read back (tar index test),
 # restic re-reads a sample of the snapshot, and a restart smoke test
 # waits for the container to come back and answer on /_up (CouchDB's
@@ -25,16 +30,14 @@ parameters:
     required: true
     default: "couchdb"
     prompt: "Name of your CouchDB container"
-  - name: data_dir
-    required: true
-    prompt: "Path to CouchDB's data folder on this machine (the one mounted at /opt/couchdb/data)"
 backup:
   strategy: stop-start
   stopStart:
     containers:
       - "{{ .Params.container }}"
-  files:
-    - path: "{{ .Params.data_dir }}"
+  hostPaths:
+    - container: "{{ .Params.container }}"
+      mount: /opt/couchdb/data
 verify:
   methods:
     - archive-integrity

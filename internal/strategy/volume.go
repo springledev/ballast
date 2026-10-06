@@ -60,6 +60,9 @@ func validateVolumeEntry(entry *catalog.Entry) error {
 	if len(b.Files) != 0 || len(b.Dumps) != 0 {
 		return fmt.Errorf("service %s: volume strategy archives Docker volumes only; backup.files and backup.dumps belong to other strategies", entry.Service)
 	}
+	if len(b.HostPaths) != 0 {
+		return fmt.Errorf("service %s: volume strategy archives Docker volumes only; folders on the Docker host go in backup.hostPaths of a files or stop-start service (a path is never read as a volume name)", entry.Service)
+	}
 	if b.StopStart != nil && len(b.StopStart.Containers) == 0 {
 		return fmt.Errorf("service %s: backup.stopStart is set but lists no containers (remove it to back the volumes up live)", entry.Service)
 	}

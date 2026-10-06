@@ -236,8 +236,10 @@ func TestStopStartCatalogRequirements(t *testing.T) {
 			if entry.Backup.StopStart == nil || len(entry.Backup.StopStart.Containers) == 0 {
 				t.Error("Backup.StopStart.Containers is empty")
 			}
-			if len(entry.Backup.Files) == 0 {
-				t.Error("Backup.Files is empty, want the service's data directory")
+			want := map[string]string{"vaultwarden": "/data", "couchdb": "/opt/couchdb/data"}[svc]
+			hp := entry.Backup.HostPaths
+			if len(entry.Backup.Files) != 0 || len(hp) != 1 || hp[0].Mount != want || hp[0].Container != "{{ .Params.container }}" {
+				t.Errorf("Backup.HostPaths = %+v (files %v), want the container's mount at %s resolved at run time", hp, entry.Backup.Files, want)
 			}
 		})
 	}

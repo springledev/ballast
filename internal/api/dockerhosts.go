@@ -61,6 +61,29 @@ func (o *Ops) ListDockerHostVolumes(ctx context.Context, name string) ([]dockerh
 	return list, nil
 }
 
+// ListContainerMounts lists the folders a container on a saved host has
+// bind-mounted, for the "pick a folder" auto-fill in a service's setup
+// form. Like the volume picker it is a convenience: the caller falls
+// back to a plain text box when this fails.
+func (o *Ops) ListContainerMounts(ctx context.Context, host, container string) ([]strategy.ContainerMount, error) {
+	h, err := inventory.GetDockerHost(o.DB, host)
+	if err != nil {
+		return nil, wrapf("docker host "+host, err)
+	}
+	if o.Runner == nil {
+		return nil, fmt.Errorf("docker host %s: listing mounts is not configured (internal wiring error)", h.Name)
+	}
+	d, err := o.DockerHosts.Docker(h)
+	if err != nil {
+		return nil, o.redactErr(err)
+	}
+	list, err := strategy.ContainerBindMounts(ctx, strategy.Options{Runner: o.Runner, Docker: d}, container)
+	if err != nil {
+		return nil, o.redactErr(err)
+	}
+	return list, nil
+}
+
 // ListDockerHostComposeProjects lists the Docker Compose projects on a
 // saved host: running stacks from container labels first (the
 // authoritative source), then folders the user registered, then

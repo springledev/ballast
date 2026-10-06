@@ -128,6 +128,22 @@
             }
           }
         },
+        "hostPaths": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "path": { "type": "string", "minLength": 1 },
+              "mount": { "type": "string", "minLength": 1 },
+              "container": { "type": "string", "minLength": 1 }
+            },
+            "oneOf": [
+              { "required": ["path"], "not": { "anyOf": [{ "required": ["mount"] }, { "required": ["container"] }] } },
+              { "required": ["mount", "container"], "not": { "required": ["path"] } }
+            ]
+          }
+        },
         "volumes": {
           "type": "array",
           "items": {

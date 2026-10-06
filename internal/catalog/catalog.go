@@ -106,9 +106,13 @@ type Backup struct {
 	Files    []FileSpec `yaml:"files,omitempty" json:"files,omitempty"`
 	// Volumes are the named Docker volumes the volume strategy
 	// archives (spec §17.5).
-	Volumes   []VolumeSpec `yaml:"volumes,omitempty" json:"volumes,omitempty"`
-	StopStart *StopStart   `yaml:"stopStart,omitempty" json:"stopStart,omitempty"`
-	Exec      *ExecBackup  `yaml:"exec,omitempty" json:"exec,omitempty"`
+	Volumes []VolumeSpec `yaml:"volumes,omitempty" json:"volumes,omitempty"`
+	// HostPaths are folders on the service's Docker host, archived
+	// through a read-only helper container on that host (spec §19.2).
+	// Unlike Files, they are never read from the Ballast machine.
+	HostPaths []HostPathSpec `yaml:"hostPaths,omitempty" json:"hostPaths,omitempty"`
+	StopStart *StopStart     `yaml:"stopStart,omitempty" json:"stopStart,omitempty"`
+	Exec      *ExecBackup    `yaml:"exec,omitempty" json:"exec,omitempty"`
 	// Compose is the Docker Compose project the compose strategy
 	// snapshots (config files + .env + container labels; spec §14
 	// step 22).
@@ -144,6 +148,16 @@ type Dump struct {
 // FileSpec is a filesystem path included directly in the backup.
 type FileSpec struct {
 	Path string `yaml:"path" json:"path"`
+}
+
+// HostPathSpec is one folder on the service's Docker host. Exactly one
+// of Path (an absolute path on that host) and Mount (a container mount
+// point such as /data, resolved from `docker inspect` of Container at
+// run time, so a moved folder is followed automatically) is set.
+type HostPathSpec struct {
+	Path      string `yaml:"path,omitempty" json:"path,omitempty"`
+	Mount     string `yaml:"mount,omitempty" json:"mount,omitempty"`
+	Container string `yaml:"container,omitempty" json:"container,omitempty"`
 }
 
 // VolumeSpec is one named Docker volume archived by the volume

@@ -44,6 +44,16 @@ func (s *StopStart) Backup(ctx context.Context, req Request) (res *Result, retEr
 		return nil, fmt.Errorf("service %s: %w", s.entry.Service, err)
 	}
 	containers := s.entry.Backup.StopStart.Containers
+
+	// Folders on the Docker host are looked up and checked first: a
+	// wrong path must fail before anything is stopped.
+	var hostSrcs []hostSource
+	if len(s.entry.Backup.HostPaths) > 0 {
+		var err error
+		if hostSrcs, err = s.opts.prepareHostPaths(ctx, s.entry.Service, s.entry.Backup.HostPaths); err != nil {
+			return nil, err
+		}
+	}
 	if err := s.stopAll(ctx, containers); err != nil {
 		return nil, err
 	}
@@ -59,6 +69,13 @@ func (s *StopStart) Backup(ctx context.Context, req Request) (res *Result, retEr
 		}
 	}()
 
+	if hostSrcs != nil {
+		a, err := s.opts.archiveHostPaths(ctx, req.WorkDir, hostSrcs)
+		if err != nil {
+			return nil, fmt.Errorf("service %s: archiving host folders: %w", s.entry.Service, err)
+		}
+		return &Result{Artifacts: []Artifact{a}}, nil
+	}
 	tarPath := filepath.Join(req.WorkDir, stopStartArtifact+".tar")
 	skipped, err := s.tarPaths(ctx, tarPath)
 	if err != nil {
@@ -68,6 +85,16 @@ func (s *StopStart) Backup(ctx context.Context, req Request) (res *Result, retEr
 		Artifacts: []Artifact{{Name: stopStartArtifact, Path: tarPath, Format: "tar"}},
 		Skipped:   skipped,
 	}, nil
+}
+
+// Preflight checks, for hostPaths entries, that every folder exists on
+// the service's Docker host, before anything is stopped.
+func (s *StopStart) Preflight(ctx context.Context) error {
+	if len(s.entry.Backup.HostPaths) == 0 {
+		return nil
+	}
+	_, err := s.opts.prepareHostPaths(ctx, s.entry.Service, s.entry.Backup.HostPaths)
+	return err
 }
 
 // stopAll stops the containers in order. Stopping is all-or-nothing:

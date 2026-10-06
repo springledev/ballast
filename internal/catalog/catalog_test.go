@@ -793,3 +793,64 @@ func TestLoadEnvSource(t *testing.T) {
 		t.Error("key with both param and secret accepted, want rejection")
 	}
 }
+
+// hostPathsEntryYAML is a minimal stop-start entry whose backup block
+// ends with the given hostPaths block.
+func hostPathsEntryYAML(block string) string {
+	return `apiVersion: ballast.dev/v1
+service: hp
+version: 1
+parameters:
+  - name: container
+    required: true
+backup:
+  strategy: stop-start
+  stopStart:
+    containers: ["{{ .Params.container }}"]
+` + block + `verify:
+  method: archive-integrity
+`
+}
+
+// TestHostPathsSchemaAndResolve checks hostPaths loading rules and
+// that path, mount and container are templated without touching the
+// original entry.
+func TestHostPathsSchemaAndResolve(t *testing.T) {
+	tests := []struct {
+		name    string
+		block   string
+		wantErr string
+	}{
+		{"path", "  hostPaths:\n    - path: /srv/data\n", ""},
+		{"mount", "  hostPaths:\n    - container: \"{{ .Params.container }}\"\n      mount: /data\n", ""},
+		{"path and mount", "  hostPaths:\n    - path: /srv\n      mount: /data\n      container: c\n", "hostPaths"},
+		{"mount without container", "  hostPaths:\n    - mount: /data\n", "hostPaths"},
+		{"empty entry", "  hostPaths:\n    - {}\n", "hostPaths"},
+		{"unknown field", "  hostPaths:\n    - path: /srv\n      exclude: x\n", "hostPaths"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			entry, err := Load([]byte(hostPathsEntryYAML(tt.block)))
+			if tt.wantErr != "" {
+				if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
+					t.Fatalf("Load error = %v, want it to contain %q", err, tt.wantErr)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("Load: %v", err)
+			}
+			deep := entry.DeepCopy()
+			if err := deep.Resolve(TemplateContext{Params: map[string]string{"container": "web"}}); err != nil {
+				t.Fatalf("Resolve: %v", err)
+			}
+			hp := deep.Backup.HostPaths[0]
+			if hp.Container != "" && hp.Container != "web" {
+				t.Errorf("container = %q, want web", hp.Container)
+			}
+			if o := entry.Backup.HostPaths[0]; o.Container != "" && o.Container != "{{ .Params.container }}" {
+				t.Errorf("original entry mutated: %+v", o)
+			}
+		})
+	}
+}
