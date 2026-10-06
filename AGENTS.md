@@ -159,6 +159,10 @@
  ## Shared code
 
  `secret`, `runner`, `dockerhost` and `sshkey` live in the `keel` repo
- (`github.com/springledev/keel`, checked out at `../keel`, wired by a
- `replace` in go.mod). Fix those packages in keel, never copy them back
- into `internal/`.
+ (`github.com/springledev/keel`), pinned to a tagged version in go.mod.
+ Fix those packages in keel, never copy them back into `internal/`.
+ To edit keel and Ballast together, use a local, gitignored workspace
+ (`go work init . ../keel`). Before pushing Ballast code that needs a
+ keel change: commit and tag keel, push the tag, then
+ `go get github.com/springledev/keel@<tag>`. Never add a `replace`
+ directive — a fresh clone must build without keel checked out.

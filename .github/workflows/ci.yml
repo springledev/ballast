@@ -16,18 +16,6 @@ jobs:
           # Single source of truth for the Go version (spec: Go 1.25).
           go-version-file: go.mod
 
-      # INTERIM: keel is untagged, so build against its main branch via a
-      # workspace. Delete this step and the go.mod placeholder version once
-      # keel has a v0.x tag.
-      - uses: actions/checkout@v4
-        with:
-          repository: springledev/keel
-          path: keel
-      - name: Workspace with keel
-        run: |
-          mv keel ../keel
-          go work init . ../keel
-
       - uses: actions/setup-node@v4
         with:
           node-version: "22"
