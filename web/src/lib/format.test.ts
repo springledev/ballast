@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { formatAgeSeconds, formatDurationMs } from "./format";
+import { formatAgeSeconds, formatBytes, formatDurationMs } from "./format";
 
 describe("formatAgeSeconds", () => {
   it("returns 'never' for undefined", () => {
@@ -26,5 +26,13 @@ describe("formatDurationMs", () => {
 
   it("formats minutes and seconds", () => {
     expect(formatDurationMs(65000)).toBe("1m 5s");
+  });
+});
+
+describe("formatBytes", () => {
+  it("scales to a short size", () => {
+    expect(formatBytes(12)).toBe("12 B");
+    expect(formatBytes(1536)).toBe("1.5 KB");
+    expect(formatBytes(5 * 1024 * 1024)).toBe("5.0 MB");
   });
 });

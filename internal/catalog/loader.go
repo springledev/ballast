@@ -101,6 +101,16 @@ func Load(data []byte) (*Entry, error) {
 	if err := entry.validateEnvSource(); err != nil {
 		return nil, err
 	}
+	for _, f := range entry.Backup.Files {
+		if err := ValidateExcludes(f.Exclude); err != nil {
+			return nil, fmt.Errorf("backup.files %q: %w", f.Path, err)
+		}
+	}
+	for i, h := range entry.Backup.HostPaths {
+		if err := ValidateExcludes(h.Exclude); err != nil {
+			return nil, fmt.Errorf("backup.hostPaths entry %d: %w", i+1, err)
+		}
+	}
 	return entry, nil
 }
 

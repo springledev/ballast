@@ -207,6 +207,14 @@ own backups, identified by its tag — even when several services share
 one destination, cleaning up after one service's backup never removes
 another service's snapshots.
 
+### Keep the newest N backups
+
+`--keep-last N` (on `ballast destination add`, `ballast service add` and
+`ballast service retention`, or the "Newest (any age)" field in the web UI)
+keeps the newest N backups whatever their age. To keep *only* the newest 2,
+set the daily, weekly and monthly counts to 0 and `--keep-last 2`. It adds
+to the other rules; it never replaces them.
+
 ### Setting up a destination's repository
 
 A destination needs its restic repository created once before backups
@@ -223,6 +231,27 @@ ballast destination init <name>
 or click "Set up repository" next to that destination in the web UI.
 It's safe to run at any time, including against a destination that's
 already set up — nothing happens if the repository already exists.
+
+## Skipping files and folders
+
+Any service can skip things it does not need, such as logs, caches or
+`node_modules`. Give patterns with `ballast service add --skip "*.log"`
+(repeat for more), change them later with `ballast service excludes <name>
+--skip "*.log" --skip node_modules` (or `--clear`), or use the "Skip these
+files and folders" panel on the service in the web UI. This is how you skip
+things in the generic folder service.
+
+A pattern is a name that may use `*` and `?`. A pattern without a slash
+matches that name anywhere inside the folder (`*.log`, `node_modules`);
+`cache/thumbs` matches a `thumbs` folder inside any `cache` folder; a
+leading slash (`/tmp`) matches from the top of the folder only. Catalog
+entries can also carry their own `exclude:` lists on `files` and
+`hostPaths` entries; yours are added on top.
+
+"Show what would be skipped" (`ballast service excludes <name> --preview`)
+lists what the patterns would leave out and how big it is, without backing
+anything up. Folders on another Docker host skip the same things when the
+backup runs, but cannot be previewed yet.
 
 ## See also
 

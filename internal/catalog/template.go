@@ -34,9 +34,17 @@ func (e *Entry) DeepCopy() *Entry {
 		d.SecretEnv = copyStringMap(d.SecretEnv)
 		c.Backup.Dumps[i] = d
 	}
-	c.Backup.Files = append([]FileSpec(nil), e.Backup.Files...)
+	c.Backup.Files = make([]FileSpec, len(e.Backup.Files))
+	for i, f := range e.Backup.Files {
+		f.Exclude = append([]string(nil), f.Exclude...)
+		c.Backup.Files[i] = f
+	}
 	c.Backup.Volumes = append([]VolumeSpec(nil), e.Backup.Volumes...)
-	c.Backup.HostPaths = append([]HostPathSpec(nil), e.Backup.HostPaths...)
+	c.Backup.HostPaths = make([]HostPathSpec, len(e.Backup.HostPaths))
+	for i, h := range e.Backup.HostPaths {
+		h.Exclude = append([]string(nil), h.Exclude...)
+		c.Backup.HostPaths[i] = h
+	}
 	if e.Backup.StopStart != nil {
 		ss := *e.Backup.StopStart
 		ss.Containers = append([]string(nil), e.Backup.StopStart.Containers...)

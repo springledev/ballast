@@ -31,6 +31,8 @@ type hostSource struct {
 	// Name is the folder's base name, which is also its name inside
 	// the archive.
 	Name string
+	// Exclude holds the skip patterns for this folder.
+	Exclude []string
 }
 
 // ContainerMount is one bind mount of a container, as `docker inspect`
@@ -158,7 +160,7 @@ func (o Options) resolveHostPaths(ctx context.Context, service string, specs []c
 			return nil, fmt.Errorf("service %s: host paths %s and %s share the folder name %q, which would collide in the archive; back them up as separate services", service, prev, src, name)
 		}
 		seen[name] = src
-		out = append(out, hostSource{Source: src, Name: name})
+		out = append(out, hostSource{Source: src, Name: name, Exclude: h.Exclude})
 	}
 	return out, nil
 }
@@ -232,7 +234,11 @@ func (o Options) archiveHostPaths(ctx context.Context, workDir string, srcs []ho
 	for _, s := range srcs {
 		args = append(args, "--mount", "type=bind,source="+s.Source+",target="+hostMountRoot+"/"+s.Name+",readonly")
 	}
-	args = append(args, o.volumeHelperImage(), "tar", "-cf", "-", "-C", hostMountRoot, ".")
+	args = append(args, o.volumeHelperImage(), "tar", "-cf", "-")
+	for _, s := range srcs {
+		args = append(args, tarExcludeArgs(s.Name, s.Exclude)...)
+	}
+	args = append(args, "-C", hostMountRoot, ".")
 	_, runErr := o.Runner.Run(ctx, nil, f, o.Docker.Command(nil, args...))
 	closeErr := f.Close()
 	if runErr != nil {

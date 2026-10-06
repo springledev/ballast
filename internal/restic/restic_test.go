@@ -1170,3 +1170,38 @@ func TestOpenCarriesRetryLock(t *testing.T) {
 		t.Errorf("RetryLock = %v, want %v", repo.RetryLock, DefaultRetryLock)
 	}
 }
+
+// TestBackupPassesExcludes: skip patterns reach restic as --exclude,
+// and a bad pattern is refused before restic runs.
+func TestBackupPassesExcludes(t *testing.T) {
+	s := newResticStub(t)
+	repo := s.openStub(t)
+	dir := t.TempDir()
+
+	if _, err := repo.Backup(context.Background(), BackupOptions{Paths: []string{dir}, Excludes: []string{"*.log", "node_modules"}}); err != nil {
+		t.Fatalf("Backup: %v", err)
+	}
+	log := s.invocations(t)
+	if len(log) != 1 || !strings.Contains(log[0], "--exclude *.log --exclude node_modules") {
+		t.Fatalf("argv = %v, want both --exclude flags", log)
+	}
+	for _, bad := range []string{"", "a\nb"} {
+		if _, err := repo.Backup(context.Background(), BackupOptions{Paths: []string{dir}, Excludes: []string{bad}}); err == nil {
+			t.Errorf("pattern %q must be refused", bad)
+		}
+	}
+}
+
+// TestForgetKeepLast: keep-last is passed straight to restic forget and
+// counts as a rule that keeps something.
+func TestForgetKeepLast(t *testing.T) {
+	s := newResticStub(t)
+	repo := s.openStub(t)
+	if _, err := repo.Forget(context.Background(), RetentionPolicy{KeepLast: 2}, ForgetOptions{}); err != nil {
+		t.Fatalf("Forget: %v", err)
+	}
+	log := s.invocations(t)
+	if len(log) != 1 || !strings.Contains(log[0], "--keep-last 2") || strings.Contains(log[0], "--keep-daily") {
+		t.Errorf("argv = %v, want only --keep-last 2", log)
+	}
+}

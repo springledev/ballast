@@ -21,6 +21,7 @@ var (
 	destKeepDaily          int
 	destKeepWeekly         int
 	destKeepMonthly        int
+	destKeepLast           int
 
 	// Backend settings flags (spec §17.1): which of these apply
 	// depends on --type, and backend.Location rejects any that don't.
@@ -90,7 +91,7 @@ anything else as a custom restic repository string.`,
 		return withApp(cfg, cmd.ErrOrStderr(), func(a *app) error {
 			d := inventory.Destination{
 				Name: args[0], PasswordCredential: destPasswordCredential,
-				KeepDaily: destKeepDaily, KeepWeekly: destKeepWeekly, KeepMonthly: destKeepMonthly,
+				KeepLast: destKeepLast, KeepDaily: destKeepDaily, KeepWeekly: destKeepWeekly, KeepMonthly: destKeepMonthly,
 			}
 			if destType != "" {
 				d.Type = backend.Type(destType)
@@ -265,6 +266,7 @@ func registerDestinationCommands(root *cobra.Command) {
 	destinationAddCmd.Flags().StringVar(&destSSHKeyFile, "ssh-key-file", "", "path to an unencrypted SSH private key file (sftp only)")
 	destinationAddCmd.Flags().StringVar(&destPasswordCredential, "password-credential", "", "credential file name holding the repository password (default: ballast-restic-password.<name>)")
 	destinationAddCmd.Flags().BoolVar(&destInit, "init", false, "initialize the restic repository now")
+	destinationAddCmd.Flags().IntVar(&destKeepLast, "keep-last", 0, "newest snapshots to keep whatever their age (0 = off; set the daily/weekly/monthly flags to 0 to keep only these)")
 	destinationAddCmd.Flags().IntVar(&destKeepDaily, "keep-daily", 7, "daily snapshots to keep")
 	destinationAddCmd.Flags().IntVar(&destKeepWeekly, "keep-weekly", 4, "weekly snapshots to keep")
 	destinationAddCmd.Flags().IntVar(&destKeepMonthly, "keep-monthly", 6, "monthly snapshots to keep")

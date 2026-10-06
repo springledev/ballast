@@ -4,6 +4,7 @@ import { computed, reactive, ref } from "vue";
 import { api } from "@/api/client";
 import type { Destination, DestinationType } from "@/api/types";
 import { buildSettings, credentialKind, destinationTypes, typeLabel, type DestinationFormFields } from "@/lib/destinations";
+import { describeRetention } from "@/lib/retention";
 
 const destinations = ref<Destination[]>([]);
 const loading = ref(true);
@@ -21,6 +22,7 @@ interface Form extends DestinationFormFields {
   name: string;
   type: DestinationType;
   init: boolean;
+  keep_last: number;
   keep_daily: number;
   keep_weekly: number;
   keep_monthly: number;
@@ -43,6 +45,7 @@ function blankForm(): Form {
     user: "",
     url: "",
     init: true,
+    keep_last: 0,
     keep_daily: 7,
     keep_weekly: 4,
     keep_monthly: 6,
@@ -129,6 +132,7 @@ async function submit() {
       name: form.name,
       type: form.type,
       settings,
+      keep_last: form.keep_last,
       keep_daily: form.keep_daily,
       keep_weekly: form.keep_weekly,
       keep_monthly: form.keep_monthly,
@@ -250,7 +254,7 @@ load();
               <dt v-if="d.backend_credential">Backend credential file</dt>
               <dd v-if="d.backend_credential"><code>{{ d.backend_credential }}</code></dd>
               <dt>Old backups kept</dt>
-              <dd>{{ d.keep_daily }} daily, {{ d.keep_weekly }} weekly, {{ d.keep_monthly }} monthly</dd>
+              <dd>{{ describeRetention(d) }}</dd>
             </dl>
             <p class="hint">
               "Set up repository" is only needed if this destination was added without setting it up, or if the
@@ -432,6 +436,10 @@ load();
         <div class="advanced-body">
           <div class="field-label">Old backups to keep</div>
           <div class="inline-fields">
+            <div class="field">
+              <label for="dest-last" class="hint">Newest (any age)</label>
+              <input id="dest-last" v-model.number="form.keep_last" type="number" min="0" />
+            </div>
             <div class="field">
               <label for="dest-daily" class="hint">Daily</label>
               <input id="dest-daily" v-model.number="form.keep_daily" type="number" min="0" />

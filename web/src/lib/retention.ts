@@ -15,13 +15,14 @@ import type { Retention } from "@/api/types";
  */
 export function describeRetention(r: Retention): string {
   const parts: string[] = [];
+  if ((r.keep_last ?? 0) > 0) parts.push(`the newest ${r.keep_last}`);
   if (r.keep_daily > 0) parts.push(`${r.keep_daily} daily`);
   if (r.keep_weekly > 0) parts.push(`${r.keep_weekly} weekly`);
   if (r.keep_monthly > 0) parts.push(`${r.keep_monthly} monthly`);
   if (parts.length === 0) return "no backups kept";
   if (parts.length === 1) return `${parts[0]} backups`;
   if (parts.length === 2) return `${parts[0]} and ${parts[1]} backups`;
-  return `${parts[0]}, ${parts[1]} and ${parts[2]} backups`;
+  return `${parts.slice(0, -1).join(", ")} and ${parts[parts.length - 1]} backups`;
 }
 
 /**

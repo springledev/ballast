@@ -38,3 +38,12 @@ describe("describeServiceRetention", () => {
     );
   });
 });
+
+describe("describeRetention keep_last", () => {
+  it("leads with the newest N", () => {
+    expect(describeRetention({ keep_last: 2, keep_daily: 0, keep_weekly: 0, keep_monthly: 0 })).toBe("the newest 2 backups");
+    expect(describeRetention({ keep_last: 2, keep_daily: 7, keep_weekly: 4, keep_monthly: 6 })).toBe(
+      "the newest 2, 7 daily, 4 weekly and 6 monthly backups",
+    );
+  });
+});

@@ -425,6 +425,11 @@ type BackupOptions struct {
 	// Host is the snapshot's hostname label. Empty lets restic use
 	// the machine's hostname (fine for single-host destinations).
 	Host string
+
+	// Excludes are patterns for files and folders restic leaves out
+	// (passed as --exclude; a pattern without a leading slash matches
+	// that name anywhere under the backed-up paths).
+	Excludes []string
 }
 
 // BackupResult is the summary restic reports for one backup
@@ -462,6 +467,12 @@ func (r *Repository) Backup(ctx context.Context, opts BackupOptions) (*BackupRes
 	}
 	for _, tag := range opts.Tags {
 		args = append(args, "--tag", tag)
+	}
+	for _, ex := range opts.Excludes {
+		if ex == "" || strings.ContainsAny(ex, "\n\r\x00") {
+			return nil, fmt.Errorf("restic backup: skip pattern %q must be a non-empty single line", ex)
+		}
+		args = append(args, "--exclude", ex)
 	}
 	for _, p := range opts.Paths {
 		if !filepath.IsAbs(p) {

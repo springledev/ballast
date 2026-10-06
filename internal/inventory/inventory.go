@@ -24,6 +24,7 @@ import (
 	"time"
 
 	"github.com/springledev/ballast/internal/backend"
+	"github.com/springledev/ballast/internal/catalog"
 	"github.com/springledev/ballast/internal/restic"
 	"github.com/springledev/ballast/internal/store"
 	"github.com/springledev/keel/dockerhost"
@@ -77,14 +78,16 @@ type Destination struct {
 	// credentials (access key pair or SSH key); empty when the type
 	// needs none.
 	BackendCredential string `json:"backend_credential,omitempty"`
-	KeepDaily         int    `json:"keep_daily"`
-	KeepWeekly        int    `json:"keep_weekly"`
-	KeepMonthly       int    `json:"keep_monthly"`
+	// KeepLast keeps the newest N backups regardless of age (0 = off).
+	KeepLast    int `json:"keep_last,omitempty"`
+	KeepDaily   int `json:"keep_daily"`
+	KeepWeekly  int `json:"keep_weekly"`
+	KeepMonthly int `json:"keep_monthly"`
 }
 
 // Retention returns d's restic retention policy.
 func (d Destination) Retention() restic.RetentionPolicy {
-	return Retention{KeepDaily: d.KeepDaily, KeepWeekly: d.KeepWeekly, KeepMonthly: d.KeepMonthly}.Policy()
+	return Retention{KeepLast: d.KeepLast, KeepDaily: d.KeepDaily, KeepWeekly: d.KeepWeekly, KeepMonthly: d.KeepMonthly}.Policy()
 }
 
 // Target returns what backend.Resolver needs to open d's repository.
@@ -150,7 +153,7 @@ func (d *Destination) Normalize() error {
 			return fmt.Errorf("destination %s: the backend credential file and the repository password file must be different files", d.Name)
 		}
 	}
-	if err := (Retention{KeepDaily: d.KeepDaily, KeepWeekly: d.KeepWeekly, KeepMonthly: d.KeepMonthly}).Validate(); err != nil {
+	if err := (Retention{KeepLast: d.KeepLast, KeepDaily: d.KeepDaily, KeepWeekly: d.KeepWeekly, KeepMonthly: d.KeepMonthly}).Validate(); err != nil {
 		return fmt.Errorf("destination %s: %w", d.Name, err)
 	}
 	return nil
@@ -161,6 +164,8 @@ func (d *Destination) Normalize() error {
 // backups are removed and their space reclaimed after each verified
 // backup.
 type Retention struct {
+	// KeepLast keeps the newest N backups regardless of age (0 = off).
+	KeepLast    int `json:"keep_last,omitempty"`
 	KeepDaily   int `json:"keep_daily"`
 	KeepWeekly  int `json:"keep_weekly"`
 	KeepMonthly int `json:"keep_monthly"`
@@ -169,18 +174,18 @@ type Retention struct {
 // Validate rejects negative counts and a policy that keeps nothing
 // (which would delete every backup).
 func (r Retention) Validate() error {
-	if r.KeepDaily < 0 || r.KeepWeekly < 0 || r.KeepMonthly < 0 {
+	if r.KeepLast < 0 || r.KeepDaily < 0 || r.KeepWeekly < 0 || r.KeepMonthly < 0 {
 		return fmt.Errorf("retention counts must not be negative")
 	}
-	if r.KeepDaily == 0 && r.KeepWeekly == 0 && r.KeepMonthly == 0 {
-		return fmt.Errorf("retention policy must keep at least one snapshot (keep_daily, keep_weekly and keep_monthly are all zero)")
+	if r.KeepLast == 0 && r.KeepDaily == 0 && r.KeepWeekly == 0 && r.KeepMonthly == 0 {
+		return fmt.Errorf("retention policy must keep at least one snapshot (keep_last, keep_daily, keep_weekly and keep_monthly are all zero)")
 	}
 	return nil
 }
 
 // Policy converts r to the restic forget policy.
 func (r Retention) Policy() restic.RetentionPolicy {
-	return restic.RetentionPolicy{KeepDaily: r.KeepDaily, KeepWeekly: r.KeepWeekly, KeepMonthly: r.KeepMonthly}
+	return restic.RetentionPolicy{KeepLast: r.KeepLast, KeepDaily: r.KeepDaily, KeepWeekly: r.KeepWeekly, KeepMonthly: r.KeepMonthly}
 }
 
 func typeNames() string {
@@ -208,8 +213,8 @@ func PutDestination(db *sql.DB, d Destination) error {
 	}
 	now := time.Now().UTC().Format(time.RFC3339Nano)
 	_, err = db.Exec(`
-		INSERT INTO destinations (name, type, settings_json, location, password_credential, backend_credential, keep_daily, keep_weekly, keep_monthly, created_at, updated_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		INSERT INTO destinations (name, type, settings_json, location, password_credential, backend_credential, keep_daily, keep_weekly, keep_monthly, keep_last, created_at, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(name) DO UPDATE SET
 			type = excluded.type,
 			settings_json = excluded.settings_json,
@@ -219,8 +224,9 @@ func PutDestination(db *sql.DB, d Destination) error {
 			keep_daily = excluded.keep_daily,
 			keep_weekly = excluded.keep_weekly,
 			keep_monthly = excluded.keep_monthly,
+			keep_last = excluded.keep_last,
 			updated_at = excluded.updated_at`,
-		d.Name, string(d.Type), string(settings), d.Location, d.PasswordCredential, d.BackendCredential, d.KeepDaily, d.KeepWeekly, d.KeepMonthly, now, now,
+		d.Name, string(d.Type), string(settings), d.Location, d.PasswordCredential, d.BackendCredential, d.KeepDaily, d.KeepWeekly, d.KeepMonthly, d.KeepLast, now, now,
 	)
 	if err != nil {
 		return fmt.Errorf("saving destination %s: %w", d.Name, err)
@@ -228,14 +234,14 @@ func PutDestination(db *sql.DB, d Destination) error {
 	return nil
 }
 
-const destinationColumns = `name, type, settings_json, location, password_credential, backend_credential, keep_daily, keep_weekly, keep_monthly`
+const destinationColumns = `name, type, settings_json, location, password_credential, backend_credential, keep_daily, keep_weekly, keep_monthly, keep_last`
 
 type rowScanner interface{ Scan(dest ...any) error }
 
 func scanDestination(row rowScanner) (Destination, error) {
 	var d Destination
 	var typ, settings string
-	if err := row.Scan(&d.Name, &typ, &settings, &d.Location, &d.PasswordCredential, &d.BackendCredential, &d.KeepDaily, &d.KeepWeekly, &d.KeepMonthly); err != nil {
+	if err := row.Scan(&d.Name, &typ, &settings, &d.Location, &d.PasswordCredential, &d.BackendCredential, &d.KeepDaily, &d.KeepWeekly, &d.KeepMonthly, &d.KeepLast); err != nil {
 		return Destination{}, err
 	}
 	d.Type = backend.Type(typ)
@@ -357,6 +363,10 @@ type Service struct {
 	// no Proxmox tier involved.
 	ProxmoxNode string `json:"proxmox_node,omitempty"`
 	ProxmoxVMID int    `json:"proxmox_vmid,omitempty"`
+	// Excludes are "skip these" patterns applied on top of the catalog
+	// entry's own, to every folder the service backs up (the way to
+	// skip things in the generic folder service).
+	Excludes []string `json:"excludes,omitempty"`
 }
 
 // EffectiveRetention is the policy applied to s's backups in d: its
@@ -365,7 +375,7 @@ func (s Service) EffectiveRetention(d Destination) Retention {
 	if s.Retention != nil {
 		return *s.Retention
 	}
-	return Retention{KeepDaily: d.KeepDaily, KeepWeekly: d.KeepWeekly, KeepMonthly: d.KeepMonthly}
+	return Retention{KeepLast: d.KeepLast, KeepDaily: d.KeepDaily, KeepWeekly: d.KeepWeekly, KeepMonthly: d.KeepMonthly}
 }
 
 // PutService inserts or updates a service. name is validated; the
@@ -403,6 +413,17 @@ func PutService(db *sql.DB, s Service) error {
 	if s.ProxmoxVMID < 0 {
 		return fmt.Errorf("service %s: proxmox_vmid must not be negative", s.Name)
 	}
+	if err := catalog.ValidateExcludes(s.Excludes); err != nil {
+		return fmt.Errorf("service %s: %w", s.Name, err)
+	}
+	excludesJSON := ""
+	if len(s.Excludes) > 0 {
+		b, err := json.Marshal(s.Excludes)
+		if err != nil {
+			return fmt.Errorf("service %s: encoding excludes: %w", s.Name, err)
+		}
+		excludesJSON = string(b)
+	}
 	paramsJSON, err := marshalMap(s.Params)
 	if err != nil {
 		return fmt.Errorf("service %s: encoding params: %w", s.Name, err)
@@ -433,8 +454,8 @@ func PutService(db *sql.DB, s Service) error {
 
 	now := time.Now().UTC().Format(time.RFC3339Nano)
 	_, err = db.Exec(`
-		INSERT INTO services (name, catalog_entry, destination, docker_host, params_json, containers_json, secrets_json, retention_json, project, proxmox_node, proxmox_vmid, created_at, updated_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		INSERT INTO services (name, catalog_entry, destination, docker_host, params_json, containers_json, secrets_json, retention_json, project, proxmox_node, proxmox_vmid, excludes_json, created_at, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(name) DO UPDATE SET
 			catalog_entry = excluded.catalog_entry,
 			destination = excluded.destination,
@@ -443,11 +464,12 @@ func PutService(db *sql.DB, s Service) error {
 			containers_json = excluded.containers_json,
 			secrets_json = excluded.secrets_json,
 			retention_json = excluded.retention_json,
+			excludes_json = excluded.excludes_json,
 			project = excluded.project,
 			proxmox_node = excluded.proxmox_node,
 			proxmox_vmid = excluded.proxmox_vmid,
 			updated_at = excluded.updated_at`,
-		s.Name, s.CatalogEntry, s.Destination, s.DockerHost, paramsJSON, containersJSON, secretsJSON, retentionJSON, s.Project, s.ProxmoxNode, s.ProxmoxVMID, now, now,
+		s.Name, s.CatalogEntry, s.Destination, s.DockerHost, paramsJSON, containersJSON, secretsJSON, retentionJSON, s.Project, s.ProxmoxNode, s.ProxmoxVMID, excludesJSON, now, now,
 	)
 	if err != nil {
 		return fmt.Errorf("saving service %s: %w", s.Name, err)
@@ -467,13 +489,13 @@ func GetService(db *sql.DB, name string) (Service, error) {
 	return s, nil
 }
 
-const serviceColumns = `name, catalog_entry, destination, docker_host, params_json, containers_json, secrets_json, retention_json, project, proxmox_node, proxmox_vmid`
+const serviceColumns = `name, catalog_entry, destination, docker_host, params_json, containers_json, secrets_json, retention_json, project, proxmox_node, proxmox_vmid, excludes_json`
 
 // scanService reads one serviceColumns row.
 func scanService(row interface{ Scan(...any) error }) (Service, error) {
 	var s Service
-	var paramsJSON, containersJSON, secretsJSON, retentionJSON string
-	if err := row.Scan(&s.Name, &s.CatalogEntry, &s.Destination, &s.DockerHost, &paramsJSON, &containersJSON, &secretsJSON, &retentionJSON, &s.Project, &s.ProxmoxNode, &s.ProxmoxVMID); err != nil {
+	var paramsJSON, containersJSON, secretsJSON, retentionJSON, excludesJSON string
+	if err := row.Scan(&s.Name, &s.CatalogEntry, &s.Destination, &s.DockerHost, &paramsJSON, &containersJSON, &secretsJSON, &retentionJSON, &s.Project, &s.ProxmoxNode, &s.ProxmoxVMID, &excludesJSON); err != nil {
 		return Service{}, err
 	}
 	var err error
@@ -485,6 +507,11 @@ func scanService(row interface{ Scan(...any) error }) (Service, error) {
 	}
 	if s.Secrets, err = unmarshalMap(secretsJSON); err != nil {
 		return Service{}, fmt.Errorf("service %s: decoding secrets: %w", s.Name, err)
+	}
+	if excludesJSON != "" {
+		if err := json.Unmarshal([]byte(excludesJSON), &s.Excludes); err != nil {
+			return Service{}, fmt.Errorf("service %s: decoding excludes: %w", s.Name, err)
+		}
 	}
 	if retentionJSON != "" {
 		s.Retention = &Retention{}

@@ -60,8 +60,8 @@ func (p *Pipeline) applyRetention(ctx context.Context, service string, repo *res
 		p.logf("%s: removed %d old backup(s) but reclaiming their space (prune) failed, the backup itself succeeded: %s", service, len(res.Removed), p.redact(err.Error()))
 		return
 	}
-	p.logf("%s: retention kept %d backup(s) and removed %d older one(s) (keep %d daily, %d weekly, %d monthly)",
-		service, len(res.Kept), len(res.Removed), policy.KeepDaily, policy.KeepWeekly, policy.KeepMonthly)
+	p.logf("%s: retention kept %d backup(s) and removed %d older one(s) (keep last %d, %d daily, %d weekly, %d monthly)",
+		service, len(res.Kept), len(res.Removed), policy.KeepLast, policy.KeepDaily, policy.KeepWeekly, policy.KeepMonthly)
 }
 
 // serviceTag is the restic tag every snapshot of service carries.

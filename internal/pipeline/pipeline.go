@@ -189,6 +189,7 @@ func (p *Pipeline) Run(ctx context.Context, service string) (engine.State, error
 	if err := entry.Resolve(catalog.TemplateContext{Params: svc.Params, Services: svc.Containers, Discovery: discovered}); err != nil {
 		return fail(fmt.Errorf("resolving catalog entry %q: %w", svc.CatalogEntry, err))
 	}
+	entry.AddExcludes(svc.Excludes)
 	secrets, err := p.resolveSecrets(svc)
 	if err != nil {
 		return fail(err)
@@ -257,8 +258,9 @@ func (p *Pipeline) Run(ctx context.Context, service string) (engine.State, error
 	defer releaseShared()
 	paths := append(append([]string(nil), res.Paths...), artifactPaths(res.Artifacts)...)
 	br, err := repo.Backup(ctx, restic.BackupOptions{
-		Paths: paths,
-		Tags:  []string{"ballast", serviceTag(service)},
+		Paths:    paths,
+		Excludes: res.Excludes,
+		Tags:     []string{"ballast", serviceTag(service)},
 	})
 	if err != nil {
 		return fail(err)

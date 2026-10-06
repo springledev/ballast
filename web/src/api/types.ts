@@ -35,6 +35,8 @@ export interface EnvSourceProposal {
 
 /** How many of the newest daily/weekly/monthly backups to keep. */
 export interface Retention {
+  /** Newest backups to keep whatever their age (0 or missing = off). */
+  keep_last?: number;
   keep_daily: number;
   keep_weekly: number;
   keep_monthly: number;
@@ -58,6 +60,26 @@ export interface Service {
   proxmox_node?: string;
   /** The Proxmox VM/LXC ID this service is attached to, when set. Set together with proxmox_node. */
   proxmox_vmid?: number;
+  /** "Skip these" patterns (e.g. "*.log", "node_modules") applied on top of the catalog entry's own. */
+  excludes?: string[];
+}
+
+/** One file or folder a backup would leave out. */
+export interface SkippedItem {
+  path: string;
+  bytes: number;
+  files: number;
+  folder: boolean;
+}
+
+/** What a set of skip patterns would leave out of the next backup. */
+export interface ExcludePreview {
+  skipped: SkippedItem[];
+  skipped_count: number;
+  skipped_bytes: number;
+  kept_bytes: number;
+  /** Plain-English remark when the preview is incomplete. */
+  note?: string;
 }
 
 /** One service's outcome within a full-stack restore (`ballast restore-project`). */
@@ -104,6 +126,7 @@ export interface Destination {
   password_credential: string;
   /** The credential file holding the backend's own key/secret, when it needs one. */
   backend_credential?: string;
+  keep_last?: number;
   keep_daily: number;
   keep_weekly: number;
   keep_monthly: number;
@@ -125,6 +148,7 @@ export interface CreateDestinationRequest {
   name: string;
   type: DestinationType;
   settings: DestinationSettings;
+  keep_last?: number;
   keep_daily?: number;
   keep_weekly?: number;
   keep_monthly?: number;

@@ -148,6 +148,9 @@ type Dump struct {
 // FileSpec is a filesystem path included directly in the backup.
 type FileSpec struct {
 	Path string `yaml:"path" json:"path"`
+	// Exclude lists patterns for things inside Path that are not
+	// backed up (see ValidateExcludes for the pattern rules).
+	Exclude []string `yaml:"exclude,omitempty" json:"exclude,omitempty"`
 }
 
 // HostPathSpec is one folder on the service's Docker host. Exactly one
@@ -158,6 +161,9 @@ type HostPathSpec struct {
 	Path      string `yaml:"path,omitempty" json:"path,omitempty"`
 	Mount     string `yaml:"mount,omitempty" json:"mount,omitempty"`
 	Container string `yaml:"container,omitempty" json:"container,omitempty"`
+	// Exclude lists patterns for things inside the folder that are not
+	// backed up (see ValidateExcludes for the pattern rules).
+	Exclude []string `yaml:"exclude,omitempty" json:"exclude,omitempty"`
 }
 
 // VolumeSpec is one named Docker volume archived by the volume

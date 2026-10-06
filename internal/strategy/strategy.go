@@ -97,6 +97,9 @@ type Result struct {
 	// Paths are host filesystem paths to include in the upload
 	// directly (files strategy; the library dir of a dump entry).
 	Paths []string
+	// Excludes are skip patterns the uploader applies to Paths
+	// (restic --exclude).
+	Excludes []string
 	// Skipped lists paths that were deliberately not archived (e.g.
 	// sockets inside a data directory) so the run log can name them.
 	Skipped []string

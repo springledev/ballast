@@ -160,7 +160,7 @@ func (s *StopStart) tarPaths(ctx context.Context, dest string) ([]string, error)
 			f.Close()
 			return nil, fmt.Errorf("backup path %q must be absolute (e.g. /srv/data), not relative", spec.Path)
 		}
-		if err := tarOne(ctx, tw, root, &skipped); err != nil {
+		if err := tarOne(ctx, tw, root, spec.Exclude, &skipped); err != nil {
 			tw.Close()
 			f.Close()
 			return nil, err
@@ -181,7 +181,7 @@ func (s *StopStart) tarPaths(ctx context.Context, dest string) ([]string, error)
 // anything else (sockets, devices, fifos) cannot be restored
 // meaningfully and is skipped — recorded in skipped so the run log
 // can name it.
-func tarOne(ctx context.Context, tw *tar.Writer, root string, skipped *[]string) error {
+func tarOne(ctx context.Context, tw *tar.Writer, root string, excludes []string, skipped *[]string) error {
 	err := filepath.Walk(root, func(path string, info fs.FileInfo, walkErr error) error {
 		if walkErr != nil {
 			return walkErr
@@ -190,6 +190,14 @@ func tarOne(ctx context.Context, tw *tar.Writer, root string, skipped *[]string)
 			return err
 		}
 
+		if len(excludes) > 0 && path != root {
+			if inner, relErr := filepath.Rel(root, path); relErr == nil && excluded(excludes, filepath.ToSlash(inner)) {
+				if info.IsDir() {
+					return filepath.SkipDir
+				}
+				return nil
+			}
+		}
 		rel, err := filepath.Rel(filepath.Dir(root), path)
 		if err != nil {
 			return fmt.Errorf("computing archive name for %s: %w", path, err)

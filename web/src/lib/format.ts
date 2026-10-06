@@ -3,6 +3,19 @@
 // ships alone, so every extra library is bundle size and audit
 // surface for no beginner-facing benefit here).
 
+/** A byte count as a short size such as "1.5 GB". */
+export function formatBytes(n: number): string {
+  if (n < 1024) return `${n} B`;
+  const units = ["KB", "MB", "GB", "TB"];
+  let v = n / 1024;
+  let i = 0;
+  while (v >= 1024 && i < units.length - 1) {
+    v /= 1024;
+    i++;
+  }
+  return `${v.toFixed(1)} ${units[i]}`;
+}
+
 export function formatRelative(iso?: string): string {
   if (!iso) return "never";
   const then = new Date(iso).getTime();

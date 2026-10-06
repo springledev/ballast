@@ -709,6 +709,37 @@ func (o *Ops) PutService(ctx context.Context, s inventory.Service) error {
 	return nil
 }
 
+// PreviewExcludes shows what the given skip patterns would leave out
+// of service's next backup, without backing anything up. patterns are
+// the draft list from the form (not yet saved); they apply on top of
+// the catalog entry's own.
+func (o *Ops) PreviewExcludes(ctx context.Context, name string, patterns []string) (*strategy.ExcludePreview, error) {
+	s, err := inventory.GetService(o.DB, name)
+	if err != nil {
+		return nil, wrapf("service "+name, err)
+	}
+	if err := catalog.ValidateExcludes(patterns); err != nil {
+		return nil, fmt.Errorf("service %s: %w: %w", name, ErrValidation, err)
+	}
+	entry, ok := o.Catalog.Get(s.CatalogEntry)
+	if !ok {
+		return nil, fmt.Errorf("service %s: %w: catalog entry %q not found", name, ErrValidation, s.CatalogEntry)
+	}
+	docker, err := o.dockerFor(s.DockerHost)
+	if err != nil {
+		return nil, fmt.Errorf("service %s: %w", name, err)
+	}
+	discovered, err := detect.ResolveDiscoveryOffline(ctx, o.Runner, docker, entry.Discovery, entry.ParamsWithDefaults(s.Params))
+	if err != nil {
+		return nil, fmt.Errorf("service %s: %w: %w", name, ErrValidation, err)
+	}
+	if err := entry.Resolve(catalog.TemplateContext{Params: s.Params, Services: s.Containers, Discovery: discovered}); err != nil {
+		return nil, fmt.Errorf("service %s: %w: %w", name, ErrValidation, err)
+	}
+	entry.AddExcludes(patterns)
+	return strategy.PreviewExcludes(entry)
+}
+
 // DeleteService removes a configured service.
 func (o *Ops) DeleteService(ctx context.Context, name string) error {
 	if err := inventory.DeleteService(o.DB, name); err != nil {

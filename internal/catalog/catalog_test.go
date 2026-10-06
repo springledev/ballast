@@ -826,7 +826,7 @@ func TestHostPathsSchemaAndResolve(t *testing.T) {
 		{"path and mount", "  hostPaths:\n    - path: /srv\n      mount: /data\n      container: c\n", "hostPaths"},
 		{"mount without container", "  hostPaths:\n    - mount: /data\n", "hostPaths"},
 		{"empty entry", "  hostPaths:\n    - {}\n", "hostPaths"},
-		{"unknown field", "  hostPaths:\n    - path: /srv\n      exclude: x\n", "hostPaths"},
+		{"unknown field", "  hostPaths:\n    - path: /srv\n      skip: x\n", "hostPaths"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

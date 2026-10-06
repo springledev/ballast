@@ -38,7 +38,11 @@ func (s *Files) Backup(ctx context.Context, req Request) (*Result, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &Result{Paths: paths}, nil
+	var excludes []string
+	for _, f := range s.entry.Backup.Files {
+		excludes = append(excludes, f.Exclude...)
+	}
+	return &Result{Paths: paths, Excludes: excludes}, nil
 }
 
 // backupHostPaths archives the service's Docker-host folders live,

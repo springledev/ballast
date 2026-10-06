@@ -3,6 +3,7 @@ package inventory
 import (
 	"errors"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -842,5 +843,49 @@ func TestEnvRef(t *testing.T) {
 	got, err := defaultedSecretNames("svc", map[string]string{"x": ref, "y": ""})
 	if err != nil || got["x"] != ref || got["y"] != "ballast-secret.svc.y" {
 		t.Fatalf("defaultedSecretNames = %v, %v", got, err)
+	}
+}
+
+// TestKeepLastAndExcludesRoundTrip: keep_last on a destination and
+// skip patterns on a service survive the database, and bad patterns are
+// refused.
+func TestKeepLastAndExcludesRoundTrip(t *testing.T) {
+	db := openDB(t).DB()
+	if err := PutDestination(db, Destination{Name: "ssd", Location: "/srv", KeepLast: 2}); err != nil {
+		t.Fatalf("PutDestination (keep-last only): %v", err)
+	}
+	d, err := GetDestination(db, "ssd")
+	if err != nil || d.KeepLast != 2 || d.Retention().KeepLast != 2 {
+		t.Fatalf("destination = %+v, %v; want keep_last 2", d, err)
+	}
+	if err := PutDestination(db, Destination{Name: "none", Location: "/srv2"}); err == nil {
+		t.Error("a policy that keeps nothing must still be refused")
+	}
+	if err := PutDestination(db, Destination{Name: "neg", Location: "/srv3", KeepLast: -1, KeepDaily: 1}); err == nil {
+		t.Error("a negative keep_last must be refused")
+	}
+
+	s := Service{Name: "docs", CatalogEntry: "folder", Destination: "ssd", Excludes: []string{"*.log", "node_modules"},
+		Retention: &Retention{KeepLast: 3}}
+	if err := PutService(db, s); err != nil {
+		t.Fatalf("PutService: %v", err)
+	}
+	got, err := GetService(db, "docs")
+	if err != nil {
+		t.Fatalf("GetService: %v", err)
+	}
+	if !reflect.DeepEqual(got.Excludes, s.Excludes) || got.Retention == nil || got.Retention.KeepLast != 3 {
+		t.Errorf("service = %+v", got)
+	}
+	got.Excludes = nil
+	if err := PutService(db, got); err != nil {
+		t.Fatal(err)
+	}
+	if again, _ := GetService(db, "docs"); len(again.Excludes) != 0 {
+		t.Errorf("clearing excludes failed: %+v", again.Excludes)
+	}
+	s.Excludes = []string{"!x"}
+	if err := PutService(db, s); err == nil {
+		t.Error("a bad skip pattern must be refused")
 	}
 }

@@ -21,7 +21,10 @@ var (
 	serviceKeepDaily    int
 	serviceKeepWeekly   int
 	serviceKeepMonthly  int
+	serviceKeepLast     int
+	serviceExcludes     []string
 
+	retentionKeepLast    int
 	retentionKeepDaily   int
 	retentionKeepWeekly  int
 	retentionKeepMonthly int
@@ -41,16 +44,25 @@ func parseKV(pairs []string) (map[string]string, error) {
 	return out, nil
 }
 
+// retentionFlagsChanged reports whether any --keep-* flag was given.
+func retentionFlagsChanged(cmd *cobra.Command) bool {
+	f := cmd.Flags()
+	return f.Changed("keep-last") || f.Changed("keep-daily") || f.Changed("keep-weekly") || f.Changed("keep-monthly")
+}
+
 // retentionOverrideFromFlags builds a service retention override from
 // whichever --keep-* flags were actually given on cmd, starting from
 // base (normally the destination's own policy) so an unspecified flag
 // keeps that value rather than defaulting to 0 ("keep nothing"). It
 // returns nil if no --keep-* flag was given at all.
-func retentionOverrideFromFlags(cmd *cobra.Command, base inventory.Retention, daily, weekly, monthly int) *inventory.Retention {
-	if !cmd.Flags().Changed("keep-daily") && !cmd.Flags().Changed("keep-weekly") && !cmd.Flags().Changed("keep-monthly") {
+func retentionOverrideFromFlags(cmd *cobra.Command, base inventory.Retention, last, daily, weekly, monthly int) *inventory.Retention {
+	if !retentionFlagsChanged(cmd) {
 		return nil
 	}
 	ret := base
+	if cmd.Flags().Changed("keep-last") {
+		ret.KeepLast = last
+	}
 	if cmd.Flags().Changed("keep-daily") {
 		ret.KeepDaily = daily
 	}
@@ -89,18 +101,19 @@ var serviceAddCmd = &cobra.Command{
 				Name: args[0], CatalogEntry: serviceCatalogEntry, Destination: serviceDestination, DockerHost: serviceDockerHost,
 				Params: params, Containers: containers, Secrets: secrets, Project: serviceProject,
 				ProxmoxNode: serviceProxmoxNode, ProxmoxVMID: serviceProxmoxVMID,
+				Excludes: serviceExcludes,
 			}
 			// A per-service retention override is only set when at
 			// least one --keep-* flag was actually given; unspecified
 			// ones follow the destination's own value, not 0 (which
 			// would mean "keep nothing").
-			if cmd.Flags().Changed("keep-daily") || cmd.Flags().Changed("keep-weekly") || cmd.Flags().Changed("keep-monthly") {
+			if retentionFlagsChanged(cmd) {
 				dest, err := a.ops.GetDestination(cmd.Context(), serviceDestination)
 				if err != nil {
 					return err
 				}
-				base := inventory.Retention{KeepDaily: dest.KeepDaily, KeepWeekly: dest.KeepWeekly, KeepMonthly: dest.KeepMonthly}
-				s.Retention = retentionOverrideFromFlags(cmd, base, serviceKeepDaily, serviceKeepWeekly, serviceKeepMonthly)
+				base := inventory.Retention{KeepLast: dest.KeepLast, KeepDaily: dest.KeepDaily, KeepWeekly: dest.KeepWeekly, KeepMonthly: dest.KeepMonthly}
+				s.Retention = retentionOverrideFromFlags(cmd, base, serviceKeepLast, serviceKeepDaily, serviceKeepWeekly, serviceKeepMonthly)
 			}
 			if err := a.ops.PutService(cmd.Context(), s); err != nil {
 				return err
@@ -116,8 +129,7 @@ var serviceAddCmd = &cobra.Command{
 				cmd.Printf("  Proxmox guest: node %s, VMID %d\n", serviceProxmoxNode, serviceProxmoxVMID)
 			}
 			if s.Retention != nil {
-				cmd.Printf("  keeps %d daily, %d weekly and %d monthly backups (overrides %s)\n",
-					s.Retention.KeepDaily, s.Retention.KeepWeekly, s.Retention.KeepMonthly, serviceDestination)
+				cmd.Printf("  keeps %s (overrides %s)\n", retentionWords(*s.Retention), serviceDestination)
 			}
 			return nil
 		})
@@ -130,9 +142,9 @@ var serviceAddCmd = &cobra.Command{
 func retentionLine(s inventory.Service, dest inventory.Destination) string {
 	eff := s.EffectiveRetention(dest)
 	if s.Retention == nil {
-		return fmt.Sprintf("keeps %d daily, %d weekly and %d monthly backups (same as %s)", eff.KeepDaily, eff.KeepWeekly, eff.KeepMonthly, dest.Name)
+		return fmt.Sprintf("keeps %s (same as %s)", retentionWords(eff), dest.Name)
 	}
-	return fmt.Sprintf("keeps %d daily, %d weekly and %d monthly backups (its own setting, not %s's)", eff.KeepDaily, eff.KeepWeekly, eff.KeepMonthly, dest.Name)
+	return fmt.Sprintf("keeps %s (its own setting, not %s's)", retentionWords(eff), dest.Name)
 }
 
 var serviceListCmd = &cobra.Command{
@@ -210,7 +222,7 @@ remove it, so the service goes back to following its destination's
 policy.`,
 	Args: cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		if retentionInherit && (cmd.Flags().Changed("keep-daily") || cmd.Flags().Changed("keep-weekly") || cmd.Flags().Changed("keep-monthly")) {
+		if retentionInherit && retentionFlagsChanged(cmd) {
 			return fmt.Errorf("give either --inherit or --keep-* flags, not both")
 		}
 		cfg, err := loadConfig()
@@ -229,11 +241,11 @@ policy.`,
 			switch {
 			case retentionInherit:
 				s.Retention = nil
-			case cmd.Flags().Changed("keep-daily") || cmd.Flags().Changed("keep-weekly") || cmd.Flags().Changed("keep-monthly"):
+			case retentionFlagsChanged(cmd):
 				base := s.EffectiveRetention(dest)
-				s.Retention = retentionOverrideFromFlags(cmd, base, retentionKeepDaily, retentionKeepWeekly, retentionKeepMonthly)
+				s.Retention = retentionOverrideFromFlags(cmd, base, retentionKeepLast, retentionKeepDaily, retentionKeepWeekly, retentionKeepMonthly)
 			}
-			if retentionInherit || cmd.Flags().Changed("keep-daily") || cmd.Flags().Changed("keep-weekly") || cmd.Flags().Changed("keep-monthly") {
+			if retentionInherit || retentionFlagsChanged(cmd) {
 				if err := a.ops.PutService(cmd.Context(), s); err != nil {
 					return err
 				}
@@ -258,18 +270,31 @@ func registerServiceCommands(root *cobra.Command) {
 	serviceAddCmd.Flags().StringArrayVar(&serviceContainers, "container", nil, "detected container as key=value (repeatable)")
 	serviceAddCmd.Flags().StringArrayVar(&serviceSecrets, "secret", nil,
 		"catalog {{ .Secrets.NAME }} reference as name=credential-file-name (repeatable); leave the value empty (name=) to use the default file name, then set it with `ballast secret set`")
+	serviceAddCmd.Flags().IntVar(&serviceKeepLast, "keep-last", 0, "newest backups to keep whatever their age, for this service alone (0 = off)")
 	serviceAddCmd.Flags().IntVar(&serviceKeepDaily, "keep-daily", 0, "daily snapshots to keep for this service alone (default: same as the destination)")
 	serviceAddCmd.Flags().IntVar(&serviceKeepWeekly, "keep-weekly", 0, "weekly snapshots to keep for this service alone (default: same as the destination)")
 	serviceAddCmd.Flags().IntVar(&serviceKeepMonthly, "keep-monthly", 0, "monthly snapshots to keep for this service alone (default: same as the destination)")
 	_ = serviceAddCmd.MarkFlagRequired("catalog")
 	_ = serviceAddCmd.MarkFlagRequired("destination")
 
+	serviceRetentionCmd.Flags().IntVar(&retentionKeepLast, "keep-last", 0, "newest backups to keep whatever their age, for this service alone (0 = off)")
 	serviceRetentionCmd.Flags().IntVar(&retentionKeepDaily, "keep-daily", 0, "daily snapshots to keep for this service alone")
 	serviceRetentionCmd.Flags().IntVar(&retentionKeepWeekly, "keep-weekly", 0, "weekly snapshots to keep for this service alone")
 	serviceRetentionCmd.Flags().IntVar(&retentionKeepMonthly, "keep-monthly", 0, "monthly snapshots to keep for this service alone")
 	serviceRetentionCmd.Flags().BoolVar(&retentionInherit, "inherit", false, "remove the override; follow the destination's policy again")
 
 	serviceCmd := &cobra.Command{Use: "service", Short: "Manage configured backup services"}
-	serviceCmd.AddCommand(serviceAddCmd, serviceListCmd, serviceRemoveCmd, serviceRetentionCmd)
+	registerExcludeFlags()
+	serviceAddCmd.Flags().StringArrayVar(&serviceExcludes, "skip", nil, "file or folder pattern this service's backups skip, such as \"*.log\" (repeatable)")
+	serviceCmd.AddCommand(serviceAddCmd, serviceListCmd, serviceRemoveCmd, serviceRetentionCmd, serviceExcludesCmd)
 	root.AddCommand(serviceCmd)
+}
+
+// retentionWords describes r in plain English, e.g. "the newest 2, 7
+// daily, 4 weekly and 6 monthly backups".
+func retentionWords(r inventory.Retention) string {
+	if r.KeepLast > 0 {
+		return fmt.Sprintf("the newest %d, %d daily, %d weekly and %d monthly backups", r.KeepLast, r.KeepDaily, r.KeepWeekly, r.KeepMonthly)
+	}
+	return fmt.Sprintf("%d daily, %d weekly and %d monthly backups", r.KeepDaily, r.KeepWeekly, r.KeepMonthly)
 }

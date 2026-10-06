@@ -2,8 +2,8 @@
 import { computed, onMounted, reactive, ref, watch } from "vue";
 
 import { api } from "@/api/client";
-import type { CatalogSummary, Destination, DockerComposeProject, DockerHost, DockerVolume, ProxmoxGuest, Retention, Service, Snapshot } from "@/api/types";
-import { formatDateTime, formatRelative } from "@/lib/format";
+import type { CatalogSummary, Destination, DockerComposeProject, ExcludePreview, DockerHost, DockerVolume, ProxmoxGuest, Retention, Service, Snapshot } from "@/api/types";
+import { formatBytes, formatDateTime, formatRelative } from "@/lib/format";
 import { describeServiceRetention } from "@/lib/retention";
 
 const services = ref<Service[]>([]);
@@ -26,7 +26,7 @@ const destinationByName = computed(() => {
 function effectiveRetention(s: Service): Retention {
   if (s.retention) return s.retention;
   const d = destinationByName.value.get(s.destination);
-  return { keep_daily: d?.keep_daily ?? 0, keep_weekly: d?.keep_weekly ?? 0, keep_monthly: d?.keep_monthly ?? 0 };
+  return { keep_last: d?.keep_last ?? 0, keep_daily: d?.keep_daily ?? 0, keep_weekly: d?.keep_weekly ?? 0, keep_monthly: d?.keep_monthly ?? 0 };
 }
 
 function retentionLine(s: Service): string {
@@ -71,6 +71,7 @@ async function toggleBackups(name: string) {
 // --- per-service retention override editor ---
 
 interface RetentionForm {
+  keep_last: number;
   keep_daily: number;
   keep_weekly: number;
   keep_monthly: number;
@@ -82,7 +83,7 @@ const retentionSaving = ref<Set<string>>(new Set());
 function retentionFormFor(s: Service): RetentionForm {
   if (!retentionForms[s.name]) {
     const eff = effectiveRetention(s);
-    retentionForms[s.name] = { keep_daily: eff.keep_daily, keep_weekly: eff.keep_weekly, keep_monthly: eff.keep_monthly };
+    retentionForms[s.name] = { keep_last: eff.keep_last ?? 0, keep_daily: eff.keep_daily, keep_weekly: eff.keep_weekly, keep_monthly: eff.keep_monthly };
   }
   return retentionForms[s.name];
 }
@@ -99,6 +100,50 @@ async function saveRetentionOverride(s: Service) {
     error.value = (e as Error).message;
   } finally {
     retentionSaving.value.delete(s.name);
+  }
+}
+
+// --- "skip these" editor ---
+
+const excludeText = reactive<Record<string, string>>({});
+const excludePreviews = reactive<Record<string, ExcludePreview | undefined>>({});
+const excludeBusy = ref<Set<string>>(new Set());
+
+function excludeTextFor(s: Service): string {
+  if (excludeText[s.name] === undefined) excludeText[s.name] = (s.excludes ?? []).join("\n");
+  return excludeText[s.name];
+}
+
+function parseExcludes(text: string): string[] {
+  return text
+    .split("\n")
+    .map((l) => l.trim())
+    .filter((l) => l !== "");
+}
+
+async function previewExcludes(s: Service) {
+  excludeBusy.value.add(s.name);
+  error.value = "";
+  try {
+    excludePreviews[s.name] = await api.previewExcludes(s.name, parseExcludes(excludeTextFor(s)));
+  } catch (e) {
+    error.value = (e as Error).message;
+  } finally {
+    excludeBusy.value.delete(s.name);
+  }
+}
+
+async function saveExcludes(s: Service) {
+  excludeBusy.value.add(s.name);
+  error.value = "";
+  try {
+    const updated = await api.updateService(s.name, { ...s, excludes: parseExcludes(excludeTextFor(s)) });
+    Object.assign(s, updated);
+    saved.value = `Saved what ${s.name} skips.`;
+  } catch (e) {
+    error.value = (e as Error).message;
+  } finally {
+    excludeBusy.value.delete(s.name);
   }
 }
 
@@ -460,6 +505,10 @@ onMounted(load);
             <div class="field-label">Backups to keep</div>
             <div class="inline-fields">
               <div class="field">
+                <label :for="`ret-last-${s.name}`" class="hint">Newest (any age)</label>
+                <input :id="`ret-last-${s.name}`" v-model.number="retentionFormFor(s).keep_last" type="number" min="0" />
+              </div>
+              <div class="field">
                 <label :for="`ret-daily-${s.name}`" class="hint">Daily</label>
                 <input :id="`ret-daily-${s.name}`" v-model.number="retentionFormFor(s).keep_daily" type="number" min="0" />
               </div>
@@ -490,6 +539,43 @@ onMounted(load);
               >
                 Use {{ s.destination }}'s setting
               </button>
+            </div>
+          </div>
+        </details>
+
+        <details class="advanced">
+          <summary>Skip these files and folders</summary>
+          <div class="advanced-body">
+            <div class="field">
+              <label :for="`skip-${s.name}`">One per line, for example <code>*.log</code> or <code>node_modules</code></label>
+              <textarea
+                :id="`skip-${s.name}`"
+                :value="excludeTextFor(s)"
+                rows="4"
+                spellcheck="false"
+                placeholder="*.log"
+                @input="excludeText[s.name] = ($event.target as HTMLTextAreaElement).value"
+              ></textarea>
+              <p class="hint">A name matches anywhere inside the folder. Start with / to match from the top only.</p>
+            </div>
+            <div class="actions">
+              <button class="btn btn-quiet" type="button" :disabled="excludeBusy.has(s.name)" @click="previewExcludes(s)">
+                Show what would be skipped
+              </button>
+              <button class="btn" type="button" :disabled="excludeBusy.has(s.name)" @click="saveExcludes(s)">Save</button>
+            </div>
+            <div v-if="excludePreviews[s.name]" class="hint">
+              <p>
+                Would skip {{ excludePreviews[s.name]!.skipped_count }} item(s),
+                {{ formatBytes(excludePreviews[s.name]!.skipped_bytes) }}; {{ formatBytes(excludePreviews[s.name]!.kept_bytes) }} would
+                still be backed up.
+              </p>
+              <ul>
+                <li v-for="it in excludePreviews[s.name]!.skipped" :key="it.path">
+                  <code>{{ it.path }}</code> ({{ formatBytes(it.bytes) }})
+                </li>
+              </ul>
+              <p v-if="excludePreviews[s.name]!.note">{{ excludePreviews[s.name]!.note }}</p>
             </div>
           </div>
         </details>

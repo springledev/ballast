@@ -1720,3 +1720,34 @@ func TestOpsEnvSourceSetupStoresReferencesOnly(t *testing.T) {
 		t.Errorf("stored service leaked the password: %s", b)
 	}
 }
+
+// TestOpsPreviewExcludes: the preview applies the draft patterns on top
+// of the service's own, reads nothing but names and sizes, and rejects
+// bad patterns and unknown services.
+func TestOpsPreviewExcludes(t *testing.T) {
+	h := newHarness(t)
+	h.addDestination("local")
+	dir := t.TempDir()
+	for name, body := range map[string]string{"a.txt": "aaaa", "b.log": "bbbbbbbb", "c.tmp": "cc"} {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	svc := inventory.Service{Name: "docs", CatalogEntry: "folder", Destination: "local", Params: map[string]string{"path": dir}}
+	if err := h.ops.PutService(context.Background(), svc); err != nil {
+		t.Fatalf("PutService: %v", err)
+	}
+	pv, err := h.ops.PreviewExcludes(context.Background(), "docs", []string{"*.log", "*.tmp"})
+	if err != nil {
+		t.Fatalf("PreviewExcludes: %v", err)
+	}
+	if pv.SkippedCount != 2 || pv.SkippedBytes != 10 || pv.KeptBytes != 4 {
+		t.Errorf("preview = %+v, want 2 skipped / 10 bytes / 4 kept", pv)
+	}
+	if _, err := h.ops.PreviewExcludes(context.Background(), "docs", []string{"!x"}); !errors.Is(err, ErrValidation) {
+		t.Errorf("bad pattern error = %v, want ErrValidation", err)
+	}
+	if _, err := h.ops.PreviewExcludes(context.Background(), "ghost", nil); !errors.Is(err, inventory.ErrNotFound) {
+		t.Errorf("unknown service error = %v, want ErrNotFound", err)
+	}
+}
