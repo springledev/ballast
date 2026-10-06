@@ -36,6 +36,7 @@ const healthLabels: Record<HealthItem["area"], string> = {
   "self-backup": "Ballast's own backup",
   disk: "Disk space",
   credentials: "Credentials",
+  runtime: "How Ballast is running",
 };
 
 async function loadSetup() {

@@ -207,12 +207,33 @@ func cleanAll(dirs []string) []string {
 	return out
 }
 
+// System-wide directories used by `ballast install` and by a root
+// process that has no home directory.
+const (
+	SystemConfigDir = "/etc/ballast"
+	SystemDataDir   = "/var/lib/ballast"
+)
+
+// isRoot reports whether the process runs as root; a variable so tests
+// can stand in for it.
+var isRoot = func() bool { return os.Geteuid() == 0 }
+
 // defaultDirs computes XDG-style defaults. Kept as a separate function
 // so file overlays can be distinguished from env overrides in Load.
 func defaultDirs(getenv func(string) string, homeDir func() (string, error)) (Config, error) {
-	home, err := homeDir()
-	if err != nil {
-		return Config{}, fmt.Errorf("resolving home directory: %w", err)
+	// home is only needed when no environment variable names the
+	// directory. A root process without $HOME (a systemd unit, a
+	// minimal cron job) uses the system-wide directories instead of
+	// failing; anyone else still gets a clear error.
+	home, homeErr := homeDir()
+	homeless := func() (string, bool, error) {
+		if homeErr == nil {
+			return home, false, nil
+		}
+		if isRoot() {
+			return "", true, nil
+		}
+		return "", false, fmt.Errorf("resolving home directory: %w", homeErr)
 	}
 
 	dataDir := ""
@@ -221,7 +242,15 @@ func defaultDirs(getenv func(string) string, homeDir func() (string, error)) (Co
 	} else if state := getenv("XDG_STATE_HOME"); state != "" {
 		dataDir = filepath.Join(state, "ballast")
 	} else {
-		dataDir = filepath.Join(home, ".local", "state", "ballast")
+		h, system, err := homeless()
+		if err != nil {
+			return Config{}, err
+		}
+		if system {
+			dataDir = SystemDataDir
+		} else {
+			dataDir = filepath.Join(h, ".local", "state", "ballast")
+		}
 	}
 
 	configDir := ""
@@ -230,7 +259,15 @@ func defaultDirs(getenv func(string) string, homeDir func() (string, error)) (Co
 	} else if xdg := getenv("XDG_CONFIG_HOME"); xdg != "" {
 		configDir = filepath.Join(xdg, "ballast")
 	} else {
-		configDir = filepath.Join(home, ".config", "ballast")
+		h, system, err := homeless()
+		if err != nil {
+			return Config{}, err
+		}
+		if system {
+			configDir = SystemConfigDir
+		} else {
+			configDir = filepath.Join(h, ".config", "ballast")
+		}
 	}
 
 	return Config{DataDir: dataDir, ConfigDir: configDir}, nil

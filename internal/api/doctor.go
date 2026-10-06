@@ -48,6 +48,10 @@ func (r DoctorReport) Healthy() bool {
 	return true
 }
 
+// TerminalNotice is the warning shown when `ballast serve` runs in a
+// terminal instead of as a service.
+const TerminalNotice = "Ballast is running in a terminal, not as a service, so scheduled backups stop when it closes. Fix: run `sudo ballast install` to run it in the background and start it at boot."
+
 // Free space thresholds for verification drills, which restore a dump
 // into a throwaway container next to the work directory.
 const (
@@ -113,6 +117,10 @@ func (o *Ops) Doctor(ctx context.Context) (DoctorReport, error) {
 
 	if o.ListenAddr != "" && !ListenIsLoopback(o.ListenAddr) {
 		add("network", o.ListenAddr, DoctorWarn, "Ballast is reachable from your network over plain HTTP. Put it behind a reverse proxy that provides HTTPS (or use a tailnet/VPN) so your access key is not sent in the clear.")
+	}
+
+	if o.InTerminal {
+		add("runtime", "terminal", DoctorWarn, TerminalNotice)
 	}
 
 	if o.WorkRoot != "" {

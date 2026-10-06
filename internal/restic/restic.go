@@ -45,6 +45,11 @@ const (
 	PinnedSeries  = "0.17"
 )
 
+// TestedSeries lists every restic major.minor series Ballast's parsers
+// are tested against (spec §19.1): the pinned 0.17 series plus 0.18.
+// A binary outside these series gets the startup warning.
+var TestedSeries = []string{PinnedSeries, "0.18"}
+
 // MinimumVersion is the oldest restic release Ballast can set up a
 // new destination with: restic 0.17.0 is the first to report "no
 // repository here yet" with its own exit status (10). Older releases
@@ -776,10 +781,15 @@ type Version struct {
 	Number string
 }
 
-// Compatible reports whether the binary matches the pinned --json
-// output series (PinnedSeries).
+// Compatible reports whether the binary is in a tested --json output
+// series (TestedSeries).
 func (v Version) Compatible() bool {
-	return strings.HasPrefix(v.Number, PinnedSeries+".") || v.Number == PinnedSeries
+	for _, s := range TestedSeries {
+		if strings.HasPrefix(v.Number, s+".") || v.Number == s {
+			return true
+		}
+	}
+	return false
 }
 
 // TooOld reports whether the binary predates MinimumVersion. An
@@ -822,8 +832,8 @@ func (v Version) Warning() string {
 		return ""
 	}
 	return fmt.Sprintf(
-		"restic %s has not been tested with this Ballast (pinned to restic %s output formats); if backups look wrong, install restic %s",
-		v.Number, PinnedVersion, PinnedVersion,
+		"restic %s has not been tested with this Ballast (tested with restic %s and %s.x); if backups look wrong, install restic %s",
+		v.Number, PinnedVersion, TestedSeries[1], PinnedVersion,
 	)
 }
 

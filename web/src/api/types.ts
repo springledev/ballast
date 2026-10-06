@@ -262,7 +262,7 @@ export interface ChannelInput {
 
 /** One thing Ballast itself needs attention on (its own backup, disk space, credentials). */
 export interface HealthItem {
-  area: "self-backup" | "disk" | "credentials";
+  area: "self-backup" | "disk" | "credentials" | "runtime";
   status: "ok" | "warning" | "failed";
   message: string;
 }

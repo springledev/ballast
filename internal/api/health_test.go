@@ -133,3 +133,35 @@ func TestCredentialProblems(t *testing.T) {
 		}
 	}
 }
+
+func TestTerminalNoticeInHealthAndDoctor(t *testing.T) {
+	for _, inTerminal := range []bool{true, false} {
+		h := newHarness(t)
+		h.ops.InTerminal = inTerminal
+
+		rep, err := h.ops.Health(context.Background())
+		if err != nil {
+			t.Fatal(err)
+		}
+		var healthWarn bool
+		for _, it := range rep.Items {
+			if it.Area == "runtime" {
+				healthWarn = it.Status == DoctorWarn && it.Message == TerminalNotice
+			}
+		}
+		if healthWarn != inTerminal {
+			t.Errorf("InTerminal=%v: health runtime warning = %v", inTerminal, healthWarn)
+		}
+
+		doc, _ := h.ops.Doctor(context.Background())
+		var docWarn bool
+		for _, c := range doc.Checks {
+			if c.Area == "runtime" {
+				docWarn = c.Status == DoctorWarn
+			}
+		}
+		if docWarn != inTerminal {
+			t.Errorf("InTerminal=%v: doctor runtime warning = %v", inTerminal, docWarn)
+		}
+	}
+}

@@ -320,7 +320,9 @@ func TestVersionWarningOnMismatch(t *testing.T) {
 		{number: "0.17.3", warn: false},
 		{number: "0.17.0", warn: false}, // same series: JSON schema stable
 		{number: "0.16.4", warn: true},
-		{number: "0.18.0", warn: true},
+		{number: "0.18.0", warn: false}, // second tested series (spec §19.1)
+		{number: "0.18.2", warn: false},
+		{number: "0.19.0", warn: true},
 		{number: "1.0.0", warn: true},
 	}
 	for _, tt := range tests {
@@ -412,5 +414,23 @@ func TestSelectSnapshot(t *testing.T) {
 	}
 	if _, err := selectSnapshot(nil, "latest"); err == nil {
 		t.Error("empty repo latest = nil error, want failure")
+	}
+}
+
+// TestParseVersion018 checks the 0.18 version line parses and is inside
+// the tested range, next to the 0.17.3 golden above. The 0.18 --json
+// schemas for backup, snapshots, ls and forget match the 0.17.3
+// fixtures, which TestParseSnapshotsGolden and friends keep pinned.
+func TestParseVersion018(t *testing.T) {
+	data, err := os.ReadFile(filepath.Join("testdata", "restic-0.18", "version.txt"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	v, err := parseVersion(data)
+	if err != nil {
+		t.Fatalf("parseVersion: %v", err)
+	}
+	if v.Number != "0.18.0" || !v.Compatible() || v.Warning() != "" || v.TooOld() {
+		t.Errorf("0.18.0 = %+v, want parsed, compatible, no warning, not too old", v)
 	}
 }

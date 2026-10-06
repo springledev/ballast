@@ -11,6 +11,24 @@ afterwards using the steps here. For what every setting and
 credential file actually means, see the [configuration
 reference](configuration.md).
 
+
+## The easy way: `ballast install`
+
+If you are happy with the defaults, one command does everything below for you:
+
+```
+sudo ballast install
+```
+
+It creates `/etc/ballast` and `/var/lib/ballast`, moves an existing setup from
+your home folder into them (it checks the copy before deleting anything), installs
+and starts the service, and prints the web address and your access key. Running it
+again is safe, and it refuses to overwrite a different install. Ballast also works
+when root has no home folder: it then uses those two folders by default.
+
+If you start `ballast serve` by hand in a terminal, Ballast warns you (in the
+dashboard and in `ballast doctor`) that schedules stop when the terminal closes.
+
 ## The two ways to run it
 
 - **`ballast serve`** — a long-running service: the web UI, the REST

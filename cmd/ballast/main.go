@@ -118,6 +118,7 @@ var serveCmd = &cobra.Command{
 			return nil
 		}, listen)
 		a.ops.ListenAddr = listen
+		a.ops.InTerminal = startedFromTerminal(os.Getenv, os.Stdin)
 		mux := http.NewServeMux()
 		mux.Handle("/api/v1/", api.NewAuthedHandler(a.ops, auth))
 		mux.Handle("/", webUI)
@@ -142,6 +143,17 @@ var serveCmd = &cobra.Command{
 		a.ops.Wait()
 		return serveErr
 	},
+}
+
+// startedFromTerminal reports whether serve was started by hand in a
+// terminal rather than by a service manager. systemd sets
+// INVOCATION_ID for every unit it runs.
+func startedFromTerminal(getenv func(string) string, stdin *os.File) bool {
+	if getenv("INVOCATION_ID") != "" {
+		return false
+	}
+	info, err := stdin.Stat()
+	return err == nil && info.Mode()&os.ModeCharDevice != 0
 }
 
 // runScheduleLoop runs the in-process scheduler: every minute, aligned

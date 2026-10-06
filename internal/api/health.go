@@ -24,7 +24,7 @@ const SelfBackupMaxAge = 7 * 24 * time.Hour
 // HealthItem is one line of Ballast's own health: something about the
 // backup tool itself, not about a service.
 type HealthItem struct {
-	// Area is "self-backup", "disk" or "credentials".
+	// Area is "self-backup", "disk", "credentials" or "runtime".
 	Area   string       `json:"area"`
 	Status DoctorStatus `json:"status"`
 	// Message is plain English, with the fix when it is not ok.
@@ -64,6 +64,10 @@ func (o *Ops) Health(ctx context.Context) (HealthReport, error) {
 	default:
 		rep.LastSelfBackupAt = last
 		add("self-backup", DoctorOK, fmt.Sprintf("Ballast's own settings were backed up %s ago", humanAge(time.Since(*last))))
+	}
+
+	if o.InTerminal {
+		add("runtime", DoctorWarn, TerminalNotice)
 	}
 
 	if o.WorkRoot != "" {

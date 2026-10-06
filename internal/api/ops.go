@@ -46,6 +46,11 @@ type Ops struct {
 	// Doctor warns when it is open to the network.
 	ListenAddr string
 
+	// InTerminal is true when `ballast serve` was started by hand in a
+	// terminal rather than as a service; Doctor and Health then warn that
+	// schedules stop when the terminal closes.
+	InTerminal bool
+
 	DB      *sql.DB
 	Catalog *catalog.Registry
 	Coord   *scheduler.Coordinator

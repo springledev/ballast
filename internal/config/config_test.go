@@ -184,6 +184,8 @@ func TestLoadBadConfigFile(t *testing.T) {
 }
 
 func TestLoadHomeDirError(t *testing.T) {
+	defer func(f func() bool) { isRoot = f }(isRoot)
+	isRoot = func() bool { return false }
 	_, err := Load(getenv(nil), func() (string, error) { return "", errors.New("boom") })
 	if err == nil {
 		t.Fatal("expected error when home dir cannot be resolved")
@@ -267,6 +269,42 @@ func TestLoadListen(t *testing.T) {
 			}
 			if cfg.Listen != tt.want {
 				t.Errorf("Listen = %q, want %q", cfg.Listen, tt.want)
+			}
+		})
+	}
+}
+
+func TestLoadRootWithoutHome(t *testing.T) {
+	noHome := func() (string, error) { return "", errors.New("$HOME is not defined") }
+	cases := []struct {
+		name     string
+		root     bool
+		env      map[string]string
+		wantData string
+		wantCfg  string
+		wantErr  bool
+	}{
+		{name: "root falls back to system dirs", root: true, wantData: SystemDataDir, wantCfg: SystemConfigDir},
+		{name: "non-root still fails", root: false, wantErr: true},
+		{name: "env still wins for root", root: true, env: map[string]string{"BALLAST_DATA_DIR": "/d", "BALLAST_CONFIG_DIR": "/c"}, wantData: "/d", wantCfg: "/c"},
+		{name: "non-root with env needs no home", root: false, env: map[string]string{"BALLAST_DATA_DIR": "/d", "BALLAST_CONFIG_DIR": "/c"}, wantData: "/d", wantCfg: "/c"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			defer func(f func() bool) { isRoot = f }(isRoot)
+			isRoot = func() bool { return tc.root }
+			cfg, err := Load(getenv(tc.env), noHome)
+			if tc.wantErr {
+				if err == nil {
+					t.Fatal("expected an error")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("Load: %v", err)
+			}
+			if cfg.DataDir != tc.wantData || cfg.ConfigDir != tc.wantCfg {
+				t.Errorf("dirs = %q, %q; want %q, %q", cfg.DataDir, cfg.ConfigDir, tc.wantData, tc.wantCfg)
 			}
 		})
 	}
