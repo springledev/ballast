@@ -492,11 +492,11 @@
 
  - **v0.1 MUST ship, and test with a stub script:** (a) the `exec` strategy end-to-end, (b) the `trigger` command with token auth. No mobile code ships in v0.1.
 
- - **Secondary rclone tier** (moved out of v0.1): rclone remotes as a report-only tier that never blocks and never marks a job failed on its own (§5.2), with per-tier notification isolation tests (§11) and an acceptance check that a secondary-tier outage produces a report but never a primary job failure or masked notification.
+ - **Secondary rclone tier** (moved out of v0.1): the secondary tier itself arrives in v0.4 (§19.8) with Proton Drive (official CLI) as its first provider; rclone remains a Phase 2 *provider* for that tier — rclone remotes as a report-only tier that never blocks and never marks a job failed on its own (§5.2), with per-tier notification isolation tests (§11) and an acceptance check that a secondary-tier outage produces a report but never a primary job failure or masked notification.
 
 
 
- - Proton Drive as a *verified* tier, on top of the secondary tier (once a reliable headless path exists).
+ - Proton Drive as a *verified* tier: **delivered in v0.4** (§19.8) through Proton's official Proton Drive CLI with a file-based session store, which is the reliable headless path this item was waiting for.
 
 
 
@@ -668,7 +668,44 @@
  40. Usability pass (§18.5): first-run checklist on the dashboard, weekly digest notification, Ballast health banner (last self-backup age, low disk, missing credentials from the doctor checks), `doctor` exposure check; final v0.3 acceptance sweep (§18.6).
 
 
- The secondary rclone tier is not part of v0.1, v0.2 or v0.3; see §12.
+ The secondary tier is not part of v0.1, v0.2 or v0.3; it arrives in v0.4 (step 49) with Proton Drive as its first provider, and rclone stays Phase 2 — see §12.
+
+
+
+ **v0.4 extension (steps 41–51, §19: replace the scripts) — design rationale and the line-by-line audit of the two reference scripts in `PLAN-v0.4.md`; this list is the normative order.**
+
+
+ 41. Install + runtime (§19.1): `ballast install` (root) installs the shipped unit, creates `/etc/ballast` and `/var/lib/ballast`, moves an existing XDG install (invoking user's or root's) into them without loss, enables and starts the service, prints the UI URL and access key; idempotent, refuses to overwrite a different existing install. Root without `$HOME` falls back to those directories instead of failing. UI banner and `doctor` check when `serve` runs from a terminal rather than as a service. restic 0.18 output supported alongside 0.17.3 (golden fixtures for both); the version warning fires only outside the tested range.
+
+
+ 42. Remote host folders (§19.2, blocker): `backup.hostPaths` — absolute paths on the service's Docker host, archived by a read-only helper container (same plumbing as §17.5), live or with stop-start; `files` keeps meaning "on the Ballast machine". Paths validated on the service's host at `service add` and at PREPARING, before any container is stopped. Path auto-fill from the container's `docker inspect` mounts; the Vaultwarden and CouchDB entries switch to container mount points resolved at run time. Restore writes back through the helper, to a new folder by default. Tests use a second Docker daemon as the remote host.
+
+
+ 43. Excludes + keep-last (§19.3): `exclude` patterns on `files`, `hostPaths` and the folder service (restic `--exclude` or helper `tar --exclude`), UI "Skip these" list with a preview of what is skipped; `keep-last` retention at destination, service and target level.
+
+
+ 44. Destination targets (§19.4): a service has 1..N targets `{destination, parts, retention override}` of any destination type; existing services migrate to one target with all parts. One run produces artifacts once (one stop/start) and fans out: each target uploads, verifies and reports on its own; one target failing never hides another's result; the service light is the worst primary target. Parts selection per target (e.g. Immich library to B2 only), "Also send to…" in the add-service form, initial-upload progress, B2/S3 cost hint.
+
+
+ 45. Catalog completeness (§19.5): Gitea (`gitea dump --file - --type zip`), single-database MySQL/MariaDB as an app user with `MYSQL_PWD` secret and `mariadb-dump`/`mysqldump` probing, Postgres `db_user` parameter (prefilled from `POSTGRES_USER`), `host-config` multi-path entry; optional `dumps[].user` (`docker exec -u`); restore-drill dialect probes `mariadb`/`mariadb-admin` before `mysql`/`mysqladmin`. Each entry runs green against real images.
+
+
+ 46. Proxmox guest jobs (§19.6): service kind `proxmox-guest` (any guest; node, VMID, storage, mode, keep-last) through the shared engine — schedule, state machine, VERIFYING (guest-config drill + dump presence/size), light, notifications, freshness. Keep-last prunes only dump volumes Ballast recorded creating; the UI warns about shared storage and can create a dedicated `dir` storage. Optional copy of the dump to a restic destination as a target (step 44).
+
+
+ 47. Proxmox config snapshot (§19.6): built-in service reading via the API — cluster and node firewall rules, every guest config, storage definitions, pools, users/ACLs without secrets — stored as JSON artifacts, verified by parse-back and guest coverage; view/download only.
+
+
+ 48. Repository health (§19.7): scheduled per-destination `restic check` (default weekly, `--read-data-subset` configurable) with its own light and alerts; stale-lock handling — `restic unlock` (never `--remove-all`) only for a lock from this host, older than the run timeout, with no live Ballast process; anything else amber with an explanation.
+
+
+ 49. Second copy: Proton Drive (§19.8, amends §12): destination type `proton-drive` wrapping Proton's official CLI with a file-based session store in a `0700` folder under the credential directory and `ERROR` log level; sign-in from the UI (browser link shown, password/2FA never seen by Ballast); upload of a run's verified artifacts to `<folder>/<service>/<run date>/`, read-back verification (size check + rotating checksum download), keep-last via trash then delete of Ballast-named run folders only, per-artifact size cap (default 1 GB, skipped artifacts listed), per-destination lock, "sign in again" amber state on an expired session, CLI presence/version check in `doctor`. Report-only tier: never fails the job, never masks or is masked by the primary tier. Tests use a fake CLI replaying recorded fixtures.
+
+
+ 50. Custom entries in the UI (§19.9): catalog page creates custom entries from templates (database dump, stop-and-copy folder, volume, script) in a YAML editor with live schema validation identical to `ballast catalog validate`, installed into `catalog.d`; `exec-script` verifier registered (runs `verifyScript`; `exec` services without one stay amber).
+
+
+ 51. Preview + migration (§19.9): per-service preview (UI and `ballast backup --preview`) — parts, where each goes, estimated size, which containers stop and for how long, excludes applied, what reaches the second copy; nothing runs. "Replace a script" guide and dashboard checklist (parallel run, 7 green days, one UI test restore per service, then retire the script) with a script-idiom map in the docs; final v0.4 acceptance sweep (§19.11) reproducing both reference scripts.
 
 
 
@@ -926,3 +963,133 @@
  - [ ] Secrets never in DB, logs or API responses — re-asserted for `.env` and notification-auth paths
 
  - [ ] Docs: networking section leads with the do-not-port-forward warning; quickstart updated
+
+
+
+ ## 19. v0.4 extension: replace the scripts (normative)
+
+
+
+ **Goal:** every step of a real homelab's two backup scripts — an app-level script on the Docker VM and a host-level script on the Proxmox node — is reproducible in Ballast, set up from the web UI, and safe to run in parallel with those scripts until they are retired. Each requirement below is a gap hit while attempting that migration; the line-by-line audit and the decisions behind them are in `PLAN-v0.4.md`. No mobile code (rule 6); the `exec` strategy and `ballast trigger --token` interfaces are untouched.
+
+
+
+ **Ownership rule (applies to all of §19):** Ballast never modifies or deletes data it did not create — dump volumes, remote folders, repository contents. A local destination refuses a non-empty folder that is not a restic repository. This is what makes a parallel run safe.
+
+
+
+ ### 19.1 Install & runtime
+
+ - `ballast install` (root) sets up the shipped unit (§18.3), `/etc/ballast` and `/var/lib/ballast`, migrates an existing XDG install without loss, and starts the service. It is idempotent and never overwrites a different install.
+
+ - A root process without `$HOME` uses `/etc/ballast` and `/var/lib/ballast`. `doctor` and the UI warn when `serve` runs from a terminal rather than as a service.
+
+ - Supported restic versions are a tested range (0.17.3 and 0.18.x at v0.4), each with golden parsing fixtures.
+
+
+
+ ### 19.2 Remote host folders
+
+ - `backup.hostPaths`: absolute paths on the service's Docker host, archived through a read-only helper container on that host (§17.5 plumbing), live or inside a stop-start window with the usual restart guarantee. `files` keeps meaning paths on the Ballast machine; for the `local` host the two are equivalent. Never SSH file access.
+
+ - Paths are validated on the service's host at `service add` and at PREPARING, **before any container is stopped**. A path is never interpreted as a volume name, or the reverse.
+
+ - Paths may be given as a container mount point and resolved from `docker inspect` at run time; the bundled Vaultwarden and CouchDB entries do this.
+
+ - Restore writes back through the helper, to a new folder unless the user confirms overwriting.
+
+
+
+ ### 19.3 Excludes & retention
+
+ - `exclude` patterns on `files`, `hostPaths` and the folder service; the UI previews what is skipped.
+
+ - `keep-last` joins `keep-daily/weekly/monthly` at destination, service and target level.
+
+
+
+ ### 19.4 Destination targets
+
+ - A service has one or more targets: `{destination, parts, retention override}`, any mix of destination types. Parts are the artifacts and path groups the catalog entry names.
+
+ - One run produces its artifacts once (one stop/start window) and fans out. Each target uploads, verifies (restic read-back per destination; restore drills once per artifact) and applies retention independently, with its own light and notifications. One target failing never hides another's result (rule 3). The service light is the worst of its primary targets.
+
+
+
+ ### 19.5 Catalog
+
+ - Bundled entries added or extended: Gitea (`gitea dump` to stdout, zip integrity), single-database MySQL/MariaDB as an app user (`MYSQL_PWD` as a secret), Postgres with a `db_user` parameter, and `host-config` (system units, scripts, chosen `/etc` files).
+
+ - `dumps[].user` runs a dump as a given container user. The MySQL-family restore drill works with images that ship only `mariadb`/`mariadb-admin` clients.
+
+ - No automatic fallback strategies: a failed dump is a failed run.
+
+
+
+ ### 19.6 Proxmox guest jobs & config
+
+ - `proxmox-guest` is a service kind: any guest, scheduled and run through the shared engine (state machine, VERIFYING, lights, notifications, freshness). Verification is the guest-config restorability drill plus dump presence and size.
+
+ - Keep-last prunes only dump volumes Ballast recorded creating. A guest dump can be copied to a restic destination as a target (§19.4).
+
+ - A built-in Proxmox config service captures, through the API only (§17.3), cluster and node firewall rules, guest configs, storage definitions, pools and users/ACLs without secret fields, as JSON artifacts verified by parse-back. Ballast never writes Proxmox config.
+
+
+
+ ### 19.7 Repository health
+
+ - Each destination has a scheduled `restic check` (default weekly, configurable read-data subset) with its own light and alerts.
+
+ - Stale locks are removed with `restic unlock` (never `--remove-all`) only when the lock belongs to this host, is older than the run timeout and no Ballast process holds it; otherwise the run is amber with an explanation.
+
+
+
+ ### 19.8 Second copy: Proton Drive
+
+ - Destination type `proton-drive` wraps Proton's official Proton Drive CLI (rule 4). Session state is file-based (`PROTON_DRIVE_CREDENTIALS_STORE=unsafe_file`) in a `0700` folder under the credential directory (rule 2), with CLI logging at `ERROR`; no desktop keyring.
+
+ - Sign-in happens from the UI: Ballast runs the CLI's browser sign-in and shows the link; the Proton password and 2FA code never pass through Ballast. An expired session shows "sign in again".
+
+ - After a run is verified, its verified artifacts (not the restic repository) are uploaded to `<folder>/<service>/<run date>/`. The copy is itself verified: sizes confirmed and one artifact per run downloaded and checksum-compared; an unreadable copy is amber, never green.
+
+ - Keep-last trashes and then deletes only Ballast-named run folders. A per-artifact size cap (default 1 GB) skips and lists oversized artifacts; per-target parts selection chooses what is copied.
+
+ - This is the secondary tier of §12: report-only, never fails the job, and never masks or is masked by the primary tier. rclone remains a Phase 2 provider for it.
+
+
+
+ ### 19.9 Custom entries, preview & migration
+
+ - The UI creates, validates (same rules and messages as `ballast catalog validate`) and installs custom catalog entries from templates. The `exec-script` verification method is registered; `exec` services without a `verifyScript` are amber.
+
+ - Every service has a preview (UI and `ballast backup --preview`): parts and their targets, estimated size, containers stopped and for how long, excludes, what reaches the second copy. Nothing runs.
+
+ - Docs and a dashboard checklist guide replacing a script: parallel run, seven green days, one test restore per service from the UI, then retire the script.
+
+
+
+ ### 19.10 Out of scope (v0.4)
+
+ Mobile (§12); importing old script archives into Ballast's history; writing Proxmox config; rclone providers; multi-user auth/RBAC, OIDC, TLS/ACME; automatic fallback strategies.
+
+
+
+ ### 19.11 Acceptance checklist (v0.4 "done")
+
+ - [ ] Every step of both reference scripts has a Ballast equivalent, set up from the web UI except `ballast install`
+
+ - [ ] Services on remote Docker hosts with bind-mounted data back up green with no change to their compose files; a missing path fails before any container stops
+
+ - [ ] One run lands on a local and a cloud destination with one stop/start; a per-target parts choice sends a large library to the cloud only
+
+ - [ ] Proxmox guest backups run on a schedule with lights and alerts and never prune a dump Ballast did not create; Proxmox config is captured nightly
+
+ - [ ] Each destination is `restic check`ed on a schedule with its own light
+
+ - [ ] Proton Drive is signed in from the UI and receives verified, read-back-checked copies of config and database backups as a separately reported tier
+
+ - [ ] Ballast and the old scripts run side by side for seven days without touching each other's files, buckets or dumps
+
+ - [ ] Every service restored once from the UI
+
+ - [ ] Secrets never in DB, logs or API responses — re-asserted for the Proton session folder, database passwords and the Proxmox config snapshot
