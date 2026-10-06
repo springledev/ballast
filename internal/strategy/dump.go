@@ -53,6 +53,7 @@ func (s *Dump) Backup(ctx context.Context, req Request) (*Result, error) {
 		return nil, err
 	}
 	res.Paths = paths
+	res.PathParts = pathParts(s.entry.Backup.Files)
 	return res, nil
 }
 

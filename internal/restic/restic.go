@@ -20,7 +20,9 @@
 package restic
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -430,6 +432,21 @@ type BackupOptions struct {
 	// (passed as --exclude; a pattern without a leading slash matches
 	// that name anywhere under the backed-up paths).
 	Excludes []string
+
+	// Progress, when set, is called with restic's progress while the
+	// upload runs (roughly once a second). It must return quickly.
+	Progress func(BackupProgress)
+}
+
+// BackupProgress is one progress report from a running backup.
+type BackupProgress struct {
+	// PercentDone is 0..1.
+	PercentDone float64
+	// BytesDone and TotalBytes are what has been read and what restic
+	// expects to read in all (0 while it is still counting).
+	BytesDone, TotalBytes uint64
+	// SecondsRemaining is restic's estimate; 0 when it has none.
+	SecondsRemaining uint64
 }
 
 // BackupResult is the summary restic reports for one backup
@@ -481,9 +498,24 @@ func (r *Repository) Backup(ctx context.Context, opts BackupOptions) (*BackupRes
 		args = append(args, filepath.Clean(p))
 	}
 
-	res, err := r.run(ctx, args...)
-	if err != nil {
-		return nil, err
+	var res runner.Result
+	var err error
+	var tee *progressWriter
+	if opts.Progress != nil {
+		if err := r.check(); err != nil {
+			return nil, err
+		}
+		tee = &progressWriter{fn: opts.Progress}
+		res, err = r.Runner.Run(ctx, nil, tee, r.command(args...))
+		if err != nil {
+			return nil, r.explain("restic "+args[0], err)
+		}
+		res.Stdout = tee.all.Bytes()
+	} else {
+		res, err = r.run(ctx, args...)
+		if err != nil {
+			return nil, err
+		}
 	}
 	summary, err := parseBackupSummary(res.Stdout)
 	if err != nil {
@@ -974,4 +1006,31 @@ func selectSnapshot(snaps []Snapshot, id string) (Snapshot, error) {
 		}
 	}
 	return Snapshot{}, fmt.Errorf("restic: snapshot %q not found in the repository", id)
+}
+
+// progressWriter keeps everything restic prints and reports each
+// complete progress line to fn.
+type progressWriter struct {
+	fn   func(BackupProgress)
+	all  bytes.Buffer
+	line []byte
+}
+
+// Write implements io.Writer.
+func (w *progressWriter) Write(p []byte) (int, error) {
+	w.all.Write(p)
+	w.line = append(w.line, p...)
+	for {
+		i := bytes.IndexByte(w.line, '\n')
+		if i < 0 {
+			break
+		}
+		line := bytes.TrimSpace(w.line[:i])
+		w.line = w.line[i+1:]
+		var ev wireBackupEvent
+		if len(line) > 0 && json.Unmarshal(line, &ev) == nil && ev.MessageType == "status" {
+			w.fn(BackupProgress{PercentDone: ev.PercentDone, BytesDone: ev.BytesDone, TotalBytes: ev.TotalBytes, SecondsRemaining: ev.SecondsLeft})
+		}
+	}
+	return len(p), nil
 }

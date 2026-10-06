@@ -358,3 +358,36 @@ func TestRollbackOnError(t *testing.T) {
 		})
 	}
 }
+
+// TestMigration017GivesEveryServiceOneTarget proves an existing service
+// becomes one target with all parts, carrying its retention override.
+func TestMigration017GivesEveryServiceOneTarget(t *testing.T) {
+	s, err := Open(filepath.Join(t.TempDir(), "ballast.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	db := s.DB()
+	for _, q := range []string{
+		`DROP TABLE service_targets`,
+		`DROP TABLE run_targets`,
+		`ALTER TABLE verification_results DROP COLUMN target`,
+		`DELETE FROM schema_migrations WHERE version = 17`,
+		`INSERT INTO destinations (name, location, password_credential, created_at, updated_at) VALUES ('ssd', '/srv', 'pw', 'now', 'now')`,
+		`INSERT INTO services (name, catalog_entry, destination, retention_json, created_at, updated_at) VALUES ('immich', 'immich', 'ssd', '{"keep_daily":2}', 'now', 'now')`,
+	} {
+		if _, err := db.Exec(q); err != nil {
+			t.Fatalf("%s: %v", q, err)
+		}
+	}
+	if err := migrate(db); err != nil {
+		t.Fatalf("migrate: %v", err)
+	}
+	var dest, parts, ret string
+	if err := db.QueryRow(`SELECT destination, parts_json, retention_json FROM service_targets WHERE service = 'immich' AND position = 0`).Scan(&dest, &parts, &ret); err != nil {
+		t.Fatalf("reading migrated target: %v", err)
+	}
+	if dest != "ssd" || parts != "" || ret != `{"keep_daily":2}` {
+		t.Errorf("target = %q parts %q retention %q, want ssd, all parts, the service's retention", dest, parts, ret)
+	}
+}

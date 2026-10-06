@@ -7,6 +7,11 @@
     "name": "svc",
     "params": {
       "path": "/x"
-    }
+    },
+    "targets": [
+      {
+        "destination": "local"
+      }
+    ]
   }
 }

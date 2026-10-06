@@ -42,6 +42,25 @@ export interface Retention {
   keep_monthly: number;
 }
 
+/** One destination a service's backups go to. */
+export interface ServiceTarget {
+  destination: string;
+  /** Limit this destination to some parts (e.g. "library"). Empty: everything. */
+  parts?: string[];
+  /** This destination's own backup-keeping override. */
+  retention?: Retention | null;
+}
+
+/** One destination's outcome in a service's last run. */
+export interface TargetStatus {
+  destination: string;
+  parts?: string[];
+  light: "green" | "amber" | "red" | "running" | "none";
+  last_state?: string;
+  last_error?: string;
+  snapshot_id?: string;
+}
+
 export interface Service {
   name: string;
   catalog_entry: string;
@@ -62,6 +81,8 @@ export interface Service {
   proxmox_vmid?: number;
   /** "Skip these" patterns (e.g. "*.log", "node_modules") applied on top of the catalog entry's own. */
   excludes?: string[];
+  /** Every destination this service backs up to; the first is the main one. */
+  targets?: ServiceTarget[];
 }
 
 /** One file or folder a backup would leave out. */
@@ -199,6 +220,8 @@ export interface ServiceStatus {
   schedule?: ScheduleStatus;
   tiers: TierStatus[];
   verification?: VerificationRecord[];
+  /** One light per destination; the service's own light is the worst of them. */
+  targets?: TargetStatus[];
   freshness_age_seconds?: number;
 }
 

@@ -131,6 +131,8 @@ func openApp(cfg config.Config, logw io.Writer) (*app, error) {
 		OwnCredDir: cfg.WritableCredentialsDir,
 		WorkRoot:   filepath.Join(cfg.DataDir, "work"),
 
+		TargetParallel: cfg.MaxParallelJobs,
+
 		KnownHostsFile: filepath.Join(cfg.DataDir, "ssh", "known_hosts"),
 		DockerStateDir: filepath.Join(cfg.DataDir, "ssh", "docker-hosts"),
 		Notifier:       adapter,

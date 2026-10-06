@@ -889,3 +889,98 @@ func TestKeepLastAndExcludesRoundTrip(t *testing.T) {
 		t.Error("a bad skip pattern must be refused")
 	}
 }
+
+func TestServiceTargets(t *testing.T) {
+	keep := &Retention{KeepDaily: 2}
+	tests := []struct {
+		name    string
+		targets []Target
+		wantErr string
+		want    []Target
+	}{
+		{name: "none given means one target with all parts", want: []Target{{Destination: "ssd"}}},
+		{
+			name:    "two targets keep their parts and retention",
+			targets: []Target{{Destination: "ssd", Retention: keep}, {Destination: "b2", Parts: []string{"library"}}},
+			want:    []Target{{Destination: "ssd", Retention: keep}, {Destination: "b2", Parts: []string{"library"}}},
+		},
+		{name: "same destination twice", targets: []Target{{Destination: "ssd"}, {Destination: "ssd"}}, wantErr: "listed twice"},
+		{name: "unknown destination", targets: []Target{{Destination: "ssd"}, {Destination: "nope"}}, wantErr: "nope"},
+		{name: "empty part name", targets: []Target{{Destination: "ssd", Parts: []string{" "}}}, wantErr: "part name is empty"},
+		{name: "keeps nothing", targets: []Target{{Destination: "ssd"}, {Destination: "b2", Retention: &Retention{}}}, wantErr: "target b2"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			db := openDB(t).DB()
+			for _, n := range []string{"ssd", "b2"} {
+				if err := PutDestination(db, Destination{Name: n, Location: "/srv/" + n, KeepDaily: 7}); err != nil {
+					t.Fatal(err)
+				}
+			}
+			s := Service{Name: "immich", CatalogEntry: "immich", Destination: "ssd", Targets: tt.targets}
+			err := PutService(db, s)
+			if tt.wantErr != "" {
+				if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
+					t.Fatalf("PutService error = %v, want %q", err, tt.wantErr)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("PutService: %v", err)
+			}
+			got, err := GetService(db, "immich")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !reflect.DeepEqual(got.Targets, tt.want) {
+				t.Errorf("Targets = %+v, want %+v", got.Targets, tt.want)
+			}
+			if got.Destination != tt.want[0].Destination {
+				t.Errorf("Destination = %q, want the first target's %q", got.Destination, tt.want[0].Destination)
+			}
+			list, err := ListServices(db)
+			if err != nil || len(list) != 1 || !reflect.DeepEqual(list[0].Targets, tt.want) {
+				t.Errorf("ListServices targets = %+v (err %v), want %+v", list, err, tt.want)
+			}
+		})
+	}
+}
+
+func TestDeleteDestinationInUseByASecondaryTarget(t *testing.T) {
+	db := openDB(t).DB()
+	for _, n := range []string{"ssd", "b2"} {
+		if err := PutDestination(db, Destination{Name: n, Location: "/srv/" + n, KeepDaily: 7}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	s := Service{Name: "immich", CatalogEntry: "immich", Destination: "ssd", Targets: []Target{{Destination: "ssd"}, {Destination: "b2"}}}
+	if err := PutService(db, s); err != nil {
+		t.Fatal(err)
+	}
+	if err := DeleteDestination(db, "b2"); !errors.Is(err, ErrInUse) {
+		t.Errorf("DeleteDestination(b2) = %v, want ErrInUse", err)
+	}
+	if err := DeleteService(db, "immich"); err != nil {
+		t.Fatal(err)
+	}
+	if err := DeleteDestination(db, "b2"); err != nil {
+		t.Errorf("DeleteDestination after the service is gone: %v", err)
+	}
+}
+
+func TestTargetWants(t *testing.T) {
+	tests := []struct {
+		parts []string
+		part  string
+		want  bool
+	}{
+		{nil, "library", true},
+		{[]string{"database"}, "library", false},
+		{[]string{"database", "library"}, "library", true},
+	}
+	for _, tt := range tests {
+		if got := (Target{Parts: tt.parts}).Wants(tt.part); got != tt.want {
+			t.Errorf("Target{Parts: %v}.Wants(%q) = %v, want %v", tt.parts, tt.part, got, tt.want)
+		}
+	}
+}

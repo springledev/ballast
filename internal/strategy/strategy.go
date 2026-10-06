@@ -97,6 +97,9 @@ type Result struct {
 	// Paths are host filesystem paths to include in the upload
 	// directly (files strategy; the library dir of a dump entry).
 	Paths []string
+	// PathParts names the part (see PartOf) each entry of Paths
+	// belongs to, keyed by path. A path not listed is part "files".
+	PathParts map[string]string
 	// Excludes are skip patterns the uploader applies to Paths
 	// (restic --exclude).
 	Excludes []string

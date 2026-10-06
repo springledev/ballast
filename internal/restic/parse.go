@@ -131,6 +131,12 @@ type wireBackupEvent struct {
 	TotalDuration       float64 `json:"total_duration"`
 	SnapshotID          string  `json:"snapshot_id"`
 
+	// status (progress) fields.
+	PercentDone float64 `json:"percent_done"`
+	TotalBytes  uint64  `json:"total_bytes"`
+	BytesDone   uint64  `json:"bytes_done"`
+	SecondsLeft uint64  `json:"seconds_remaining"`
+
 	// error_item fields (a file restic could not read).
 	Error string `json:"error"`
 	Item  string `json:"item"`

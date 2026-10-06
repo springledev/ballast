@@ -305,7 +305,7 @@ func DeleteDestination(db *sql.DB, name string) (err error) {
 	defer func() { err = store.RollbackOnError(tx, err) }()
 
 	var count int
-	if err = tx.QueryRow(`SELECT COUNT(*) FROM services WHERE destination = ?`, name).Scan(&count); err != nil {
+	if err = tx.QueryRow(`SELECT COUNT(DISTINCT service) FROM service_targets WHERE destination = ?`, name).Scan(&count); err != nil {
 		return fmt.Errorf("checking destination %s usage: %w", name, err)
 	}
 	if count > 0 {
@@ -367,6 +367,163 @@ type Service struct {
 	// entry's own, to every folder the service backs up (the way to
 	// skip things in the generic folder service).
 	Excludes []string `json:"excludes,omitempty"`
+	// Targets are the destinations this service's backups go to, first
+	// one primary (spec §19.4). Destination and Retention mirror the
+	// first target. Empty on input means one target made of Destination
+	// and Retention.
+	Targets []Target `json:"targets,omitempty"`
+}
+
+// Target is one destination a service backs up to.
+type Target struct {
+	// Destination names the destination.
+	Destination string `json:"destination"`
+	// Parts limits what this target receives, by part name (a dump's
+	// name, or a folder group's name). Empty means every part.
+	Parts []string `json:"parts,omitempty"`
+	// Retention overrides the destination's policy for this target.
+	// Nil means the destination's own.
+	Retention *Retention `json:"retention,omitempty"`
+}
+
+// EffectiveTargets returns the service's targets, never empty: a
+// service saved without any gets one made of its Destination and
+// Retention.
+func (s Service) EffectiveTargets() []Target {
+	if len(s.Targets) > 0 {
+		return s.Targets
+	}
+	return []Target{{Destination: s.Destination, Retention: s.Retention}}
+}
+
+// Wants reports whether the target receives the named part.
+func (t Target) Wants(part string) bool {
+	if len(t.Parts) == 0 {
+		return true
+	}
+	for _, p := range t.Parts {
+		if p == part {
+			return true
+		}
+	}
+	return false
+}
+
+// EffectiveRetention is the policy applied to the target's backups in
+// d: its own override when set, otherwise the destination's.
+func (t Target) EffectiveRetention(d Destination) Retention {
+	if t.Retention != nil {
+		return *t.Retention
+	}
+	return Retention{KeepLast: d.KeepLast, KeepDaily: d.KeepDaily, KeepWeekly: d.KeepWeekly, KeepMonthly: d.KeepMonthly}
+}
+
+// normalizeTargets validates a service's targets and makes the first
+// one authoritative for Destination and Retention. Duplicate
+// destinations are refused: two targets in one repository would
+// retention-prune each other.
+func normalizeTargets(db *sql.DB, s *Service) error {
+	if len(s.Targets) == 0 {
+		s.Targets = []Target{{Destination: s.Destination, Retention: s.Retention}}
+	}
+	seen := map[string]bool{}
+	for i, t := range s.Targets {
+		if t.Destination == "" {
+			return fmt.Errorf("target %d has no destination", i+1)
+		}
+		if seen[t.Destination] {
+			return fmt.Errorf("destination %s is listed twice; each target needs a different destination", t.Destination)
+		}
+		seen[t.Destination] = true
+		if _, err := GetDestination(db, t.Destination); err != nil {
+			return err
+		}
+		if t.Retention != nil {
+			if err := t.Retention.Validate(); err != nil {
+				if i == 0 {
+					return err
+				}
+				return fmt.Errorf("target %s: %w", t.Destination, err)
+			}
+		}
+		for _, p := range t.Parts {
+			if strings.TrimSpace(p) == "" {
+				return fmt.Errorf("target %s: a part name is empty", t.Destination)
+			}
+		}
+	}
+	s.Destination = s.Targets[0].Destination
+	s.Retention = s.Targets[0].Retention
+	return nil
+}
+
+// saveTargets replaces the service's stored targets.
+func saveTargets(tx *sql.Tx, s Service) error {
+	if _, err := tx.Exec(`DELETE FROM service_targets WHERE service = ?`, s.Name); err != nil {
+		return err
+	}
+	for i, t := range s.Targets {
+		partsJSON, retJSON := "", ""
+		if len(t.Parts) > 0 {
+			b, err := json.Marshal(t.Parts)
+			if err != nil {
+				return err
+			}
+			partsJSON = string(b)
+		}
+		if t.Retention != nil {
+			b, err := json.Marshal(t.Retention)
+			if err != nil {
+				return err
+			}
+			retJSON = string(b)
+		}
+		if _, err := tx.Exec(`INSERT INTO service_targets (service, position, destination, parts_json, retention_json) VALUES (?, ?, ?, ?, ?)`,
+			s.Name, i, t.Destination, partsJSON, retJSON); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// loadTargets fills in Targets for each service in list.
+func loadTargets(db *sql.DB, list []Service) error {
+	for i := range list {
+		rows, err := db.Query(`SELECT destination, parts_json, retention_json FROM service_targets WHERE service = ? ORDER BY position`, list[i].Name)
+		if err != nil {
+			return fmt.Errorf("service %s: loading targets: %w", list[i].Name, err)
+		}
+		var targets []Target
+		for rows.Next() {
+			var t Target
+			var partsJSON, retJSON string
+			if err := rows.Scan(&t.Destination, &partsJSON, &retJSON); err != nil {
+				rows.Close()
+				return fmt.Errorf("service %s: loading targets: %w", list[i].Name, err)
+			}
+			if partsJSON != "" {
+				if err := json.Unmarshal([]byte(partsJSON), &t.Parts); err != nil {
+					rows.Close()
+					return fmt.Errorf("service %s: decoding target parts: %w", list[i].Name, err)
+				}
+			}
+			if retJSON != "" {
+				t.Retention = &Retention{}
+				if err := json.Unmarshal([]byte(retJSON), t.Retention); err != nil {
+					rows.Close()
+					return fmt.Errorf("service %s: decoding target retention: %w", list[i].Name, err)
+				}
+			}
+			targets = append(targets, t)
+		}
+		err = rows.Err()
+		rows.Close()
+		if err != nil {
+			return fmt.Errorf("service %s: loading targets: %w", list[i].Name, err)
+		}
+		list[i].Targets = targets
+	}
+	return nil
 }
 
 // EffectiveRetention is the policy applied to s's backups in d: its
@@ -393,7 +550,7 @@ func PutService(db *sql.DB, s Service) error {
 	if s.Destination == "" {
 		return fmt.Errorf("service %s: destination must not be empty", s.Name)
 	}
-	if _, err := GetDestination(db, s.Destination); err != nil {
+	if err := normalizeTargets(db, &s); err != nil {
 		return fmt.Errorf("service %s: %w", s.Name, err)
 	}
 	if s.DockerHost == "" {
@@ -453,7 +610,12 @@ func PutService(db *sql.DB, s Service) error {
 	}
 
 	now := time.Now().UTC().Format(time.RFC3339Nano)
-	_, err = db.Exec(`
+	tx, err := db.Begin()
+	if err != nil {
+		return fmt.Errorf("saving service %s: %w", s.Name, err)
+	}
+	defer func() { err = store.RollbackOnError(tx, err) }()
+	_, err = tx.Exec(`
 		INSERT INTO services (name, catalog_entry, destination, docker_host, params_json, containers_json, secrets_json, retention_json, project, proxmox_node, proxmox_vmid, excludes_json, created_at, updated_at)
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(name) DO UPDATE SET
@@ -474,6 +636,12 @@ func PutService(db *sql.DB, s Service) error {
 	if err != nil {
 		return fmt.Errorf("saving service %s: %w", s.Name, err)
 	}
+	if err = saveTargets(tx, s); err != nil {
+		return fmt.Errorf("saving service %s: saving targets: %w", s.Name, err)
+	}
+	if err = tx.Commit(); err != nil {
+		return fmt.Errorf("saving service %s: %w", s.Name, err)
+	}
 	return nil
 }
 
@@ -486,7 +654,11 @@ func GetService(db *sql.DB, name string) (Service, error) {
 	if err != nil {
 		return Service{}, fmt.Errorf("getting service %s: %w", name, err)
 	}
-	return s, nil
+	one := []Service{s}
+	if err := loadTargets(db, one); err != nil {
+		return Service{}, err
+	}
+	return one[0], nil
 }
 
 const serviceColumns = `name, catalog_entry, destination, docker_host, params_json, containers_json, secrets_json, retention_json, project, proxmox_node, proxmox_vmid, excludes_json`
@@ -543,6 +715,10 @@ func ListServices(db *sql.DB) ([]Service, error) {
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("listing services: %w", err)
 	}
+	rows.Close()
+	if err := loadTargets(db, out); err != nil {
+		return nil, err
+	}
 	return out, nil
 }
 
@@ -565,6 +741,10 @@ func ListServicesByProject(db *sql.DB, project string) ([]Service, error) {
 	}
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("listing services in project %s: %w", project, err)
+	}
+	rows.Close()
+	if err := loadTargets(db, out); err != nil {
+		return nil, err
 	}
 	return out, nil
 }

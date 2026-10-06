@@ -1205,3 +1205,26 @@ func TestForgetKeepLast(t *testing.T) {
 		t.Errorf("argv = %v, want only --keep-last 2", log)
 	}
 }
+
+func TestProgressWriterReportsStatusLines(t *testing.T) {
+	var got []BackupProgress
+	w := &progressWriter{fn: func(p BackupProgress) { got = append(got, p) }}
+	// Lines split across writes, a non-status line and a blank line.
+	chunks := []string{
+		`{"message_type":"status","percent_done":0.5,"total_bytes":200,"bytes_do`,
+		`ne":100,"seconds_remaining":30}` + "\n\n",
+		`{"message_type":"summary","snapshot_id":"abc"}` + "\n",
+	}
+	for _, c := range chunks {
+		if n, err := w.Write([]byte(c)); err != nil || n != len(c) {
+			t.Fatalf("Write = %d, %v", n, err)
+		}
+	}
+	want := []BackupProgress{{PercentDone: 0.5, BytesDone: 100, TotalBytes: 200, SecondsRemaining: 30}}
+	if len(got) != 1 || got[0] != want[0] {
+		t.Errorf("progress = %+v, want %+v", got, want)
+	}
+	if !strings.Contains(w.all.String(), `"snapshot_id":"abc"`) {
+		t.Error("the full output must still be kept for parsing the summary")
+	}
+}

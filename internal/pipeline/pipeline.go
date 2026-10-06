@@ -17,13 +17,13 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 
 	"github.com/springledev/ballast/internal/catalog"
 	"github.com/springledev/ballast/internal/detect"
 	"github.com/springledev/ballast/internal/dotenv"
 	"github.com/springledev/ballast/internal/engine"
 	"github.com/springledev/ballast/internal/inventory"
-	"github.com/springledev/ballast/internal/restic"
 	"github.com/springledev/ballast/internal/strategy"
 	"github.com/springledev/ballast/internal/verify"
 	"github.com/springledev/keel/runner"
@@ -77,6 +77,12 @@ type Pipeline struct {
 	// binaries; empty resolves against $PATH. Tests point these at
 	// stubs.
 	ResticBin, DockerBin, PctBin string
+
+	// TargetParallel is how many of one service's destinations upload
+	// and verify at the same time; zero or one means one at a time.
+	TargetParallel int
+
+	logMu sync.Mutex
 }
 
 // Resolver returns the backend.Resolver this pipeline opens
@@ -121,9 +127,13 @@ func (p *Pipeline) Run(ctx context.Context, service string) (engine.State, error
 	if err != nil {
 		return "", fmt.Errorf("service %s: %w", service, err)
 	}
-	dest, err := inventory.GetDestination(p.DB, svc.Destination)
-	if err != nil {
-		return "", fmt.Errorf("service %s: %w", service, err)
+	var targets []*runTarget
+	for _, t := range svc.EffectiveTargets() {
+		dest, err := inventory.GetDestination(p.DB, t.Destination)
+		if err != nil {
+			return "", fmt.Errorf("service %s: %w", service, err)
+		}
+		targets = append(targets, &runTarget{target: t, dest: dest})
 	}
 	host, err := inventory.GetDockerHost(p.DB, svc.DockerHost)
 	if err != nil {
@@ -218,10 +228,13 @@ func (p *Pipeline) Run(ctx context.Context, service string) (engine.State, error
 	m.RequireVerifications(append(entry.Verify.MethodList(), readBackMethod)...)
 	// Credential files are read fresh for every run (inside Open): a
 	// destination added, or a key file replaced, after Ballast started
-	// must still be redacted.
-	repo, err := p.Resolver().Open(dest.Target())
-	if err != nil {
-		return fail(err)
+	// must still be redacted. A destination that cannot be opened only
+	// fails its own target; the others still get their backup.
+	for _, rt := range targets {
+		rt.repo, rt.err = p.Resolver().Open(rt.dest.Target())
+	}
+	if allFailed(targets) {
+		return fail(targetsError(targets))
 	}
 	workDir := filepath.Join(p.WorkRoot, service)
 	if err := os.RemoveAll(workDir); err != nil {
@@ -231,7 +244,8 @@ func (p *Pipeline) Run(ctx context.Context, service string) (engine.State, error
 		return fail(fmt.Errorf("preparing work directory %s: %w", workDir, err))
 	}
 
-	// DUMPING
+	// DUMPING: the artifacts are produced once, whatever the number of
+	// targets (one stop/start window).
 	if err := m.Transition(engine.DUMPING, "dumping"); err != nil {
 		return fail(err)
 	}
@@ -239,56 +253,103 @@ func (p *Pipeline) Run(ctx context.Context, service string) (engine.State, error
 	if err != nil {
 		return fail(err)
 	}
+	for _, rt := range targets {
+		if rt.err == nil {
+			rt.paths, rt.artifacts, rt.err = selectParts(res, rt.target)
+		}
+	}
+	if allFailed(targets) {
+		return fail(targetsError(targets))
+	}
 
-	// UPLOADING
+	// UPLOADING: every target gets its own snapshot.
 	if err := m.Transition(engine.UPLOADING, "uploading"); err != nil {
 		return fail(err)
 	}
-	// Uploading and verifying hold the repository's shared lock, so
-	// another service's prune never runs under them (see repoLocks).
-	shared := repoLock(repo.Location)
-	shared.RLock()
-	sharedHeld := true
-	releaseShared := func() {
-		if sharedHeld {
-			shared.RUnlock()
-			sharedHeld = false
+	p.forEachTarget(targets, func(rt *runTarget) {
+		br, err := p.uploadTarget(ctx, service, rt, res)
+		if err != nil {
+			rt.err = err
+			return
+		}
+		rt.snapshotID = br.SnapshotID
+	})
+	if ctx.Err() != nil {
+		return fail(ctx.Err())
+	}
+	if allFailed(targets) {
+		return fail(targetsError(targets))
+	}
+	for _, rt := range targets {
+		if rt.snapshotID != "" {
+			if err := m.SetSnapshotID(rt.snapshotID); err != nil {
+				return fail(err)
+			}
+			break
 		}
 	}
-	defer releaseShared()
-	paths := append(append([]string(nil), res.Paths...), artifactPaths(res.Artifacts)...)
-	br, err := repo.Backup(ctx, restic.BackupOptions{
-		Paths:    paths,
-		Excludes: res.Excludes,
-		Tags:     []string{"ballast", serviceTag(service)},
-	})
-	if err != nil {
-		return fail(err)
-	}
-	if err := m.SetSnapshotID(br.SnapshotID); err != nil {
-		return fail(err)
-	}
 
-	// VERIFYING (mandatory, spec §4.1: SUCCESS is unreachable without it).
+	// VERIFYING (mandatory, spec §4.1: SUCCESS is unreachable without
+	// it). Restore drills run once per artifact; restic's read-back
+	// runs once per destination.
 	if err := m.Transition(engine.VERIFYING, "verifying"); err != nil {
 		return fail(err)
 	}
-	checks, err := p.runChecks(ctx, service, entry, checkers, res, repo, br.SnapshotID)
+	shared, foldArchive, err := p.runCheckers(ctx, service, entry, checkers, res)
 	if err != nil {
 		return fail(err)
 	}
-	releaseShared()
-	for _, c := range checks {
+	p.forEachTarget(targets, func(rt *runTarget) {
+		if rt.err == nil {
+			rt.checks = p.targetChecks(ctx, service, rt, foldArchive)
+		}
+	})
+	if ctx.Err() != nil {
+		return fail(ctx.Err())
+	}
+	for _, c := range shared {
 		if err := m.RecordVerification(c.rec); err != nil {
 			return fail(err)
 		}
 	}
-
-	if failedCheck, ok := firstHardFailure(checks); ok {
-		return fail(fmt.Errorf("verification failed (%s): %s", failedCheck.rec.Method, failedCheck.rec.Detail))
+	for _, rt := range targets {
+		for _, c := range rt.checks {
+			if err := m.RecordVerification(c.rec); err != nil {
+				return fail(err)
+			}
+		}
 	}
-	if anyUnverifiable(checks) {
-		detail := "backup uploaded but could not be fully verified: " + unverifiableSummary(checks)
+
+	// Each target's own verdict: one target failing never hides
+	// another's result (spec rule 3).
+	sharedFail, sharedFailed := firstHardFailure(shared)
+	for _, rt := range targets {
+		switch failed, hard := firstHardFailure(rt.checks); {
+		case rt.err != nil:
+			rt.state, rt.detail = engine.FAILED, p.redact(rt.err.Error())
+		case sharedFailed:
+			rt.state, rt.detail = engine.FAILED, fmt.Sprintf("verification failed (%s): %s", sharedFail.rec.Method, sharedFail.rec.Detail)
+		case hard:
+			rt.state, rt.detail = engine.FAILED, fmt.Sprintf("verification failed (%s): %s", failed.rec.Method, failed.rec.Detail)
+		case anyUnverifiable(rt.checks):
+			rt.state, rt.detail = engine.SUCCESS_UNVERIFIED, "backup uploaded but could not be fully verified: "+unverifiableSummary(rt.checks)
+		default:
+			rt.state, rt.detail = engine.SUCCESS, "backup verified"
+		}
+		if err := m.RecordTarget(engine.TargetResult{Destination: rt.dest.Name, State: rt.state, SnapshotID: rt.snapshotID, Detail: rt.detail}); err != nil {
+			return fail(err)
+		}
+	}
+	// Retention cleanup only for a target with a verified SUCCESS, and
+	// never lets its own failure change the run's outcome (spec plan
+	// step 8).
+	defer p.retainTargets(ctx, service, targets)
+
+	if anyTargetFailed(targets) {
+		return fail(targetsError(targets))
+	}
+	if anyTargetUnverified(targets) {
+		detail := targetsSummary(targets, engine.SUCCESS_UNVERIFIED)
 		if err := m.Transition(engine.SUCCESS_UNVERIFIED, detail); err != nil {
 			return fail(err)
 		}
@@ -299,10 +360,6 @@ func (p *Pipeline) Run(ctx context.Context, service string) (engine.State, error
 		return fail(err)
 	}
 	p.logf("%s: run %d succeeded and is verified", service, m.Run().ID)
-
-	// Retention cleanup only after a verified SUCCESS, and never lets
-	// its own failure change the run's outcome (spec plan step 8).
-	p.applyRetention(ctx, service, repo, svc.EffectiveRetention(dest))
 	return engine.SUCCESS, nil
 }
 
@@ -319,26 +376,17 @@ type verifyCheck struct {
 // which every run records.
 const readBackMethod = "restic-read-back"
 
-// runChecks runs every verification check the VERIFYING phase
-// requires:
-//
-//   - every checker the catalog declares, in order — except that an
-//     archive-integrity check of a zero-artifact files backup has
-//     nothing to inspect and would report a silent failure; that case
-//     is folded into the read-back result below instead (step 11 user
-//     decision).
-//   - always, restic's own read-back, which is what proves a
-//     zero-artifact files backup is restorable at all, and is
-//     recorded as an explicit result either way — never silently
-//     skipped.
-func (p *Pipeline) runChecks(ctx context.Context, service string, entry *catalog.Entry, checkers []verify.Checker, res *strategy.Result, repo *restic.Repository, snapshotID string) ([]verifyCheck, error) {
-	var checks []verifyCheck
-
+// runCheckers runs every checker the catalog declares, in order, once
+// per run (a restore drill checks the artifacts, which are the same
+// whatever the number of destinations). foldArchive reports that an
+// archive-integrity check of a zero-artifact files backup had nothing
+// to inspect: it is folded into each target's read-back result instead
+// (step 11 user decision) rather than reporting a silent failure.
+func (p *Pipeline) runCheckers(ctx context.Context, service string, entry *catalog.Entry, checkers []verify.Checker, res *strategy.Result) (checks []verifyCheck, foldArchive bool, err error) {
 	var sourceContainer string
 	if len(entry.Backup.Dumps) > 0 {
 		sourceContainer = entry.Backup.Dumps[0].Container
 	}
-	foldArchive := false
 	for _, checker := range checkers {
 		if len(res.Artifacts) == 0 && checker.Method() == verify.MethodArchiveIntegrity {
 			foldArchive = true
@@ -350,16 +398,23 @@ func (p *Pipeline) runChecks(ctx context.Context, service string, entry *catalog
 			SourceContainer: sourceContainer,
 		})
 		if err := ctx.Err(); err != nil {
-			return nil, err
+			return nil, false, err
 		}
 		checks = append(checks, verifyCheck{rec: p.toRecord(vres)})
 	}
+	return checks, foldArchive, nil
+}
 
+// targetChecks runs the checks that belong to one destination: restic's
+// own read-back, which proves the backup there is restorable at all, is
+// recorded as an explicit result either way — never silently skipped.
+func (p *Pipeline) targetChecks(ctx context.Context, service string, rt *runTarget, foldArchive bool) []verifyCheck {
 	var readBack verifyCheck
-	rb, rbErr := repo.ReadBack(ctx, snapshotID)
+	shared := repoLock(rt.repo.Location)
+	shared.RLock()
+	rb, rbErr := rt.repo.ReadBack(ctx, rt.snapshotID)
+	shared.RUnlock()
 	switch {
-	case rbErr != nil && ctx.Err() != nil:
-		return nil, ctx.Err()
 	case rbErr != nil:
 		readBack = verifyCheck{
 			rec: engine.VerificationRecord{
@@ -378,11 +433,12 @@ func (p *Pipeline) runChecks(ctx context.Context, service string, entry *catalog
 			},
 		}
 	}
-	checks = append(checks, readBack)
-
+	readBack.rec.Target = rt.dest.Name
+	checks := []verifyCheck{readBack}
 	if foldArchive {
 		checks = append(checks, verifyCheck{
 			rec: engine.VerificationRecord{
+				Target:  rt.dest.Name,
 				Method:  verify.MethodArchiveIntegrity,
 				Passed:  readBack.rec.Passed,
 				Warning: readBack.rec.Warning,
@@ -391,8 +447,7 @@ func (p *Pipeline) runChecks(ctx context.Context, service string, entry *catalog
 			unverifiable: readBack.unverifiable,
 		})
 	}
-
-	return checks, nil
+	return checks
 }
 
 // toRecord converts a verify.Result into the engine's persisted
@@ -513,6 +568,8 @@ func (p *Pipeline) logf(format string, args ...any) {
 	if w == nil {
 		w = os.Stderr
 	}
+	p.logMu.Lock()
+	defer p.logMu.Unlock()
 	fmt.Fprintln(w, p.redact(fmt.Sprintf("ballast: "+format, args...)))
 }
 

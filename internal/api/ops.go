@@ -292,9 +292,24 @@ type TierStatus struct {
 	Stale bool `json:"stale"`
 }
 
+// TargetStatus is one destination target's status for a service (spec
+// §19.4): its own light, so a failed copy to one destination is never
+// hidden behind a good copy to another.
+type TargetStatus struct {
+	Destination string   `json:"destination"`
+	Parts       []string `json:"parts,omitempty"`
+	Light       string   `json:"light"` // green, amber, red, running, none
+	LastState   string   `json:"last_state,omitempty"`
+	LastError   string   `json:"last_error,omitempty"`
+	SnapshotID  string   `json:"snapshot_id,omitempty"`
+}
+
 // VerificationRecord is the API/CLI-facing shape of an
 // engine.VerificationRecord.
 type VerificationRecord struct {
+	// Target names the destination a result belongs to; empty means the
+	// whole run.
+	Target     string    `json:"target,omitempty"`
 	Method     string    `json:"method"`
 	Passed     bool      `json:"passed"`
 	Warning    string    `json:"warning,omitempty"`
@@ -318,6 +333,9 @@ type ServiceStatus struct {
 	Schedule     *ScheduleStatus      `json:"schedule,omitempty"`
 	Tiers        []TierStatus         `json:"tiers"`
 	Verification []VerificationRecord `json:"verification,omitempty"`
+	// Targets is one entry per destination the service backs up to; the
+	// service's own light is the worst of them.
+	Targets []TargetStatus `json:"targets,omitempty"`
 	// FreshnessAgeSeconds is how long ago the last SUCCESS (never
 	// SUCCESS_UNVERIFIED — spec §11) finished, or nil if there has
 	// never been one.
@@ -405,11 +423,16 @@ func (o *Ops) statusOne(s inventory.Service, sched scheduler.ScheduledJob, withV
 				st.Verification = append(st.Verification, VerificationRecord{
 					Method: r.Method, Passed: r.Passed, Warning: r.Warning,
 					Detail: r.Detail, Output: r.Output,
-					DurationMS: r.Duration.Milliseconds(), RecordedAt: r.RecordedAt,
+					DurationMS: r.Duration.Milliseconds(), RecordedAt: r.RecordedAt, Target: r.Target,
 				})
 			}
 		}
 	}
+	targets, err := o.targetStatuses(s, last, tier)
+	if err != nil {
+		return ServiceStatus{}, wrapf("service "+s.Name, err)
+	}
+	st.Targets = targets
 
 	lastSuccess, err := fresh.LastSuccessfulRun(s.Name)
 	if err != nil {
@@ -437,6 +460,41 @@ func (o *Ops) statusOne(s inventory.Service, sched scheduler.ScheduledJob, withV
 	}
 	st.Tiers = []TierStatus{tier}
 	return st, nil
+}
+
+// targetStatuses reports each configured destination's outcome in the
+// service's last run. A run from before targets existed has no
+// per-destination rows, so its single outcome is the primary target's.
+func (o *Ops) targetStatuses(s inventory.Service, last engine.LatestRun, tier TierStatus) ([]TargetStatus, error) {
+	var recorded map[string]engine.TargetResult
+	if last.RunID != 0 {
+		rows, err := engine.RunTargets(o.DB, last.RunID)
+		if err != nil {
+			return nil, err
+		}
+		recorded = make(map[string]engine.TargetResult, len(rows))
+		for _, r := range rows {
+			recorded[r.Destination] = r
+		}
+	}
+	var out []TargetStatus
+	for i, t := range s.EffectiveTargets() {
+		ts := TargetStatus{Destination: t.Destination, Parts: t.Parts, Light: "none"}
+		switch r, ok := recorded[t.Destination]; {
+		case last.InProgress && last.RunID != 0:
+			ts.Light = "running"
+		case ok:
+			ts.Light = lightFor(r.State, false)
+			ts.LastState, ts.SnapshotID = string(r.State), r.SnapshotID
+			if r.State != engine.SUCCESS {
+				ts.LastError = r.Detail
+			}
+		case i == 0 && len(recorded) == 0 && tier.LastRunID != 0:
+			ts.Light, ts.LastState, ts.LastError, ts.SnapshotID = tier.Light, tier.LastState, tier.LastError, tier.SnapshotID
+		}
+		out = append(out, ts)
+	}
+	return out, nil
 }
 
 // lightFor maps a run's state to a traffic-light color (spec §4.1,

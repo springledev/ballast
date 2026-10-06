@@ -5,6 +5,12 @@
       "catalog_entry": "folder",
       "destination": "local",
       "service": "svc",
+      "targets": [
+        {
+          "destination": "local",
+          "light": "none"
+        }
+      ],
       "tiers": [
         {
           "light": "none",

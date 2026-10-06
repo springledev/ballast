@@ -253,6 +253,31 @@ lists what the patterns would leave out and how big it is, without backing
 anything up. Folders on another Docker host skip the same things when the
 backup runs, but cannot be previewed yet.
 
+## Sending one backup to several places
+
+A service can back up to more than one destination, for example a disk in
+your server and an offsite bucket. One run makes the backup once (your app
+is stopped at most once) and sends it to every place. Each place is checked
+on its own: if the offsite copy fails, the local copy still counts and the
+alert names the place that failed.
+
+    ballast service add photos --catalog immich --destination ssd --also-to b2=library
+    ballast service targets photos --add offsite
+    ballast service targets photos --remove offsite
+
+`--also-to b2=library` sends only the `library` part to `b2`. Parts are the
+named pieces of a service (Immich has `database` and `library`; a plain
+folder is `files`). Leave the parts off to send everything. In the web UI,
+tick "Also send to…" on the service form. The first destination is the main
+one, and the service shows red if any copy is red.
+
+Each destination keeps its own number of old backups. To give one a different
+setting from the destination default, use the service's "Backups to keep"
+panel for the main destination. A first upload of many gigabytes can take
+hours; Ballast writes its progress to the log every half minute. Cloud
+storage (Backblaze B2, S3) is billed by the amount stored, so check your
+provider's prices before sending a large library.
+
 ## See also
 
 - [Quickstart](quickstart.md) — quick first-run setup.

@@ -148,6 +148,10 @@ type Dump struct {
 // FileSpec is a filesystem path included directly in the backup.
 type FileSpec struct {
 	Path string `yaml:"path" json:"path"`
+	// Name is the part this folder is known by when a service sends
+	// different parts to different destinations (spec §19.4), e.g.
+	// "library". Empty means the default part "files".
+	Name string `yaml:"name,omitempty" json:"name,omitempty"`
 	// Exclude lists patterns for things inside Path that are not
 	// backed up (see ValidateExcludes for the pattern rules).
 	Exclude []string `yaml:"exclude,omitempty" json:"exclude,omitempty"`

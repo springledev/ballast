@@ -42,7 +42,24 @@ func (s *Files) Backup(ctx context.Context, req Request) (*Result, error) {
 	for _, f := range s.entry.Backup.Files {
 		excludes = append(excludes, f.Exclude...)
 	}
-	return &Result{Paths: paths, Excludes: excludes}, nil
+	return &Result{Paths: paths, PathParts: pathParts(s.entry.Backup.Files), Excludes: excludes}, nil
+}
+
+// DefaultPathPart is the part name of a folder the catalog did not
+// name.
+const DefaultPathPart = "files"
+
+// pathParts maps each cleaned backup.files path to its part name.
+func pathParts(files []catalog.FileSpec) map[string]string {
+	out := make(map[string]string, len(files))
+	for _, f := range files {
+		name := f.Name
+		if name == "" {
+			name = DefaultPathPart
+		}
+		out[filepath.Clean(f.Path)] = name
+	}
+	return out
 }
 
 // backupHostPaths archives the service's Docker-host folders live,

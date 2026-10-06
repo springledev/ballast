@@ -2,7 +2,7 @@
 import { computed, onMounted, reactive, ref, watch } from "vue";
 
 import { api } from "@/api/client";
-import type { CatalogSummary, Destination, DockerComposeProject, ExcludePreview, DockerHost, DockerVolume, ProxmoxGuest, Retention, Service, Snapshot } from "@/api/types";
+import type { CatalogSummary, Destination, DockerComposeProject, ExcludePreview, DockerHost, DockerVolume, ProxmoxGuest, Retention, Service, ServiceTarget, Snapshot } from "@/api/types";
 import { formatBytes, formatDateTime, formatRelative } from "@/lib/format";
 import { describeServiceRetention } from "@/lib/retention";
 
@@ -88,12 +88,21 @@ function retentionFormFor(s: Service): RetentionForm {
   return retentionForms[s.name];
 }
 
+/** The service with its main destination's keep-settings changed (targets carry it). */
+function withMainRetention(s: Service, retention: Service["retention"]): Service {
+  return {
+    ...s,
+    retention,
+    targets: s.targets?.map((t, i) => (i === 0 ? { ...t, retention: retention ?? undefined } : t)),
+  };
+}
+
 async function saveRetentionOverride(s: Service) {
   const form = retentionFormFor(s);
   retentionSaving.value.add(s.name);
   error.value = "";
   try {
-    const updated = await api.updateService(s.name, { ...s, retention: { ...form } });
+    const updated = await api.updateService(s.name, withMainRetention(s, { ...form }));
     Object.assign(s, updated);
     saved.value = `Saved backup-keeping settings for ${s.name}.`;
   } catch (e) {
@@ -151,7 +160,7 @@ async function useDestinationRetention(s: Service) {
   retentionSaving.value.add(s.name);
   error.value = "";
   try {
-    const updated = await api.updateService(s.name, { ...s, retention: null });
+    const updated = await api.updateService(s.name, withMainRetention(s, null));
     Object.assign(s, updated);
     delete retentionForms[s.name];
     saved.value = `${s.name} now follows ${s.destination}'s backup-keeping setting.`;
@@ -183,6 +192,52 @@ const form = reactive({
   proxmox_vmid: 0,
   params: {} as Record<string, string>,
 });
+
+// "Also send to…": one entry per other destination, ticked when the
+// service sends there, with an optional comma-separated list of parts.
+const also = reactive<Record<string, { on: boolean; parts: string }>>({});
+
+const otherDestinations = computed(() => destinations.value.filter((d) => d.name !== form.destination));
+
+/** A plain-English price warning for pay-as-you-go cloud storage. */
+function costHint(type: string | undefined): string {
+  if (type === "b2") return "Backblaze B2 is billed by the amount stored: very roughly $6 a month per terabyte. Check their current prices.";
+  if (type === "s3" || type === "r2") return "Cloud storage is billed by the amount stored (and sometimes by downloads). Check your provider's current prices before sending a large library.";
+  return "";
+}
+
+function alsoFor(name: string) {
+  if (!also[name]) also[name] = { on: false, parts: "" };
+  return also[name];
+}
+
+function resetAlso(s: Service | null) {
+  for (const k of Object.keys(also)) delete also[k];
+  for (const t of (s?.targets ?? []).slice(1)) {
+    also[t.destination] = { on: true, parts: (t.parts ?? []).join(", ") };
+  }
+}
+
+/** The targets the form describes, main destination first. */
+function buildTargets(): ServiceTarget[] {
+  const main: ServiceTarget = { destination: form.destination };
+  const old = editingService.value?.targets?.[0];
+  if (old && old.destination === form.destination) {
+    main.parts = old.parts;
+    main.retention = old.retention;
+  } else if (editingService.value && !editingService.value.targets) {
+    main.retention = editingService.value.retention;
+  }
+  const out = [main];
+  for (const d of otherDestinations.value) {
+    const a = also[d.name];
+    if (!a?.on) continue;
+    const parts = a.parts.split(",").map((p) => p.trim()).filter(Boolean);
+    const prev = editingService.value?.targets?.find((t) => t.destination === d.name);
+    out.push({ destination: d.name, parts: parts.length ? parts : undefined, retention: prev?.retention });
+  }
+  return out;
+}
 
 const selectedEntry = computed(() => catalog.value.find((c) => c.service === form.catalog_entry));
 
@@ -336,6 +391,7 @@ function openAdd() {
   form.proxmox_node = "";
   form.proxmox_vmid = 0;
   form.params = {};
+  resetAlso(null);
   saved.value = "";
   showForm.value = true;
   volumeOptions.value = [];
@@ -354,6 +410,7 @@ function startEdit(s: Service) {
   form.proxmox_node = s.proxmox_node ?? "";
   form.proxmox_vmid = s.proxmox_vmid ?? 0;
   form.params = { ...(s.params ?? {}) };
+  resetAlso(s);
   saved.value = "";
   showForm.value = true;
   void loadVolumes();
@@ -394,6 +451,7 @@ async function submit() {
     proxmox_vmid: form.proxmox_vmid || undefined,
     params: { ...form.params },
     retention: editingService.value?.retention,
+    targets: buildTargets(),
   };
   try {
     if (editingName.value) {
@@ -467,6 +525,9 @@ onMounted(load);
         </div>
 
         <p class="item-sub">{{ retentionLine(s) }}</p>
+        <p v-for="t in (s.targets ?? []).slice(1)" :key="t.destination" class="item-sub">
+          Also sends to {{ t.destination }}{{ t.parts?.length ? " (only " + t.parts.join(", ") + ")" : "" }}
+        </p>
 
         <div v-if="stateFor(s.name).open" class="panel" style="margin-top: 0.6rem">
           <p v-if="stateFor(s.name).loading" class="loading">Loading backups…</p>
@@ -640,6 +701,27 @@ onMounted(load);
             You haven't set up anywhere to keep backups yet. Add a place on
             <router-link to="/destinations">Where backups go</router-link> first.
           </p>
+        </div>
+
+        <div v-if="otherDestinations.length" class="field">
+          <label>Also send to…</label>
+          <p class="hint">
+            One backup run makes the backup once and sends it everywhere you tick. Each place is checked on
+            its own, so a problem at one never hides how the other did.
+          </p>
+          <div v-for="d in otherDestinations" :key="d.name" class="also-row">
+            <label class="check">
+              <input v-model="alsoFor(d.name).on" type="checkbox" />
+              {{ d.name }} ({{ d.location }})
+            </label>
+            <input
+              v-if="alsoFor(d.name).on"
+              v-model="alsoFor(d.name).parts"
+              :aria-label="`Which parts go to ${d.name}`"
+              placeholder="Everything — or list parts, e.g. library"
+            />
+            <p v-if="costHint(d.type)" class="hint" style="flex-basis: 100%">{{ costHint(d.type) }}</p>
+          </div>
         </div>
 
         <details class="advanced">

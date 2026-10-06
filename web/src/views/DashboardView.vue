@@ -181,6 +181,13 @@ onUnmounted(() => clearInterval(timer));
           <p v-for="t in s.tiers" :key="t.tier" class="status-line">
             <template v-if="s.tiers.length > 1"><strong>{{ t.tier }} copy:</strong> </template>{{ describeTier(t) }}
           </p>
+          <template v-if="(s.targets?.length ?? 0) > 1">
+            <p v-for="t in s.targets" :key="`tg-${t.destination}`" class="status-line">
+              <TrafficLight :light="t.light" /> <strong>{{ t.destination }}:</strong>
+              {{ t.light === "green" ? "backed up and checked" : t.light === "amber" ? "backed up, but could not be fully checked" : t.light === "red" ? "failed" : t.light === "running" ? "backing up now" : "no backup yet" }}
+              <template v-if="t.last_error && t.light !== 'green'"> — {{ t.last_error }}</template>
+            </p>
+          </template>
           <p v-for="t in s.tiers.filter((t) => t.light === 'red' && t.last_error)" :key="`err-${t.tier}`" class="notice notice--error" style="margin: 0.6rem 0 0">
             {{ t.last_error }}
           </p>

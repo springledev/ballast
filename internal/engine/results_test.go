@@ -179,3 +179,37 @@ func TestRequireVerifications(t *testing.T) {
 		})
 	}
 }
+
+func TestRecordTargetAndRunTargets(t *testing.T) {
+	db := openTestDB(t).DB()
+	m, err := StartRun(db, "immich")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, r := range []TargetResult{
+		{Destination: "ssd", State: SUCCESS, SnapshotID: "aaa", Detail: "backup verified"},
+		{Destination: "b2", State: FAILED, Detail: "unreachable"},
+	} {
+		if err := m.RecordTarget(r); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// A second record for the same destination replaces the first.
+	if err := m.RecordTarget(TargetResult{Destination: "b2", State: SUCCESS_UNVERIFIED, SnapshotID: "bbb"}); err != nil {
+		t.Fatal(err)
+	}
+	got, err := RunTargets(db, m.Run().ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 2 || got[0].Destination != "ssd" || got[1].State != SUCCESS_UNVERIFIED || got[1].SnapshotID != "bbb" {
+		t.Errorf("RunTargets = %+v", got)
+	}
+	if err := m.RecordVerification(VerificationRecord{Target: "b2", Method: "restic-read-back", Passed: true}); err != nil {
+		t.Fatal(err)
+	}
+	recs, _ := VerificationResults(db, m.Run().ID)
+	if len(recs) != 1 || recs[0].Target != "b2" {
+		t.Errorf("verification target = %+v", recs)
+	}
+}

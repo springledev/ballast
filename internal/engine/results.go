@@ -13,6 +13,10 @@ import (
 // dependency runs the other way, same pattern as engine.Notifier):
 // the pipeline package translates between the two.
 type VerificationRecord struct {
+	// Target names the destination this result belongs to; empty means
+	// the run as a whole (a restore drill runs once per artifact, not
+	// once per destination).
+	Target string
 	// Method is the verification method, e.g. "archive-integrity",
 	// "db-restore-drill", "restic-read-back", "restart-smoke".
 	Method string
@@ -57,9 +61,9 @@ func (m *Machine) RecordVerification(r VerificationRecord) error {
 		at = time.Now().UTC()
 	}
 	_, err := m.store.Exec(`
-		INSERT INTO verification_results (run_id, method, passed, warning, detail, output, duration_ms, recorded_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-		m.run.ID, r.Method, boolToInt(r.Passed), r.Warning, r.Detail, r.Output, r.Duration.Milliseconds(), at.Format(time.RFC3339Nano),
+		INSERT INTO verification_results (run_id, method, passed, warning, detail, output, duration_ms, recorded_at, target)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		m.run.ID, r.Method, boolToInt(r.Passed), r.Warning, r.Detail, r.Output, r.Duration.Milliseconds(), at.Format(time.RFC3339Nano), r.Target,
 	)
 	if err != nil {
 		return fmt.Errorf("recording verification result %q for %s run %d: %w", r.Method, m.run.Service, m.run.ID, err)
@@ -79,7 +83,7 @@ func boolToInt(b bool) int {
 // the order they were recorded.
 func VerificationResults(db *sql.DB, runID int64) ([]VerificationRecord, error) {
 	rows, err := db.Query(`
-		SELECT method, passed, warning, detail, output, duration_ms, recorded_at
+		SELECT method, passed, warning, detail, output, duration_ms, recorded_at, target
 		FROM verification_results WHERE run_id = ? ORDER BY id`, runID)
 	if err != nil {
 		return nil, fmt.Errorf("listing verification results for run %d: %w", runID, err)
@@ -92,7 +96,7 @@ func VerificationResults(db *sql.DB, runID int64) ([]VerificationRecord, error) 
 		var passed int
 		var durationMs int64
 		var recordedAt string
-		if err := rows.Scan(&r.Method, &passed, &r.Warning, &r.Detail, &r.Output, &durationMs, &recordedAt); err != nil {
+		if err := rows.Scan(&r.Method, &passed, &r.Warning, &r.Detail, &r.Output, &durationMs, &recordedAt, &r.Target); err != nil {
 			return nil, fmt.Errorf("scanning verification result for run %d: %w", runID, err)
 		}
 		r.Passed = passed != 0
@@ -196,4 +200,58 @@ func (m *Machine) checkRequired() error {
 		}
 	}
 	return nil
+}
+
+// TargetResult is one destination's outcome within a run (spec §19.4):
+// each target uploads, verifies and reports on its own, so one target's
+// failure never hides another's result.
+type TargetResult struct {
+	// Destination names the destination.
+	Destination string
+	// State is SUCCESS, SUCCESS_UNVERIFIED or FAILED for this target.
+	State State
+	// SnapshotID is the restic snapshot this target received; empty
+	// when its upload failed.
+	SnapshotID string
+	// Detail is a plain-English summary (the failure reason, if any).
+	// Must not contain secrets.
+	Detail string
+}
+
+// RecordTarget stores one destination's outcome for this run, replacing
+// an earlier record for the same destination.
+func (m *Machine) RecordTarget(t TargetResult) error {
+	_, err := m.store.Exec(`
+		INSERT INTO run_targets (run_id, destination, state, snapshot_id, detail)
+		VALUES (?, ?, ?, ?, ?)
+		ON CONFLICT(run_id, destination) DO UPDATE SET state = excluded.state, snapshot_id = excluded.snapshot_id, detail = excluded.detail`,
+		m.run.ID, t.Destination, string(t.State), t.SnapshotID, t.Detail)
+	if err != nil {
+		return fmt.Errorf("recording target %s for %s run %d: %w", t.Destination, m.run.Service, m.run.ID, err)
+	}
+	return nil
+}
+
+// RunTargets returns every destination outcome recorded for runID, in
+// the order they were recorded.
+func RunTargets(db *sql.DB, runID int64) ([]TargetResult, error) {
+	rows, err := db.Query(`SELECT destination, state, snapshot_id, detail FROM run_targets WHERE run_id = ? ORDER BY rowid`, runID)
+	if err != nil {
+		return nil, fmt.Errorf("listing targets of run %d: %w", runID, err)
+	}
+	defer rows.Close()
+	var out []TargetResult
+	for rows.Next() {
+		var t TargetResult
+		var state string
+		if err := rows.Scan(&t.Destination, &state, &t.SnapshotID, &t.Detail); err != nil {
+			return nil, fmt.Errorf("scanning target of run %d: %w", runID, err)
+		}
+		t.State = State(state)
+		out = append(out, t)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("listing targets of run %d: %w", runID, err)
+	}
+	return out, nil
 }

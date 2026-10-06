@@ -83,7 +83,10 @@ backup:
       command: ["pg_dumpall", "-U", "{{ .Params.db_user }}"]
       format: sql
   files:
-    - path: "{{ .Params.library_dir }}"
+    # Named so a destination can take just the photos or just the
+    # database ("parts"): database + library.
+    - name: library
+      path: "{{ .Params.library_dir }}"
 verify:
   method: db-restore-drill
   image: "{{ .Params.db_image }}" # MUST match the service's extensions (pgvector/vchord)

@@ -1751,3 +1751,56 @@ func TestOpsPreviewExcludes(t *testing.T) {
 		t.Errorf("unknown service error = %v, want ErrNotFound", err)
 	}
 }
+
+// TestOpsStatusOneLightPerTarget: a failed copy to one destination is
+// red on its own and never hidden by a good copy to another, and the
+// service's own light is the worst of them.
+func TestOpsStatusOneLightPerTarget(t *testing.T) {
+	h := newHarness(t)
+	h.addDestination("local")
+	h.addDestination("offsite")
+	svc := inventory.Service{Name: "svc", CatalogEntry: "folder", Destination: "local",
+		Targets: []inventory.Target{{Destination: "local"}, {Destination: "offsite", Parts: []string{"library"}}}}
+	if err := inventory.PutService(h.ops.DB, svc); err != nil {
+		t.Fatalf("PutService: %v", err)
+	}
+	st, err := h.ops.Status(context.Background(), "svc", false)
+	if err != nil || len(st[0].Targets) != 2 || st[0].Targets[0].Light != "none" {
+		t.Fatalf("before any run: %+v, %v", st, err)
+	}
+
+	m, err := engine.StartRun(h.ops.DB, "svc")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, s := range []engine.State{engine.PREPARING, engine.DUMPING, engine.UPLOADING, engine.VERIFYING} {
+		if err := m.Transition(s, "step"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, r := range []engine.TargetResult{
+		{Destination: "local", State: engine.SUCCESS, SnapshotID: "aaa"},
+		{Destination: "offsite", State: engine.FAILED, Detail: "unreachable"},
+	} {
+		if err := m.RecordTarget(r); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := m.Transition(engine.FAILED, "backup failed for offsite: unreachable"); err != nil {
+		t.Fatal(err)
+	}
+	st, err = h.ops.Status(context.Background(), "svc", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := st[0].Targets
+	if got[0].Destination != "local" || got[0].Light != "green" || got[0].SnapshotID != "aaa" {
+		t.Errorf("local target = %+v, want green with its snapshot", got[0])
+	}
+	if got[1].Destination != "offsite" || got[1].Light != "red" || got[1].LastError != "unreachable" || len(got[1].Parts) != 1 {
+		t.Errorf("offsite target = %+v, want red naming the failure", got[1])
+	}
+	if st[0].Tiers[0].Light != "red" {
+		t.Errorf("service light = %s, want red (worst target)", st[0].Tiers[0].Light)
+	}
+}

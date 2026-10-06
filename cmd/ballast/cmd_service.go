@@ -103,6 +103,18 @@ var serviceAddCmd = &cobra.Command{
 				ProxmoxNode: serviceProxmoxNode, ProxmoxVMID: serviceProxmoxVMID,
 				Excludes: serviceExcludes,
 			}
+			// --also-to adds more destinations; the main one keeps
+			// the --keep-* override handled below.
+			if len(serviceAlso) > 0 {
+				s.Targets = []inventory.Target{{Destination: serviceDestination}}
+				for _, v := range serviceAlso {
+					t, err := parseTargetFlag(v)
+					if err != nil {
+						return err
+					}
+					s.Targets = append(s.Targets, t)
+				}
+			}
 			// A per-service retention override is only set when at
 			// least one --keep-* flag was actually given; unspecified
 			// ones follow the destination's own value, not 0 (which
@@ -115,10 +127,16 @@ var serviceAddCmd = &cobra.Command{
 				base := inventory.Retention{KeepLast: dest.KeepLast, KeepDaily: dest.KeepDaily, KeepWeekly: dest.KeepWeekly, KeepMonthly: dest.KeepMonthly}
 				s.Retention = retentionOverrideFromFlags(cmd, base, serviceKeepLast, serviceKeepDaily, serviceKeepWeekly, serviceKeepMonthly)
 			}
+			if len(s.Targets) > 0 {
+				s.Targets[0].Retention = s.Retention
+			}
 			if err := a.ops.PutService(cmd.Context(), s); err != nil {
 				return err
 			}
 			cmd.Printf("%s: configured (catalog entry %s, destination %s)\n", args[0], serviceCatalogEntry, serviceDestination)
+			for _, t := range s.Targets[min(1, len(s.Targets)):] {
+				cmd.Printf("  also sends to %s\n", targetLine(t))
+			}
 			if serviceDockerHost != "" {
 				cmd.Printf("  Docker host: %s\n", serviceDockerHost)
 			}
@@ -179,6 +197,9 @@ var serviceListCmd = &cobra.Command{
 				}
 				if dest, ok := byName[s.Destination]; ok {
 					cmd.Printf("  %s\n", retentionLine(s, dest))
+				}
+				for _, t := range s.EffectiveTargets()[1:] {
+					cmd.Printf("  also sends to %s\n", targetLine(t))
 				}
 			}
 			return nil
@@ -246,6 +267,10 @@ policy.`,
 				s.Retention = retentionOverrideFromFlags(cmd, base, retentionKeepLast, retentionKeepDaily, retentionKeepWeekly, retentionKeepMonthly)
 			}
 			if retentionInherit || retentionFlagsChanged(cmd) {
+				// The main target carries the override.
+				if len(s.Targets) > 0 {
+					s.Targets[0].Retention = s.Retention
+				}
 				if err := a.ops.PutService(cmd.Context(), s); err != nil {
 					return err
 				}
@@ -286,7 +311,8 @@ func registerServiceCommands(root *cobra.Command) {
 	serviceCmd := &cobra.Command{Use: "service", Short: "Manage configured backup services"}
 	registerExcludeFlags()
 	serviceAddCmd.Flags().StringArrayVar(&serviceExcludes, "skip", nil, "file or folder pattern this service's backups skip, such as \"*.log\" (repeatable)")
-	serviceCmd.AddCommand(serviceAddCmd, serviceListCmd, serviceRemoveCmd, serviceRetentionCmd, serviceExcludesCmd)
+	serviceAddCmd.Flags().StringArrayVar(&serviceAlso, "also-to", nil, "also send backups to another destination: NAME or NAME=part,part (repeatable)")
+	serviceCmd.AddCommand(serviceAddCmd, serviceListCmd, serviceRemoveCmd, serviceRetentionCmd, serviceExcludesCmd, serviceTargetsCmd)
 	root.AddCommand(serviceCmd)
 }
 
