@@ -1084,7 +1084,7 @@
 
  - [ ] Proxmox guest backups run on a schedule with lights and alerts and never prune a dump Ballast did not create; Proxmox config is captured nightly
 
- - [ ] Each destination is `restic check`ed on a schedule with its own light
+ - [x] Each destination is `restic check`ed on a schedule with its own light
 
  - [ ] Proton Drive is signed in from the UI and receives verified, read-back-checked copies of config and database backups as a separately reported tier
 

@@ -229,6 +229,72 @@ a destination that's already set up — nothing happens.`,
 	},
 }
 
+// healthKeep is the --read-data default meaning "leave it as it is".
+const healthKeep = "keep"
+
+var (
+	healthEvery  int
+	healthSubset string
+	healthOff    bool
+)
+
+// destinationCheckCmd is `ballast destination check <name>` (spec
+// §19.7): run restic check on a destination now.
+var destinationCheckCmd = &cobra.Command{
+	Use:   "check <name>",
+	Short: "Check that a destination's backup repository is healthy",
+	Long: `Check that a destination's backup repository is healthy.
+
+This runs "restic check" and reads back a share of the stored data to
+make sure it is not damaged. Ballast also does this on a schedule (by
+default weekly). Use --every, --read-data or --off to change how the
+schedule works instead of checking now.`,
+	Args: cobra.ExactArgs(1),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		cfg, err := loadConfig()
+		if err != nil {
+			return err
+		}
+		return withApp(cfg, cmd.ErrOrStderr(), func(a *app) error {
+			name := args[0]
+			every, subset, off := healthEvery, healthSubset, healthOff
+			// Reset so a second run in the same process starts clean.
+			healthEvery, healthSubset, healthOff = 0, healthKeep, false
+			if every != 0 || subset != healthKeep || off {
+				cur, err := a.ops.GetRepoHealth(cmd.Context(), name)
+				if err != nil {
+					return err
+				}
+				s := api.RepoHealthSettings{Enabled: !off, IntervalHours: cur.IntervalHours, Subset: cur.Subset}
+				if every != 0 {
+					s.IntervalHours = every
+				}
+				if subset != healthKeep {
+					s.Subset = subset
+				}
+				if _, err := a.ops.ConfigureRepoHealth(cmd.Context(), name, s); err != nil {
+					return err
+				}
+				if !s.Enabled {
+					cmd.Printf("%s: scheduled checks are off\n", name)
+				} else {
+					cmd.Printf("%s: checked every %d hours, reading back %q of the data\n", name, s.IntervalHours, s.Subset)
+				}
+				return nil
+			}
+			st, err := a.ops.CheckRepoHealth(cmd.Context(), name)
+			if err != nil {
+				return err
+			}
+			cmd.Printf("%s: %s - %s\n", name, st.Light, st.Detail)
+			if st.State != "ok" {
+				return fmt.Errorf("destination %s: %s", name, st.Detail)
+			}
+			return nil
+		})
+	},
+}
+
 var destinationRemoveCmd = &cobra.Command{
 	Use:   "remove <name>",
 	Short: "Remove a configured destination",
@@ -271,7 +337,11 @@ func registerDestinationCommands(root *cobra.Command) {
 	destinationAddCmd.Flags().IntVar(&destKeepWeekly, "keep-weekly", 4, "weekly snapshots to keep")
 	destinationAddCmd.Flags().IntVar(&destKeepMonthly, "keep-monthly", 6, "monthly snapshots to keep")
 
+	destinationCheckCmd.Flags().IntVar(&healthEvery, "every", 0, "change the schedule: hours between checks (default 168 = weekly)")
+	destinationCheckCmd.Flags().StringVar(&healthSubset, "read-data", healthKeep, "change the schedule: share of data to read back (default 5%; 1/10 or 500M also work; empty = structure only)")
+	destinationCheckCmd.Flags().BoolVar(&healthOff, "off", false, "turn scheduled checks off for this destination")
+
 	destinationCmd := &cobra.Command{Use: "destination", Short: "Manage backup destinations"}
-	destinationCmd.AddCommand(destinationAddCmd, destinationListCmd, destinationTestCmd, destinationInitCmd, destinationRemoveCmd)
+	destinationCmd.AddCommand(destinationAddCmd, destinationListCmd, destinationTestCmd, destinationInitCmd, destinationCheckCmd, destinationRemoveCmd)
 	root.AddCommand(destinationCmd)
 }

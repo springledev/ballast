@@ -18,6 +18,7 @@ import (
 	"github.com/springledev/ballast/internal/notify"
 	"github.com/springledev/ballast/internal/pipeline"
 	"github.com/springledev/ballast/internal/proxmox"
+	"github.com/springledev/ballast/internal/repohealth"
 	"github.com/springledev/ballast/internal/restic"
 	"github.com/springledev/ballast/internal/scheduler"
 	"github.com/springledev/ballast/internal/store"
@@ -54,6 +55,7 @@ type app struct {
 	apiToken string // "" when no ballast-api-token credential is configured
 	secrets  *secret.Set
 	logw     io.Writer
+	health   *repohealth.Checker
 }
 
 // Close closes the underlying database.
@@ -165,13 +167,21 @@ func openApp(cfg config.Config, logw io.Writer) (*app, error) {
 		// ever sees it.
 		return resolver.Open(dest.Target())
 	}
+	health := &repohealth.Checker{
+		DB:     st.DB(),
+		Repo:   repoFor,
+		Alerts: &repohealth.NotifyAlerter{DB: st.DB(), Notifier: notifier},
+		Redact: secrets.Redact,
+		Locks:  scheduler.FileLocker{Dir: filepath.Join(cfg.DataDir, "locks", "repo-checks")},
+	}
+	pl.RepoHealth = health
 	dockerHosts := pl.DockerHosts()
 	dockerHosts.CredDirs = credDirs
 	proxmoxResolver := proxmox.Resolver{CredDirs: credDirs, Redact: secrets}
 	pl.Proxmox = proxmoxResolver
-	ops := &api.Ops{DB: st.DB(), Catalog: reg, Coord: coord, Repo: repoFor, DestinationLocks: scheduler.FileLocker{Dir: filepath.Join(cfg.DataDir, "locks", "destinations")}, Runner: r, DockerHosts: dockerHosts, Proxmox: proxmoxResolver, CredentialsDir: cfg.WritableCredentialsDir, CredentialSearchDirs: credDirs, Redact: secrets, WorkRoot: pl.WorkRoot, SelfBackupFiles: api.SelfBackupSources{ConfigFile: filepath.Join(cfg.ConfigDir, "ballast.yaml"), CatalogDirs: cfg.CatalogDirs}}
+	ops := &api.Ops{DB: st.DB(), Catalog: reg, Coord: coord, Repo: repoFor, RepoHealth: health, DestinationLocks: scheduler.FileLocker{Dir: filepath.Join(cfg.DataDir, "locks", "destinations")}, Runner: r, DockerHosts: dockerHosts, Proxmox: proxmoxResolver, CredentialsDir: cfg.WritableCredentialsDir, CredentialSearchDirs: credDirs, Redact: secrets, WorkRoot: pl.WorkRoot, SelfBackupFiles: api.SelfBackupSources{ConfigFile: filepath.Join(cfg.ConfigDir, "ballast.yaml"), CatalogDirs: cfg.CatalogDirs}}
 
-	a := &app{cfg: cfg, store: st, ops: ops, coord: coord, notifier: notifier, apiToken: apiToken, secrets: secrets, logw: logw}
+	a := &app{health: health, cfg: cfg, store: st, ops: ops, coord: coord, notifier: notifier, apiToken: apiToken, secrets: secrets, logw: logw}
 	if cfg.WritableCredentialsDir != cfg.CredentialsDir {
 		a.logf("using credential directories %s (provided) and %s (secrets Ballast creates are saved here)", cfg.CredentialsDir, cfg.WritableCredentialsDir)
 	} else {

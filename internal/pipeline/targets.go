@@ -109,6 +109,7 @@ func (p *Pipeline) forEachTarget(targets []*runTarget, fn func(*runTarget)) {
 // uploadTarget sends one target's parts to its repository, logging
 // progress so a first upload of many gigabytes is visibly alive.
 func (p *Pipeline) uploadTarget(ctx context.Context, service string, rt *runTarget, res *strategy.Result) (*restic.BackupResult, error) {
+	p.clearStaleLocks(ctx, service, rt)
 	// Uploading holds the repository's shared lock, so another
 	// service's prune never runs under it (see repoLocks).
 	shared := repoLock(rt.repo.Location)
@@ -135,6 +136,22 @@ func (p *Pipeline) uploadTarget(ctx context.Context, service string, rt *runTarg
 		return nil, p.targetErr(rt, err)
 	}
 	return br, nil
+}
+
+// clearStaleLocks removes a stale lock left by this machine and logs
+// (amber) any lock it will not remove, so a run waiting on a lock says
+// why in plain English instead of silently timing out.
+func (p *Pipeline) clearStaleLocks(ctx context.Context, service string, rt *runTarget) {
+	if p.RepoHealth == nil {
+		return
+	}
+	out := p.RepoHealth.HandleLocks(ctx, rt.repo, rt.dest.Name)
+	if out.Removed {
+		p.logf("%s: removed an old lock left on %s by an earlier run on this machine", service, rt.dest.Name)
+	}
+	if out.Note != "" {
+		p.logf("%s: warning: %s", service, out.Note)
+	}
 }
 
 // progressEvery is how often an upload's progress is logged.

@@ -199,6 +199,11 @@ func sweepDue(ctx context.Context, a *app, now time.Time) error {
 	err := a.coord.RunDue(ctx, now)
 	maybeSweepFreshness(ctx, a)
 	maybeSendDigest(ctx, a, now)
+	if a.health != nil {
+		if herr := a.health.SweepDue(ctx); herr != nil {
+			a.logf("repository health sweep: %v", herr)
+		}
+	}
 	return err
 }
 

@@ -29,6 +29,7 @@ import (
 	"github.com/springledev/ballast/internal/inventory"
 	"github.com/springledev/ballast/internal/notify"
 	"github.com/springledev/ballast/internal/proxmox"
+	"github.com/springledev/ballast/internal/repohealth"
 	"github.com/springledev/ballast/internal/restic"
 	"github.com/springledev/ballast/internal/scheduler"
 	"github.com/springledev/ballast/internal/strategy"
@@ -55,6 +56,11 @@ type Ops struct {
 	DB      *sql.DB
 	Catalog *catalog.Registry
 	Coord   *scheduler.Coordinator
+
+	// Health runs and records each destination's repository health
+	// checks (spec §19.7). Nil makes the repository-health calls
+	// report that it is not set up.
+	RepoHealth *repohealth.Checker
 
 	// Repo builds a restic.Repository for a destination, using the
 	// same Runner/CredDir/ResticBin the pipeline uses. Built by wiring.

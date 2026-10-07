@@ -253,7 +253,7 @@ func (r *Repository) command(args ...string) runner.Command {
 // repository, so --retry-lock applies: restic rejects --retry-lock
 // combined with --no-lock, and `version`/`init` never lock.
 func takesLock(args []string) bool {
-	if len(args) == 0 || args[0] == "version" || args[0] == "init" {
+	if len(args) == 0 || args[0] == "version" || args[0] == "init" || args[0] == "unlock" {
 		return false
 	}
 	return !slices.Contains(args, "--no-lock")

@@ -47,6 +47,9 @@ case "$cmd" in
   restore) exit 0 ;;
   forget) cat "$STUB_FIXTURE_DIR/forget-keep-remove.json" ;;
   prune) exit 0 ;;
+  check|unlock) exit 0 ;;
+  list) printf '%s\n' $STUB_LOCK_IDS ;;
+  cat) cat "$STUB_FIXTURE_DIR/lock.json" ;;
   version) cat "$STUB_FIXTURE_DIR/version.txt" ;;
   *) echo "unknown stub command: $cmd" >&2; exit 2 ;;
 esac

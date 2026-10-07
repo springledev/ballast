@@ -13,6 +13,7 @@ import (
 	"github.com/springledev/ballast/internal/inventory"
 	"github.com/springledev/ballast/internal/notify"
 	"github.com/springledev/ballast/internal/proxmox"
+	"github.com/springledev/ballast/internal/repohealth"
 	"github.com/springledev/ballast/internal/scheduler"
 )
 
@@ -87,6 +88,10 @@ func NewAuthedHandler(ops *Ops, auth *Auth) http.Handler {
 	protected.HandleFunc("DELETE /api/v1/destinations/{name}", h.deleteDestination)
 	protected.HandleFunc("POST /api/v1/destinations/{name}/test", h.testDestination)
 	protected.HandleFunc("POST /api/v1/destinations/{name}/init", h.initDestination)
+	protected.HandleFunc("GET /api/v1/destinations/health", h.listRepoHealth)
+	protected.HandleFunc("GET /api/v1/destinations/{name}/health", h.getRepoHealth)
+	protected.HandleFunc("PUT /api/v1/destinations/{name}/health", h.putRepoHealth)
+	protected.HandleFunc("POST /api/v1/destinations/{name}/health/check", h.checkRepoHealth)
 
 	protected.HandleFunc("GET /api/v1/docker-hosts", h.listDockerHosts)
 	protected.HandleFunc("POST /api/v1/docker-hosts", h.createDockerHost)
@@ -150,7 +155,7 @@ func (h *handler) writeErr(w http.ResponseWriter, err error, defaultStatus int) 
 	switch {
 	case errors.Is(err, inventory.ErrNotFound):
 		status = http.StatusNotFound
-	case errors.Is(err, inventory.ErrInUse), errors.Is(err, scheduler.ErrAlreadyRunning):
+	case errors.Is(err, inventory.ErrInUse), errors.Is(err, scheduler.ErrAlreadyRunning), errors.Is(err, repohealth.ErrBusy):
 		status = http.StatusConflict
 	case errors.Is(err, ErrValidation):
 		status = http.StatusBadRequest

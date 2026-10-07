@@ -295,3 +295,25 @@ func TestDestinationAddInvalidSetting(t *testing.T) {
 		t.Errorf("destination add with an inapplicable setting = %v, want a 'do not apply' error", err)
 	}
 }
+
+func TestDestinationCheckSchedule(t *testing.T) {
+	withStubRestic(t)
+	cliEnv(t, &spyRunner{})
+	if out, err := execCLI(t, "destination", "add", "local", "--location", "/srv/backups"); err != nil {
+		t.Fatalf("add: %v %s", err, out)
+	}
+	out, err := execCLI(t, "destination", "check", "local", "--every", "24", "--read-data", "10%")
+	if err != nil || !strings.Contains(out, "every 24 hours") {
+		t.Fatalf("schedule: %v %q", err, out)
+	}
+	if _, err := execCLI(t, "destination", "check", "local", "--read-data", "lots"); err == nil {
+		t.Error("an invalid share of data must be refused")
+	}
+	out, err = execCLI(t, "destination", "check", "local", "--off")
+	if err != nil || !strings.Contains(out, "off") {
+		t.Fatalf("off: %v %q", err, out)
+	}
+	if _, err := execCLI(t, "destination", "check", "ghost", "--off"); err == nil {
+		t.Error("an unknown destination must be refused")
+	}
+}

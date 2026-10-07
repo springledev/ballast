@@ -26,6 +26,7 @@ import (
 	"github.com/springledev/ballast/internal/engine"
 	"github.com/springledev/ballast/internal/inventory"
 	"github.com/springledev/ballast/internal/proxmox"
+	"github.com/springledev/ballast/internal/repohealth"
 	"github.com/springledev/ballast/internal/strategy"
 	"github.com/springledev/ballast/internal/verify"
 	"github.com/springledev/keel/runner"
@@ -89,6 +90,11 @@ type Pipeline struct {
 	// task is checked (tests only; zero means the default).
 	Proxmox     proxmox.Resolver
 	ProxmoxPoll time.Duration
+
+	// RepoHealth, when set, clears a stale lock from this machine
+	// before each upload and explains any lock it leaves alone (spec
+	// §19.7). Nil skips the lock check.
+	RepoHealth *repohealth.Checker
 
 	logMu sync.Mutex
 }

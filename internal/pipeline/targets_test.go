@@ -254,3 +254,8 @@ func TestSelectParts(t *testing.T) {
 		})
 	}
 }
+
+func TestClearStaleLocksWithoutHealthIsNoop(t *testing.T) {
+	p := &Pipeline{}
+	p.clearStaleLocks(context.Background(), "svc", &runTarget{})
+}
