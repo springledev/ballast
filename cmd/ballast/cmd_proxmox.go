@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"os"
+	"path/filepath"
 
 	"github.com/springledev/ballast/internal/api"
 	"github.com/springledev/ballast/internal/inventory"
@@ -274,6 +275,84 @@ Example:
 	},
 }
 
+var cfgName, cfgTo, cfgSchedule, cfgOut string
+
+var proxmoxConfigAddCmd = &cobra.Command{
+	Use:   "add",
+	Short: "Save the Proxmox settings on a schedule",
+	Long: `Add a scheduled snapshot of the Proxmox host's own settings: firewall rules,
+every guest's settings, storage definitions, pools, users and permissions. They
+are read through the API, saved as JSON files in a backup destination, and read
+back to prove every guest is included. Passwords, tokens and keys are left out.
+Ballast only reads from Proxmox here; it never changes its settings.
+
+Example:
+
+  ballast proxmox config add --name pve-config --to local --schedule "30 2 * * *"`,
+	Args: cobra.NoArgs,
+	RunE: func(cmd *cobra.Command, args []string) error {
+		cfg, err := loadConfig()
+		if err != nil {
+			return err
+		}
+		return withApp(cfg, cmd.ErrOrStderr(), func(a *app) error {
+			s := inventory.Service{Name: cfgName, Kind: inventory.KindProxmoxConfig, Destination: cfgTo}
+			if err := a.ops.PutService(cmd.Context(), s); err != nil {
+				return err
+			}
+			cmd.Printf("%s: will save the Proxmox settings to %s\n", cfgName, cfgTo)
+			if cfgSchedule != "" {
+				if err := a.ops.SetSchedule(cmd.Context(), cfgName, cfgSchedule); err != nil {
+					return err
+				}
+				cmd.Printf("%s: scheduled %q\n", cfgName, cfgSchedule)
+			}
+			return nil
+		})
+	},
+}
+
+var proxmoxConfigShowCmd = &cobra.Command{
+	Use:   "show",
+	Short: "Read the Proxmox settings now and print or save them",
+	Long: `Read the Proxmox host's settings right now and print them as JSON, or save them
+to a folder with --out (one file per part). Nothing is stored in a backup and
+nothing is changed in Proxmox.`,
+	Args: cobra.NoArgs,
+	RunE: func(cmd *cobra.Command, args []string) error {
+		cfg, err := loadConfig()
+		if err != nil {
+			return err
+		}
+		return withApp(cfg, cmd.ErrOrStderr(), func(a *app) error {
+			v, err := a.ops.ViewProxmoxConfig(cmd.Context())
+			if err != nil {
+				return err
+			}
+			for _, s := range v.Skipped {
+				cmd.PrintErrf("not readable with this token: %s\n", s)
+			}
+			if cfgOut == "" {
+				for _, part := range proxmox.SnapshotParts() {
+					cmd.Printf("// %s\n%s\n", part, v.Parts[part])
+				}
+				return nil
+			}
+			if err := os.MkdirAll(cfgOut, 0o700); err != nil {
+				return fmt.Errorf("creating %s: %w", cfgOut, err)
+			}
+			for _, part := range proxmox.SnapshotParts() {
+				p := filepath.Join(cfgOut, proxmox.SnapshotFileName(part))
+				if err := os.WriteFile(p, v.Parts[part], 0o600); err != nil {
+					return fmt.Errorf("writing %s: %w", p, err)
+				}
+				cmd.Println("saved " + p)
+			}
+			return nil
+		})
+	},
+}
+
 // registerProxmoxCommands attaches `ballast proxmox ...` (spec §14
 // step 24, §17.3) to root.
 func registerProxmoxCommands(root *cobra.Command) {
@@ -311,7 +390,16 @@ func registerProxmoxCommands(root *cobra.Command) {
 	jobCmd := &cobra.Command{Use: "job", Short: "Scheduled Proxmox guest backups"}
 	jobCmd.AddCommand(proxmoxJobAddCmd)
 
+	cf := proxmoxConfigAddCmd.Flags()
+	cf.StringVar(&cfgName, "name", "proxmox-config", "name for this job")
+	cf.StringVar(&cfgTo, "to", "", "backup destination to store the settings in (required)")
+	cf.StringVar(&cfgSchedule, "schedule", "", "cron schedule, e.g. \"30 2 * * *\"")
+	_ = proxmoxConfigAddCmd.MarkFlagRequired("to")
+	proxmoxConfigShowCmd.Flags().StringVar(&cfgOut, "out", "", "folder to save the JSON files in (default: print them)")
+	configCmd := &cobra.Command{Use: "config", Short: "Proxmox settings snapshots"}
+	configCmd.AddCommand(proxmoxConfigAddCmd, proxmoxConfigShowCmd)
+
 	proxmoxCmd := &cobra.Command{Use: "proxmox", Short: "Manage Ballast's connection to a Proxmox host"}
-	proxmoxCmd.AddCommand(proxmoxConnectCmd, proxmoxTestCmd, proxmoxGuestsCmd, proxmoxBackupCmd, proxmoxRemoveCmd, jobCmd)
+	proxmoxCmd.AddCommand(proxmoxConnectCmd, proxmoxTestCmd, proxmoxGuestsCmd, proxmoxBackupCmd, proxmoxRemoveCmd, jobCmd, configCmd)
 	root.AddCommand(proxmoxCmd)
 }

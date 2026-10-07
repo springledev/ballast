@@ -138,6 +138,9 @@ func (p *Pipeline) Run(ctx context.Context, service string) (engine.State, error
 	if svc.IsGuestJob() {
 		return p.runGuest(ctx, svc)
 	}
+	if svc.IsConfigSnapshot() {
+		return p.runConfigSnapshot(ctx, svc)
+	}
 	var targets []*runTarget
 	for _, t := range svc.EffectiveTargets() {
 		dest, err := inventory.GetDestination(p.DB, t.Destination)

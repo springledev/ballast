@@ -399,6 +399,14 @@ type GuestJob struct {
 	CopyPath string `json:"copy_path,omitempty"`
 }
 
+// KindProxmoxConfig is the Service.Kind of the built-in Proxmox config
+// snapshot (spec §19.6): it reads the host's settings through the API
+// and sends them to its destination(s) as JSON files.
+const KindProxmoxConfig = "proxmox-config"
+
+// IsConfigSnapshot reports whether s is a Proxmox config snapshot job.
+func (s Service) IsConfigSnapshot() bool { return s.Kind == KindProxmoxConfig }
+
 // IsGuestJob reports whether s is a Proxmox guest backup job.
 func (s Service) IsGuestJob() bool { return s.Kind == KindProxmoxGuest }
 
@@ -603,6 +611,8 @@ func PutService(db *sql.DB, s Service) error {
 			return fmt.Errorf("service %s: encoding guest job: %w", s.Name, err)
 		}
 		guestJSON = string(b)
+	} else if s.IsConfigSnapshot() {
+		s.CatalogEntry = KindProxmoxConfig
 	} else if s.Kind != "" {
 		return fmt.Errorf("service %s: unknown kind %q", s.Name, s.Kind)
 	}

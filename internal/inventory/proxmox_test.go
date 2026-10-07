@@ -122,3 +122,33 @@ func TestGuestJobServiceRoundTrip(t *testing.T) {
 		t.Errorf("pruned dump still owned: %v", owned)
 	}
 }
+
+func TestPutConfigSnapshotService(t *testing.T) {
+	tests := []struct {
+		name    string
+		dest    string
+		wantErr bool
+	}{
+		{name: "stored in a destination", dest: "d"},
+		{name: "needs a destination", dest: "", wantErr: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			db := openDB(t).DB()
+			if err := PutDestination(db, Destination{Name: "d", Location: t.TempDir(), PasswordCredential: "pw", KeepDaily: 7}); err != nil {
+				t.Fatal(err)
+			}
+			err := PutService(db, Service{Name: "pve-config", Kind: KindProxmoxConfig, Destination: tt.dest})
+			if (err != nil) != tt.wantErr {
+				t.Fatalf("PutService err = %v, wantErr %v", err, tt.wantErr)
+			}
+			if tt.wantErr {
+				return
+			}
+			got, err := GetService(db, "pve-config")
+			if err != nil || !got.IsConfigSnapshot() || got.CatalogEntry != KindProxmoxConfig {
+				t.Fatalf("GetService = %+v, %v", got, err)
+			}
+		})
+	}
+}

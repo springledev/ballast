@@ -731,6 +731,9 @@ func (o *Ops) PutService(ctx context.Context, s inventory.Service) error {
 	if s.IsGuestJob() {
 		return o.putGuestJob(ctx, s)
 	}
+	if s.IsConfigSnapshot() {
+		return o.putConfigSnapshot(ctx, s)
+	}
 	entry, ok := o.Catalog.Get(s.CatalogEntry)
 	if !ok {
 		return fmt.Errorf("service %s: %w: catalog entry %q not found", s.Name, ErrValidation, s.CatalogEntry)

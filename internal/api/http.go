@@ -107,6 +107,7 @@ func NewAuthedHandler(ops *Ops, auth *Auth) http.Handler {
 	protected.HandleFunc("GET /api/v1/proxmox/guests", h.listProxmoxGuests)
 	protected.HandleFunc("POST /api/v1/proxmox/backup", h.backupProxmoxGuest)
 	protected.HandleFunc("GET /api/v1/proxmox/storage-check", h.checkProxmoxStorage)
+	protected.HandleFunc("GET /api/v1/proxmox/config", h.viewProxmoxConfig)
 
 	protected.HandleFunc("GET /api/v1/auth/session", auth.session)
 	protected.HandleFunc("POST /api/v1/auth/rotate", auth.rotate)
@@ -935,4 +936,15 @@ func (h *handler) checkProxmoxStorage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, res)
+}
+
+// viewProxmoxConfig handles GET /api/v1/proxmox/config: the host's
+// settings read live, for viewing or download (read-only).
+func (h *handler) viewProxmoxConfig(w http.ResponseWriter, r *http.Request) {
+	v, err := h.ops.ViewProxmoxConfig(r.Context())
+	if err != nil {
+		h.writeErr(w, err, http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, http.StatusOK, v)
 }

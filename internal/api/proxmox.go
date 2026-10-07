@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -300,4 +301,61 @@ func (o *Ops) CheckProxmoxStorage(ctx context.Context, service, node, storage st
 		res.Warning = fmt.Sprintf("%s already holds %d backup(s) of this guest that Ballast did not make. Ballast will never delete them, so they will not count toward \"keep last\". A storage used only by Ballast keeps things tidy.", storage, res.Foreign)
 	}
 	return res, nil
+}
+
+// putConfigSnapshot saves a Proxmox config snapshot job (kind
+// proxmox-config). Proxmox must be connected and the snapshot needs at
+// least one destination to be stored in.
+func (o *Ops) putConfigSnapshot(ctx context.Context, s inventory.Service) error {
+	if _, err := inventory.GetProxmoxConnection(o.DB); err != nil {
+		return fmt.Errorf("service %s: %w: connect Ballast to Proxmox first (ballast proxmox connect)", s.Name, ErrValidation)
+	}
+	if s.Destination == "" && len(s.Targets) == 0 {
+		return fmt.Errorf("service %s: %w: choose a destination to store the Proxmox settings in", s.Name, ErrValidation)
+	}
+	for _, t := range s.EffectiveTargets() {
+		if _, err := inventory.GetDestination(o.DB, t.Destination); err != nil {
+			return wrapf("service "+s.Name, err)
+		}
+	}
+	if s.DockerHost == "" {
+		s.DockerHost = dockerhost.LocalName
+	}
+	if err := inventory.PutService(o.DB, s); err != nil {
+		return fmt.Errorf("%w: %w", ErrValidation, wrapf("service "+s.Name, err))
+	}
+	return nil
+}
+
+// ProxmoxConfigView reads the Proxmox host's settings right now, for
+// viewing or downloading. Each part is a JSON document; secrets are
+// left out. Nothing is stored and nothing is written to Proxmox.
+type ProxmoxConfigView struct {
+	// Parts maps a snapshot part (manifest, cluster, nodes, guests,
+	// access) to its JSON document.
+	Parts map[string]json.RawMessage `json:"parts"`
+	// Skipped names optional sections the API token could not read.
+	Skipped []string `json:"skipped,omitempty"`
+}
+
+// ViewProxmoxConfig reads the Proxmox settings live (spec §19.6:
+// view and download only; Ballast never writes Proxmox config).
+func (o *Ops) ViewProxmoxConfig(ctx context.Context) (ProxmoxConfigView, error) {
+	c, err := inventory.GetProxmoxConnection(o.DB)
+	if err != nil {
+		return ProxmoxConfigView{}, wrapf("Proxmox connection", err)
+	}
+	cl, err := o.Proxmox.Client(c)
+	if err != nil {
+		return ProxmoxConfigView{}, o.redactErr(err)
+	}
+	snap, err := cl.SnapshotConfig(ctx)
+	if err != nil {
+		return ProxmoxConfigView{}, o.redactErr(err)
+	}
+	v := ProxmoxConfigView{Parts: map[string]json.RawMessage{}, Skipped: snap.Skipped}
+	for part, b := range snap.Files {
+		v.Parts[part] = b
+	}
+	return v, nil
 }
