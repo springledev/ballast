@@ -1,0 +1,39 @@
+# catalog/gitea.yaml — Gitea (git hosting) in Docker.
+#
+# Uses Gitea's own `gitea dump` streamed to standard output as one zip
+# file (repositories, database, settings). The official root image
+# refuses to dump as root, so the command runs as the container user
+# "git" (`run_as`); the rootless image already runs as git.
+#
+# Verification: the whole zip is opened and every member read back.
+# There is no fallback strategy — a failed dump is a failed run.
+apiVersion: ballast.dev/v1
+service: gitea
+version: 1
+display:
+  name: Gitea
+  description: Gitea git server (repositories, database and settings in one verified zip)
+detect:
+  docker:
+    imagePattern: "gitea"
+parameters:
+  - name: container
+    required: true
+    default: "gitea"
+    prompt: "Name of your Gitea container"
+  - name: run_as
+    default: git
+    prompt: "Container user that runs the dump (git for the official images)"
+backup:
+  strategy: dump
+  dumps:
+    - name: gitea-dump
+      container: "{{ .Params.container }}"
+      user: "{{ .Params.run_as }}"
+      command: ["gitea", "dump", "--file", "-", "--type", "zip"]
+      format: zip
+verify:
+  method: archive-integrity
+  restartPolicy: never # dump strategy never stops containers
+notifications:
+  failureVerbosity: full

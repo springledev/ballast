@@ -1,0 +1,57 @@
+# catalog/mariadb-db.yaml — ONE database of a MySQL or MariaDB server,
+# dumped as an ordinary app user instead of root.
+#
+# Use this when your app has its own database user (for example
+# MYSQL_USER / MYSQL_DATABASE in the container's settings). The user's
+# password is a Ballast secret named db_password; it travels to the
+# container in the MYSQL_PWD environment variable, never on a command
+# line, and is hidden from every log and error.
+#
+# The dump tool is found inside the container: mariadb-dump on MariaDB
+# 11 images, mysqldump everywhere else. A failed dump is a failed run.
+apiVersion: ballast.dev/v1
+service: mariadb-db
+version: 1
+display:
+  name: MySQL / MariaDB (one database, as an app user)
+  description: A single database of a MySQL or MariaDB container, dumped with the app's own user and password
+detect:
+  docker:
+    imagePattern: "mysql|mariadb"
+parameters:
+  - name: container
+    required: true
+    prompt: "Name of your MySQL/MariaDB container"
+  - name: db_name
+    required: true
+    prompt: "Name of the database to back up"
+  - name: db_user
+    required: true
+    prompt: "Database user that can read that database"
+  - name: image
+    required: true
+    prompt: "Image for the test-restore container — match your server (e.g. mysql:8 or mariadb:11)"
+backup:
+  strategy: dump
+  dumps:
+    - name: database
+      container: "{{ .Params.container }}"
+      command:
+        - sh
+        - -c
+        - 'if command -v mariadb-dump >/dev/null 2>&1; then exec mariadb-dump "$@"; else exec mysqldump "$@"; fi'
+        - sh
+        - --single-transaction
+        - -u
+        - "{{ .Params.db_user }}"
+        - --databases
+        - "{{ .Params.db_name }}"
+      format: sql
+      secretEnv:
+        MYSQL_PWD: "{{ .Secrets.db_password }}"
+verify:
+  method: db-restore-drill
+  image: "{{ .Params.image }}"
+  restartPolicy: never # dump strategy never stops containers
+notifications:
+  failureVerbosity: full

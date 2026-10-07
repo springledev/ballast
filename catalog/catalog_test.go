@@ -244,3 +244,60 @@ func TestStopStartCatalogRequirements(t *testing.T) {
 		})
 	}
 }
+
+// TestStep45Entries pins the catalog completeness entries: Gitea dumps
+// as the git user into a zip, Postgres takes a db_user (default
+// postgres), the app-user MariaDB entry passes its password only as a
+// secret environment variable, and host-config needs no parameters.
+func TestStep45Entries(t *testing.T) {
+	gitea, err := ballastcatalog.LoadFile("gitea.yaml")
+	if err != nil {
+		t.Fatalf("gitea.yaml: %v", err)
+	}
+	d := gitea.Backup.Dumps[0]
+	if d.User != "{{ .Params.run_as }}" || d.Format != "zip" || !slices.Equal(d.Command, []string{"gitea", "dump", "--file", "-", "--type", "zip"}) {
+		t.Errorf("gitea dump = %+v, want the zip dump to stdout as run_as", d)
+	}
+
+	pg, err := ballastcatalog.LoadFile("postgres.yaml")
+	if err != nil {
+		t.Fatalf("postgres.yaml: %v", err)
+	}
+	found := false
+	for _, p := range pg.Parameters {
+		if p.Name == "db_user" && p.Default == "postgres" {
+			found = true
+		}
+	}
+	if !found {
+		t.Error("postgres.yaml has no db_user parameter defaulting to postgres")
+	}
+	if got := pg.Backup.Dumps[0].Command; !slices.Contains(got, "{{ .Params.db_user }}") {
+		t.Errorf("postgres dump command = %v, want it to use db_user", got)
+	}
+
+	my, err := ballastcatalog.LoadFile("mariadb-db.yaml")
+	if err != nil {
+		t.Fatalf("mariadb-db.yaml: %v", err)
+	}
+	md := my.Backup.Dumps[0]
+	if md.SecretEnv["MYSQL_PWD"] != "{{ .Secrets.db_password }}" {
+		t.Errorf("mariadb-db secretEnv = %v, want MYSQL_PWD from db_password", md.SecretEnv)
+	}
+	if !slices.Contains(md.Command, "--databases") || !slices.Contains(md.Command, "{{ .Params.db_name }}") {
+		t.Errorf("mariadb-db command = %v, want --databases <db_name>", md.Command)
+	}
+
+	hc, err := ballastcatalog.LoadFile("host-config.yaml")
+	if err != nil {
+		t.Fatalf("host-config.yaml: %v", err)
+	}
+	if len(hc.Parameters) != 0 || len(hc.Backup.Files) < 2 {
+		t.Errorf("host-config: %d parameters, %d paths; want no parameters and several paths", len(hc.Parameters), len(hc.Backup.Files))
+	}
+	for _, f := range hc.Backup.Files {
+		if strings.Contains(f.Path, "ballast") {
+			t.Errorf("host-config includes %q, which can hold Ballast credentials", f.Path)
+		}
+	}
+}

@@ -126,6 +126,9 @@ func (s *Dump) dumpCommand(d catalog.Dump, env []string) runner.Command {
 		return runner.Command{Name: s.opts.pct(), Args: args}
 	}
 	args := []string{"exec"}
+	if d.User != "" {
+		args = append(args, "-u", d.User)
+	}
 	for _, e := range env {
 		k, _, _ := strings.Cut(e, "=")
 		args = append(args, "-e", k)

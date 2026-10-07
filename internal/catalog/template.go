@@ -219,6 +219,11 @@ func (e *Entry) Resolve(ctx TemplateContext) error {
 			return fmt.Errorf("dump %q container: %w", d.Name, err)
 		}
 		e.Backup.Dumps[i].Container = c
+		u, err := substitute(d.User, ctx)
+		if err != nil {
+			return fmt.Errorf("dump %q user: %w", d.Name, err)
+		}
+		e.Backup.Dumps[i].User = u
 		for j, part := range d.Command {
 			cs, err := substitute(part, ctx)
 			if err != nil {

@@ -87,6 +87,13 @@ func TestContainerRestorePass(t *testing.T) {
 	}
 }
 
+// The MySQL-family dialect probes for the mariadb-named tools first
+// (MariaDB 11 images ship only those) and falls back to mysql-named ones.
+const (
+	mysqlReadyProbe  = "sh -c if command -v mariadb-admin >/dev/null 2>&1; then exec mariadb-admin -s ping; else exec mysqladmin -s ping; fi"
+	mysqlClientProbe = "sh -c if command -v mariadb >/dev/null 2>&1; then exec mariadb -u root; else exec mysql -u root; fi"
+)
+
 // TestContainerRestoreMySQLDialect checks the image-driven dialect
 // dispatch: mariadb/mysql images get mysqld as the run command, the
 // empty-password run flag (no secret in argv), mysqladmin readiness,
@@ -105,9 +112,9 @@ func TestContainerRestoreMySQLDialect(t *testing.T) {
 	name := containerName(t, log)
 	want := []string{
 		"run --detach --network none --name " + name + " -e MYSQL_ALLOW_EMPTY_PASSWORD=yes mariadb:11",
-		"exec " + name + " mysqladmin -s ping",
-		"exec " + name + " mysqladmin -s ping",
-		"exec -i " + name + " mysql -u root",
+		"exec " + name + " " + mysqlReadyProbe,
+		"exec " + name + " " + mysqlReadyProbe,
+		"exec -i " + name + " " + mysqlClientProbe,
 		"rm --force " + name,
 	}
 	for i := range want {
@@ -486,18 +493,18 @@ func TestDialectFor(t *testing.T) {
 		{"postgres:16", "psql", "pg_isready"},
 		{"ghcr.io/immich-app/postgres:14-vectorchord0.4.3-pgvectors0.2.0", "psql", "pg_isready"},
 		{"postgres:17-alpine", "psql", "pg_isready"},
-		{"mysql:8", "mysql", "mysqladmin"},
-		{"mariadb:11", "mysql", "mysqladmin"},
-		{"lscr.io/linuxserver/mariadb:latest", "mysql", "mysqladmin"},
+		{"mysql:8", "mysql -u root", "mysqladmin -s ping"},
+		{"mariadb:11", "mariadb -u root", "mariadb-admin -s ping"},
+		{"lscr.io/linuxserver/mariadb:latest", "mysql -u root", "mysqladmin -s ping"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.image, func(t *testing.T) {
 			d := dialectFor(tt.image)
-			if d.client[0] != tt.client {
-				t.Errorf("client = %q, want %q", d.client[0], tt.client)
+			if got := strings.Join(d.client, " "); !strings.Contains(got, tt.client) {
+				t.Errorf("client = %q, want it to contain %q", got, tt.client)
 			}
-			if d.readyArgs[0] != tt.readyArg {
-				t.Errorf("ready probe = %q, want %q", d.readyArgs[0], tt.readyArg)
+			if got := strings.Join(d.readyArgs, " "); !strings.Contains(got, tt.readyArg) {
+				t.Errorf("ready probe = %q, want it to contain %q", got, tt.readyArg)
 			}
 		})
 	}

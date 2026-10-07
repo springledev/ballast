@@ -51,6 +51,7 @@ backup:                      # required
       container: "{{ .Params.container }}"   # optional: docker container to `docker exec` into
       command: ["pg_dumpall", "-U", "postgres"]  # required, non-empty
       format: sql              # optional; free text (drives the output file's extension)
+      user: git                # optional: run the command as this container user (docker exec -u)
   files:                      # optional (any strategy): plain paths backed up directly via restic
     - path: "{{ .Params.data_dir }}"
   hostPaths:                  # files / stop-start: folders on the service's Docker host (path, or container + mount)

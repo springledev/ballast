@@ -130,9 +130,14 @@ type Dump struct {
 	// with no Docker daemon. pct-exec is read/dump-only and does not
 	// support SecretEnv (no argv-safe forwarding mechanism exists for
 	// it, unlike docker exec -e KEY).
-	Transport string   `yaml:"transport,omitempty" json:"transport,omitempty"`
-	Command   []string `yaml:"command" json:"command"`
-	Format    string   `yaml:"format,omitempty" json:"format,omitempty"`
+	Transport string `yaml:"transport,omitempty" json:"transport,omitempty"`
+	// User runs the dump command as this user inside the container
+	// (`docker exec -u`), for images whose tool refuses to run as root
+	// (Gitea's root image runs it as "git"). Empty keeps the image's
+	// default user. Docker-exec transport only.
+	User    string   `yaml:"user,omitempty" json:"user,omitempty"`
+	Command []string `yaml:"command" json:"command"`
+	Format  string   `yaml:"format,omitempty" json:"format,omitempty"`
 	// SecretEnv is extra KEY: "{{ .Secrets.NAME }}" environment for the
 	// dump command, e.g. MYSQL_PWD for mysqldump. Values are template
 	// strings resolved by Entry.ResolveSecrets — never by Resolve,

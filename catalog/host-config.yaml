@@ -1,0 +1,23 @@
+# catalog/host-config.yaml — the "rebuild this machine" bundle.
+#
+# Backs up the Ballast machine's own systemd units, hand-made scripts
+# and a few small system files so the box can be rebuilt after a
+# failure. No parameters. Deliberately leaves out /etc/ballast, which
+# holds credentials, and anything else secret.
+apiVersion: ballast.dev/v1
+service: host-config
+version: 1
+display:
+  name: This machine's settings
+  description: systemd units, scripts in /usr/local/bin and a few system files — what you need to rebuild this machine
+backup:
+  strategy: files
+  files:
+    - path: /etc/systemd/system
+    - path: /usr/local/bin
+    - path: /etc/fstab
+    - path: /etc/hosts
+verify:
+  method: archive-integrity
+notifications:
+  failureVerbosity: full

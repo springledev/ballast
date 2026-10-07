@@ -30,7 +30,17 @@ backup:
       # via `docker exec -e MYSQL_PWD` (docker resolves the value
       # from its own environment) and redacts the value from all
       # error output and logs.
-      command: ["mysqldump", "--all-databases", "--single-transaction", "-u", "root"]
+      # MariaDB 11 images ship only mariadb-dump; MySQL and older
+      # MariaDB images ship only mysqldump. Probe, never guess.
+      command:
+        - sh
+        - -c
+        - 'if command -v mariadb-dump >/dev/null 2>&1; then exec mariadb-dump "$@"; else exec mysqldump "$@"; fi'
+        - sh
+        - --all-databases
+        - --single-transaction
+        - -u
+        - root
       format: sql
 verify:
   method: db-restore-drill

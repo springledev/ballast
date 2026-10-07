@@ -224,6 +224,9 @@ func For(entry *catalog.Entry, opts Options) (Strategy, error) {
 			if d.Format != "" && d.Format != pathBase(d.Format) {
 				return nil, fmt.Errorf("service %s: dump %q format %q must not contain a path separator", entry.Service, d.Name, d.Format)
 			}
+			if d.User != "" && d.Transport == "pct-exec" {
+				return nil, fmt.Errorf("service %s: dump %q: user is only supported with docker-exec", entry.Service, d.Name)
+			}
 			if d.Transport != "" && d.Transport != "docker-exec" && d.Transport != "pct-exec" {
 				return nil, fmt.Errorf("service %s: dump %q has unknown transport %q (want docker-exec or pct-exec)", entry.Service, d.Name, d.Transport)
 			}

@@ -15,6 +15,9 @@ parameters:
   - name: container
     required: true
     prompt: "Name of your Postgres container"
+  - name: db_user
+    default: postgres
+    prompt: "Database user to dump as — the POSTGRES_USER of your container (usually postgres)"
   - name: image
     required: true
     prompt: "Image for the test-restore container — must match your server's major version (e.g. postgres:16)"
@@ -24,8 +27,9 @@ backup:
     - name: database
       container: "{{ .Params.container }}"
       # pg_dumpall over the container's local socket; the official
-      # image trusts local connections, so no password is needed.
-      command: ["pg_dumpall", "-U", "postgres"]
+      # image trusts local connections, so no password is needed. A
+      # custom POSTGRES_USER (not "postgres") is set with db_user.
+      command: ["pg_dumpall", "-U", "{{ .Params.db_user }}"]
       format: sql
 verify:
   method: db-restore-drill

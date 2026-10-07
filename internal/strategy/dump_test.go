@@ -458,3 +458,34 @@ func TestDumpPctExecRejectsEnv(t *testing.T) {
 		t.Errorf("pct invocations = %v, want none", log)
 	}
 }
+
+// TestDumpUserRunsAsContainerUser checks that dumps[].user becomes
+// `docker exec -u <user>` ahead of the container name.
+func TestDumpUserRunsAsContainerUser(t *testing.T) {
+	dockerBin, logPath := newDockerStub(t)
+	entry := &catalog.Entry{
+		Service: "gitea",
+		Backup: catalog.Backup{
+			Strategy: "dump",
+			Dumps: []catalog.Dump{{
+				Name:      "gitea-dump",
+				Container: "gitea",
+				User:      "git",
+				Command:   []string{"gitea", "dump", "--file", "-", "--type", "zip"},
+				Format:    "zip",
+			}},
+		},
+	}
+	s, err := For(entry, Options{Runner: stubRunner(logPath), Docker: dockerhost.NewLocal(dockerBin)})
+	if err != nil {
+		t.Fatalf("For: %v", err)
+	}
+	if _, err := s.Backup(context.Background(), Request{WorkDir: t.TempDir()}); err != nil {
+		t.Fatalf("Backup: %v", err)
+	}
+	log := readStubLog(t, logPath)
+	want := "exec -u git gitea gitea dump --file - --type zip"
+	if len(log) != 1 || log[0] != want {
+		t.Errorf("docker invocations = %v, want [%q]", log, want)
+	}
+}

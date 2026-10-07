@@ -200,9 +200,12 @@ func dialectFor(image string) restoreDialect {
 	lower := strings.ToLower(image)
 	if strings.Contains(lower, "mysql") || strings.Contains(lower, "mariadb") {
 		return restoreDialect{
-			extraRun:  []string{"-e", "MYSQL_ALLOW_EMPTY_PASSWORD=yes"}, // no secret travels in argv
-			readyArgs: []string{"mysqladmin", "-s", "ping"},
-			client:    []string{"mysql", "-u", "root"},
+			extraRun: []string{"-e", "MYSQL_ALLOW_EMPTY_PASSWORD=yes"}, // no secret travels in argv
+			// MariaDB 11 images ship only mariadb-admin / mariadb;
+			// older and MySQL images ship only mysqladmin / mysql.
+			// Probe for the mariadb name first, fall back to mysql.
+			readyArgs: []string{"sh", "-c", `if command -v mariadb-admin >/dev/null 2>&1; then exec mariadb-admin -s ping; else exec mysqladmin -s ping; fi`},
+			client:    []string{"sh", "-c", `if command -v mariadb >/dev/null 2>&1; then exec mariadb -u root; else exec mysql -u root; fi`},
 		}
 	}
 	return restoreDialect{
