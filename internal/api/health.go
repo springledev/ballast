@@ -121,7 +121,7 @@ func (o *Ops) CredentialProblems(ctx context.Context) ([]string, error) {
 		return nil, fmt.Errorf("listing services: %w", err)
 	}
 	for _, s := range svcs {
-		if !known[s.Destination] {
+		if s.Destination != "" && !known[s.Destination] {
 			problems = append(problems, fmt.Sprintf("service %q backs up to %q, which is not a configured destination", s.Name, s.Destination))
 		}
 		for name, ref := range s.Secrets {

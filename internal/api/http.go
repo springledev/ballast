@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"github.com/springledev/keel/dockerhost"
 	"net/http"
+	"strconv"
 	"time"
 
 	"github.com/springledev/ballast/internal/backend"
@@ -105,6 +106,7 @@ func NewAuthedHandler(ops *Ops, auth *Auth) http.Handler {
 	protected.HandleFunc("POST /api/v1/proxmox/test", h.testProxmoxConnection)
 	protected.HandleFunc("GET /api/v1/proxmox/guests", h.listProxmoxGuests)
 	protected.HandleFunc("POST /api/v1/proxmox/backup", h.backupProxmoxGuest)
+	protected.HandleFunc("GET /api/v1/proxmox/storage-check", h.checkProxmoxStorage)
 
 	protected.HandleFunc("GET /api/v1/auth/session", auth.session)
 	protected.HandleFunc("POST /api/v1/auth/rotate", auth.rotate)
@@ -911,6 +913,23 @@ func (h *handler) backupProxmoxGuest(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	res, err := h.ops.BackupProxmoxGuest(r.Context(), body)
+	if err != nil {
+		h.writeErr(w, err, http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, http.StatusOK, res)
+}
+
+// checkProxmoxStorage handles GET /api/v1/proxmox/storage-check?node=&storage=&vmid=&service=:
+// how many dumps of the guest on that storage Ballast did not make.
+func (h *handler) checkProxmoxStorage(w http.ResponseWriter, r *http.Request) {
+	q := r.URL.Query()
+	vmid, err := strconv.Atoi(q.Get("vmid"))
+	if err != nil {
+		h.writeErr(w, fmt.Errorf("%w: vmid must be a number", ErrValidation), http.StatusBadRequest)
+		return
+	}
+	res, err := h.ops.CheckProxmoxStorage(r.Context(), q.Get("service"), q.Get("node"), q.Get("storage"), vmid)
 	if err != nil {
 		h.writeErr(w, err, http.StatusInternalServerError)
 		return

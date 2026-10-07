@@ -66,3 +66,47 @@ func DeleteProxmoxConnection(db *sql.DB) error {
 	}
 	return nil
 }
+
+// RecordProxmoxDump remembers that Ballast created a dump volume, so
+// pruning may delete it later. Only recorded volumes are ever pruned.
+func RecordProxmoxDump(db *sql.DB, service, node, storage, volume string, runID, size int64) error {
+	_, err := db.Exec(`
+		INSERT OR REPLACE INTO proxmox_dumps (volume, service, node, storage, run_id, size, created_at, pruned_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, '')`,
+		volume, service, node, storage, runID, size, time.Now().UTC().Format(time.RFC3339Nano))
+	if err != nil {
+		return fmt.Errorf("service %s: recording Proxmox dump %s: %w", service, volume, err)
+	}
+	return nil
+}
+
+// OwnedProxmoxDumps lists the dump volumes service created on storage
+// that have not been pruned yet.
+func OwnedProxmoxDumps(db *sql.DB, service, node, storage string) ([]string, error) {
+	rows, err := db.Query(`SELECT volume FROM proxmox_dumps WHERE service = ? AND node = ? AND storage = ? AND pruned_at = '' ORDER BY created_at`, service, node, storage)
+	if err != nil {
+		return nil, fmt.Errorf("service %s: listing recorded Proxmox dumps: %w", service, err)
+	}
+	defer rows.Close()
+	var out []string
+	for rows.Next() {
+		var v string
+		if err := rows.Scan(&v); err != nil {
+			return nil, fmt.Errorf("service %s: listing recorded Proxmox dumps: %w", service, err)
+		}
+		out = append(out, v)
+	}
+	return out, rows.Err()
+}
+
+// MarkProxmoxDumpsPruned stops tracking volumes that were deleted (or
+// are already gone from the storage).
+func MarkProxmoxDumpsPruned(db *sql.DB, node string, volumes []string) error {
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	for _, v := range volumes {
+		if _, err := db.Exec(`UPDATE proxmox_dumps SET pruned_at = ? WHERE node = ? AND volume = ?`, now, node, v); err != nil {
+			return fmt.Errorf("marking Proxmox dump %s pruned: %w", v, err)
+		}
+	}
+	return nil
+}

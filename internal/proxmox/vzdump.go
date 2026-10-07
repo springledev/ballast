@@ -199,45 +199,10 @@ func (cl *Client) DeleteDump(ctx context.Context, node, storage, volume string, 
 // one just made, and only after the new dump exists. The result is an
 // unverified dump (see GuestBackupResult).
 func (cl *Client) BackupGuest(ctx context.Context, o GuestBackupOptions, poll time.Duration) (GuestBackupResult, error) {
-	res := GuestBackupResult{Node: o.Node, VMID: o.VMID, Mode: o.Mode, Storage: o.Storage}
-	if err := o.Validate(); err != nil {
-		return res, err
-	}
-	res.Mode = o.Mode
-
-	before, err := cl.ListDumps(ctx, o.Node, o.Storage, o.VMID)
-	if err != nil {
-		return res, fmt.Errorf("guest %d: listing existing backups on %s: %w", o.VMID, o.Storage, err)
-	}
-	seen := make(map[string]bool, len(before))
-	for _, d := range before {
-		seen[d.Volume] = true
-	}
-
-	upid, err := cl.StartVzdump(ctx, o)
+	res, after, err := cl.createDump(ctx, o, poll)
 	if err != nil {
 		return res, err
 	}
-	res.UPID = upid
-	if err := cl.WaitTask(ctx, o.Node, upid, poll); err != nil {
-		return res, fmt.Errorf("guest %d: %w", o.VMID, err)
-	}
-
-	after, err := cl.ListDumps(ctx, o.Node, o.Storage, o.VMID)
-	if err != nil {
-		return res, fmt.Errorf("guest %d: the backup finished but its file could not be listed on %s: %w", o.VMID, o.Storage, err)
-	}
-	found := false
-	for _, d := range after {
-		if !seen[d.Volume] {
-			res.Volume, res.Size, found = d.Volume, d.Size, true
-			break // newest first
-		}
-	}
-	if !found {
-		return res, fmt.Errorf("guest %d: Proxmox said the backup succeeded but no new backup file appeared on %s", o.VMID, o.Storage)
-	}
-
 	if o.KeepLast > 0 && len(after) > o.KeepLast {
 		var errs []string
 		for _, d := range after[o.KeepLast:] {
@@ -253,4 +218,103 @@ func (cl *Client) BackupGuest(ctx context.Context, o GuestBackupOptions, poll ti
 		res.PruneError = strings.Join(errs, "; ")
 	}
 	return res, nil
+}
+
+// CreateDump runs one vzdump of a guest and identifies the new dump,
+// but deletes nothing: a scheduled guest job prunes separately, and
+// only the dumps Ballast recorded creating (PruneOwned).
+func (cl *Client) CreateDump(ctx context.Context, o GuestBackupOptions, poll time.Duration) (GuestBackupResult, error) {
+	res, _, err := cl.createDump(ctx, o, poll)
+	return res, err
+}
+
+// createDump starts the vzdump, waits for it, and returns the new dump
+// plus the guest's dumps on the storage afterwards (newest first).
+func (cl *Client) createDump(ctx context.Context, o GuestBackupOptions, poll time.Duration) (GuestBackupResult, []DumpVolume, error) {
+	res := GuestBackupResult{Node: o.Node, VMID: o.VMID, Mode: o.Mode, Storage: o.Storage}
+	if err := o.Validate(); err != nil {
+		return res, nil, err
+	}
+	res.Mode = o.Mode
+
+	before, err := cl.ListDumps(ctx, o.Node, o.Storage, o.VMID)
+	if err != nil {
+		return res, nil, fmt.Errorf("guest %d: listing existing backups on %s: %w", o.VMID, o.Storage, err)
+	}
+	seen := make(map[string]bool, len(before))
+	for _, d := range before {
+		seen[d.Volume] = true
+	}
+
+	upid, err := cl.StartVzdump(ctx, o)
+	if err != nil {
+		return res, nil, err
+	}
+	res.UPID = upid
+	if err := cl.WaitTask(ctx, o.Node, upid, poll); err != nil {
+		return res, nil, fmt.Errorf("guest %d: %w", o.VMID, err)
+	}
+
+	after, err := cl.ListDumps(ctx, o.Node, o.Storage, o.VMID)
+	if err != nil {
+		return res, nil, fmt.Errorf("guest %d: the backup finished but its file could not be listed on %s: %w", o.VMID, o.Storage, err)
+	}
+	found := false
+	for _, d := range after {
+		if !seen[d.Volume] {
+			res.Volume, res.Size, found = d.Volume, d.Size, true
+			break // newest first
+		}
+	}
+	if !found {
+		return res, nil, fmt.Errorf("guest %d: Proxmox said the backup succeeded but no new backup file appeared on %s", o.VMID, o.Storage)
+	}
+	return res, after, nil
+}
+
+// PruneOwned deletes the oldest of the dumps in owned (volume IDs
+// Ballast recorded creating) so that only keepLast of them remain.
+// Dumps not in owned are never touched, whatever else the storage
+// holds (decision D7). The newest owned dump is never deleted. gone
+// lists owned volumes that no longer exist on the storage, so the
+// caller can stop tracking them.
+func (cl *Client) PruneOwned(ctx context.Context, node, storage string, vmid int, owned []string, keepLast int, poll time.Duration) (pruned, gone []string, err error) {
+	if keepLast <= 0 {
+		return nil, nil, nil
+	}
+	dumps, err := cl.ListDumps(ctx, node, storage, vmid)
+	if err != nil {
+		return nil, nil, fmt.Errorf("guest %d: listing backups on %s: %w", vmid, storage, err)
+	}
+	mine := make(map[string]bool, len(owned))
+	for _, v := range owned {
+		mine[v] = true
+	}
+	var present []DumpVolume
+	onStorage := map[string]bool{}
+	for _, d := range dumps {
+		onStorage[d.Volume] = true
+		if mine[d.Volume] {
+			present = append(present, d)
+		}
+	}
+	for _, v := range owned {
+		if !onStorage[v] {
+			gone = append(gone, v)
+		}
+	}
+	var errs []string
+	if len(present) > keepLast {
+		for _, d := range present[keepLast:] { // newest first
+			if err := cl.DeleteDump(ctx, node, storage, d.Volume, poll); err != nil {
+				errs = append(errs, fmt.Sprintf("%s: %v", d.Volume, err))
+				continue
+			}
+			pruned = append(pruned, d.Volume)
+		}
+	}
+	if len(errs) > 0 {
+		err = fmt.Errorf("guest %d: could not delete old backups: %s", vmid, strings.Join(errs, "; "))
+	}
+	return pruned, gone, err
 }

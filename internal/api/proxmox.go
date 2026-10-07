@@ -233,3 +233,71 @@ func (o *Ops) inGuestLayers(node string, vmid int) ([]proxmox.LayerResult, error
 	}
 	return out, nil
 }
+
+// putGuestJob saves a Proxmox guest backup job (a service of kind
+// proxmox-guest). Proxmox must be connected, and an optional copy
+// destination must exist.
+func (o *Ops) putGuestJob(ctx context.Context, s inventory.Service) error {
+	if _, err := inventory.GetProxmoxConnection(o.DB); err != nil {
+		return fmt.Errorf("service %s: %w: connect Ballast to Proxmox first (ballast proxmox connect)", s.Name, ErrValidation)
+	}
+	for _, t := range s.EffectiveTargets() {
+		if _, err := inventory.GetDestination(o.DB, t.Destination); err != nil {
+			return wrapf("service "+s.Name, err)
+		}
+	}
+	if s.DockerHost == "" {
+		s.DockerHost = dockerhost.LocalName
+	}
+	if err := inventory.PutService(o.DB, s); err != nil {
+		return fmt.Errorf("%w: %w", ErrValidation, wrapf("service "+s.Name, err))
+	}
+	return nil
+}
+
+// StorageCheck says what a Proxmox storage already holds of one guest.
+type StorageCheck struct {
+	// Total is how many dumps of the guest are on the storage.
+	Total int `json:"total"`
+	// Foreign is how many of them Ballast did not make. Ballast never
+	// deletes these.
+	Foreign int `json:"foreign"`
+	// Warning is plain-English advice, empty when there is nothing to say.
+	Warning string `json:"warning,omitempty"`
+}
+
+// CheckProxmoxStorage counts the guest's dumps on storage that service
+// did not make, so the UI can say that other backups share the storage
+// (Ballast leaves them alone) and recommend a dedicated one.
+func (o *Ops) CheckProxmoxStorage(ctx context.Context, service, node, storage string, vmid int) (StorageCheck, error) {
+	c, err := inventory.GetProxmoxConnection(o.DB)
+	if err != nil {
+		return StorageCheck{}, wrapf("Proxmox connection", err)
+	}
+	cl, err := o.Proxmox.Client(c)
+	if err != nil {
+		return StorageCheck{}, o.redactErr(err)
+	}
+	dumps, err := cl.ListDumps(ctx, node, storage, vmid)
+	if err != nil {
+		return StorageCheck{}, o.redactErr(err)
+	}
+	owned, err := inventory.OwnedProxmoxDumps(o.DB, service, node, storage)
+	if err != nil {
+		return StorageCheck{}, err
+	}
+	mine := map[string]bool{}
+	for _, v := range owned {
+		mine[v] = true
+	}
+	res := StorageCheck{Total: len(dumps)}
+	for _, d := range dumps {
+		if !mine[d.Volume] {
+			res.Foreign++
+		}
+	}
+	if res.Foreign > 0 {
+		res.Warning = fmt.Sprintf("%s already holds %d backup(s) of this guest that Ballast did not make. Ballast will never delete them, so they will not count toward \"keep last\". A storage used only by Ballast keeps things tidy.", storage, res.Foreign)
+	}
+	return res, nil
+}

@@ -5,6 +5,7 @@ import (
 	"os"
 
 	"github.com/springledev/ballast/internal/api"
+	"github.com/springledev/ballast/internal/inventory"
 	"github.com/springledev/ballast/internal/proxmox"
 	"github.com/spf13/cobra"
 )
@@ -221,6 +222,58 @@ var proxmoxRemoveCmd = &cobra.Command{
 	},
 }
 
+var (
+	jobName, jobNode, jobStorage, jobMode, jobSchedule, jobCopyTo, jobCopyPath string
+	jobVMID, jobKeepLast                                                       int
+)
+
+var proxmoxJobAddCmd = &cobra.Command{
+	Use:   "add",
+	Short: "Back up a Proxmox guest on a schedule",
+	Long: `Add a scheduled Proxmox guest backup. It runs like any other Ballast service:
+the guest is dumped with vzdump, the dump is checked (it is on the storage at
+the size Proxmox reported and its settings read back), and the light turns
+green only when that passes.
+
+"--keep-last" removes only the dumps Ballast made itself; other backups on the
+same storage are never touched. To also send each dump to a backup destination
+(for example an offsite copy), give --copy-to and --copy-path, the folder on
+this machine where the Proxmox storage appears (such as an NFS mount).
+
+Example:
+
+  ballast proxmox job add --name pve-vm100 --node pve --vmid 100 --storage backup-nas --keep-last 2 --schedule "0 3 * * 0"`,
+	Args: cobra.NoArgs,
+	RunE: func(cmd *cobra.Command, args []string) error {
+		cfg, err := loadConfig()
+		if err != nil {
+			return err
+		}
+		return withApp(cfg, cmd.ErrOrStderr(), func(a *app) error {
+			s := inventory.Service{
+				Name: jobName, Kind: inventory.KindProxmoxGuest,
+				ProxmoxNode: jobNode, ProxmoxVMID: jobVMID,
+				Destination: jobCopyTo,
+				Guest:       &inventory.GuestJob{Storage: jobStorage, Mode: jobMode, KeepLast: jobKeepLast, CopyPath: jobCopyPath},
+			}
+			if err := a.ops.PutService(cmd.Context(), s); err != nil {
+				return err
+			}
+			cmd.Printf("%s: will back up guest %d on %s to %s\n", jobName, jobVMID, jobNode, jobStorage)
+			if jobSchedule != "" {
+				if err := a.ops.SetSchedule(cmd.Context(), jobName, jobSchedule); err != nil {
+					return err
+				}
+				cmd.Printf("%s: scheduled %q\n", jobName, jobSchedule)
+			}
+			if chk, err := a.ops.CheckProxmoxStorage(cmd.Context(), jobName, jobNode, jobStorage, jobVMID); err == nil && chk.Warning != "" {
+				cmd.Println("Note: " + chk.Warning)
+			}
+			return nil
+		})
+	},
+}
+
 // registerProxmoxCommands attaches `ballast proxmox ...` (spec §14
 // step 24, §17.3) to root.
 func registerProxmoxCommands(root *cobra.Command) {
@@ -242,7 +295,23 @@ func registerProxmoxCommands(root *cobra.Command) {
 	_ = proxmoxBackupCmd.MarkFlagRequired("vmid")
 	_ = proxmoxBackupCmd.MarkFlagRequired("storage")
 
+	f := proxmoxJobAddCmd.Flags()
+	f.StringVar(&jobName, "name", "", "name for this backup job (required)")
+	f.StringVar(&jobNode, "node", "", "Proxmox node name (required)")
+	f.IntVar(&jobVMID, "vmid", 0, "guest VMID (required)")
+	f.StringVar(&jobStorage, "storage", "", "Proxmox storage the dump is written to (required)")
+	f.StringVar(&jobMode, "mode", "snapshot", "backup mode: snapshot, suspend or stop")
+	f.IntVar(&jobKeepLast, "keep-last", 0, "keep this many of the dumps Ballast made (0 keeps them all)")
+	f.StringVar(&jobSchedule, "schedule", "", "cron schedule, e.g. \"0 3 * * 0\"")
+	f.StringVar(&jobCopyTo, "copy-to", "", "also copy each dump to this backup destination")
+	f.StringVar(&jobCopyPath, "copy-path", "", "folder on this machine where the Proxmox storage appears (needed with --copy-to)")
+	for _, n := range []string{"name", "node", "vmid", "storage"} {
+		_ = proxmoxJobAddCmd.MarkFlagRequired(n)
+	}
+	jobCmd := &cobra.Command{Use: "job", Short: "Scheduled Proxmox guest backups"}
+	jobCmd.AddCommand(proxmoxJobAddCmd)
+
 	proxmoxCmd := &cobra.Command{Use: "proxmox", Short: "Manage Ballast's connection to a Proxmox host"}
-	proxmoxCmd.AddCommand(proxmoxConnectCmd, proxmoxTestCmd, proxmoxGuestsCmd, proxmoxBackupCmd, proxmoxRemoveCmd)
+	proxmoxCmd.AddCommand(proxmoxConnectCmd, proxmoxTestCmd, proxmoxGuestsCmd, proxmoxBackupCmd, proxmoxRemoveCmd, jobCmd)
 	root.AddCommand(proxmoxCmd)
 }

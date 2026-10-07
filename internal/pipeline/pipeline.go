@@ -18,12 +18,14 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/springledev/ballast/internal/catalog"
 	"github.com/springledev/ballast/internal/detect"
 	"github.com/springledev/ballast/internal/dotenv"
 	"github.com/springledev/ballast/internal/engine"
 	"github.com/springledev/ballast/internal/inventory"
+	"github.com/springledev/ballast/internal/proxmox"
 	"github.com/springledev/ballast/internal/strategy"
 	"github.com/springledev/ballast/internal/verify"
 	"github.com/springledev/keel/runner"
@@ -82,6 +84,12 @@ type Pipeline struct {
 	// and verify at the same time; zero or one means one at a time.
 	TargetParallel int
 
+	// Proxmox resolves the configured Proxmox connection for guest jobs
+	// (spec §19.6); ProxmoxPoll overrides how often a running Proxmox
+	// task is checked (tests only; zero means the default).
+	Proxmox     proxmox.Resolver
+	ProxmoxPoll time.Duration
+
 	logMu sync.Mutex
 }
 
@@ -126,6 +134,9 @@ func (p *Pipeline) Run(ctx context.Context, service string) (engine.State, error
 	svc, err := inventory.GetService(p.DB, service)
 	if err != nil {
 		return "", fmt.Errorf("service %s: %w", service, err)
+	}
+	if svc.IsGuestJob() {
+		return p.runGuest(ctx, svc)
 	}
 	var targets []*runTarget
 	for _, t := range svc.EffectiveTargets() {

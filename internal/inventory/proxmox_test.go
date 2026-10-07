@@ -90,3 +90,35 @@ func TestServiceProxmoxGuestAttachment(t *testing.T) {
 		t.Fatalf("got = %+v, want no proxmox attachment", got)
 	}
 }
+
+func TestGuestJobServiceRoundTrip(t *testing.T) {
+	db := openDB(t).DB()
+	s := Service{Name: "pve-ct100", Kind: KindProxmoxGuest, ProxmoxNode: "pve", ProxmoxVMID: 100,
+		Guest: &GuestJob{Storage: "backup", Mode: "stop", KeepLast: 2}}
+	if err := PutService(db, s); err != nil {
+		t.Fatalf("PutService: %v", err)
+	}
+	got, err := GetService(db, "pve-ct100")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !got.IsGuestJob() || got.Guest == nil || got.Guest.KeepLast != 2 || got.Guest.Mode != "stop" || got.Destination != "" || len(got.EffectiveTargets()) != 0 {
+		t.Errorf("round trip = %+v", got)
+	}
+	bad := s
+	bad.Guest = &GuestJob{}
+	if err := PutService(db, bad); err == nil {
+		t.Error("a guest job without a storage must be refused")
+	}
+	if err := RecordProxmoxDump(db, "pve-ct100", "pve", "backup", "backup:backup/x", 1, 10); err != nil {
+		t.Fatal(err)
+	}
+	owned, _ := OwnedProxmoxDumps(db, "pve-ct100", "pve", "backup")
+	if len(owned) != 1 {
+		t.Fatalf("owned = %v", owned)
+	}
+	_ = MarkProxmoxDumpsPruned(db, "pve", owned)
+	if owned, _ = OwnedProxmoxDumps(db, "pve-ct100", "pve", "backup"); len(owned) != 0 {
+		t.Errorf("pruned dump still owned: %v", owned)
+	}
+}

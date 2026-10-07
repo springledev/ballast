@@ -728,6 +728,9 @@ func (o *Ops) GetService(ctx context.Context, name string) (inventory.Service, e
 // containers, so a missing required parameter fails loudly at add
 // time rather than at the first scheduled run.
 func (o *Ops) PutService(ctx context.Context, s inventory.Service) error {
+	if s.IsGuestJob() {
+		return o.putGuestJob(ctx, s)
+	}
 	entry, ok := o.Catalog.Get(s.CatalogEntry)
 	if !ok {
 		return fmt.Errorf("service %s: %w: catalog entry %q not found", s.Name, ErrValidation, s.CatalogEntry)

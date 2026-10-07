@@ -372,7 +372,35 @@ type Service struct {
 	// first target. Empty on input means one target made of Destination
 	// and Retention.
 	Targets []Target `json:"targets,omitempty"`
+	// Kind is "" for an ordinary catalog service or KindProxmoxGuest
+	// for a Proxmox guest backup job (spec §19.6).
+	Kind string `json:"kind,omitempty"`
+	// Guest holds the settings of a KindProxmoxGuest service; the guest
+	// itself is named by ProxmoxNode and ProxmoxVMID.
+	Guest *GuestJob `json:"guest,omitempty"`
 }
+
+// KindProxmoxGuest is the Service.Kind of a Proxmox guest backup job.
+// Such a job has no catalog entry; CatalogEntry holds this same value.
+const KindProxmoxGuest = "proxmox-guest"
+
+// GuestJob is the configuration of a Proxmox guest backup job.
+type GuestJob struct {
+	// Storage is the Proxmox storage the dump is written to.
+	Storage string `json:"storage"`
+	// Mode is snapshot (default), suspend or stop.
+	Mode string `json:"mode,omitempty"`
+	// KeepLast is how many of the dumps Ballast made to keep (0 = keep
+	// them all). Dumps Ballast did not make are never deleted.
+	KeepLast int `json:"keep_last,omitempty"`
+	// CopyPath is the folder on the Ballast machine where Storage's dump
+	// files appear (for example an NFS mount of it). It is needed only
+	// when the service also copies each dump to a restic destination.
+	CopyPath string `json:"copy_path,omitempty"`
+}
+
+// IsGuestJob reports whether s is a Proxmox guest backup job.
+func (s Service) IsGuestJob() bool { return s.Kind == KindProxmoxGuest }
 
 // Target is one destination a service backs up to.
 type Target struct {
@@ -392,6 +420,9 @@ type Target struct {
 func (s Service) EffectiveTargets() []Target {
 	if len(s.Targets) > 0 {
 		return s.Targets
+	}
+	if s.IsGuestJob() && s.Destination == "" {
+		return nil
 	}
 	return []Target{{Destination: s.Destination, Retention: s.Retention}}
 }
@@ -423,6 +454,9 @@ func (t Target) EffectiveRetention(d Destination) Retention {
 // destinations are refused: two targets in one repository would
 // retention-prune each other.
 func normalizeTargets(db *sql.DB, s *Service) error {
+	if s.IsGuestJob() && len(s.Targets) == 0 && s.Destination == "" {
+		return nil // a guest job may keep its dumps on Proxmox only
+	}
 	if len(s.Targets) == 0 {
 		s.Targets = []Target{{Destination: s.Destination, Retention: s.Retention}}
 	}
@@ -544,10 +578,38 @@ func PutService(db *sql.DB, s Service) error {
 	if err := ValidateName(s.Name); err != nil {
 		return fmt.Errorf("service: %w", err)
 	}
+	guestJSON := ""
+	if s.IsGuestJob() {
+		s.CatalogEntry = KindProxmoxGuest
+		if s.Guest == nil || strings.TrimSpace(s.Guest.Storage) == "" {
+			return fmt.Errorf("service %s: choose the Proxmox storage the backup is written to", s.Name)
+		}
+		if s.ProxmoxVMID <= 0 || s.ProxmoxNode == "" {
+			return fmt.Errorf("service %s: a Proxmox guest job needs the guest's node and VMID", s.Name)
+		}
+		switch s.Guest.Mode {
+		case "", "snapshot", "suspend", "stop":
+		default:
+			return fmt.Errorf("service %s: unknown backup mode %q — use snapshot, suspend or stop", s.Name, s.Guest.Mode)
+		}
+		if s.Guest.KeepLast < 0 {
+			return fmt.Errorf("service %s: keep-last must not be negative", s.Name)
+		}
+		if (s.Destination != "" || len(s.Targets) > 0) && s.Guest.CopyPath == "" {
+			return fmt.Errorf("service %s: to copy the dump to a destination, give the folder where Proxmox's %q storage appears on this machine", s.Name, s.Guest.Storage)
+		}
+		b, err := json.Marshal(s.Guest)
+		if err != nil {
+			return fmt.Errorf("service %s: encoding guest job: %w", s.Name, err)
+		}
+		guestJSON = string(b)
+	} else if s.Kind != "" {
+		return fmt.Errorf("service %s: unknown kind %q", s.Name, s.Kind)
+	}
 	if s.CatalogEntry == "" {
 		return fmt.Errorf("service %s: catalog entry must not be empty", s.Name)
 	}
-	if s.Destination == "" {
+	if s.Destination == "" && !s.IsGuestJob() {
 		return fmt.Errorf("service %s: destination must not be empty", s.Name)
 	}
 	if err := normalizeTargets(db, &s); err != nil {
@@ -616,8 +678,8 @@ func PutService(db *sql.DB, s Service) error {
 	}
 	defer func() { err = store.RollbackOnError(tx, err) }()
 	_, err = tx.Exec(`
-		INSERT INTO services (name, catalog_entry, destination, docker_host, params_json, containers_json, secrets_json, retention_json, project, proxmox_node, proxmox_vmid, excludes_json, created_at, updated_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		INSERT INTO services (name, catalog_entry, destination, docker_host, params_json, containers_json, secrets_json, retention_json, project, proxmox_node, proxmox_vmid, excludes_json, kind, guest_json, created_at, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(name) DO UPDATE SET
 			catalog_entry = excluded.catalog_entry,
 			destination = excluded.destination,
@@ -630,8 +692,10 @@ func PutService(db *sql.DB, s Service) error {
 			project = excluded.project,
 			proxmox_node = excluded.proxmox_node,
 			proxmox_vmid = excluded.proxmox_vmid,
+			kind = excluded.kind,
+			guest_json = excluded.guest_json,
 			updated_at = excluded.updated_at`,
-		s.Name, s.CatalogEntry, s.Destination, s.DockerHost, paramsJSON, containersJSON, secretsJSON, retentionJSON, s.Project, s.ProxmoxNode, s.ProxmoxVMID, excludesJSON, now, now,
+		s.Name, s.CatalogEntry, s.Destination, s.DockerHost, paramsJSON, containersJSON, secretsJSON, retentionJSON, s.Project, s.ProxmoxNode, s.ProxmoxVMID, excludesJSON, s.Kind, guestJSON, now, now,
 	)
 	if err != nil {
 		return fmt.Errorf("saving service %s: %w", s.Name, err)
@@ -661,13 +725,13 @@ func GetService(db *sql.DB, name string) (Service, error) {
 	return one[0], nil
 }
 
-const serviceColumns = `name, catalog_entry, destination, docker_host, params_json, containers_json, secrets_json, retention_json, project, proxmox_node, proxmox_vmid, excludes_json`
+const serviceColumns = `name, catalog_entry, destination, docker_host, params_json, containers_json, secrets_json, retention_json, project, proxmox_node, proxmox_vmid, excludes_json, kind, guest_json`
 
 // scanService reads one serviceColumns row.
 func scanService(row interface{ Scan(...any) error }) (Service, error) {
 	var s Service
-	var paramsJSON, containersJSON, secretsJSON, retentionJSON, excludesJSON string
-	if err := row.Scan(&s.Name, &s.CatalogEntry, &s.Destination, &s.DockerHost, &paramsJSON, &containersJSON, &secretsJSON, &retentionJSON, &s.Project, &s.ProxmoxNode, &s.ProxmoxVMID, &excludesJSON); err != nil {
+	var paramsJSON, containersJSON, secretsJSON, retentionJSON, excludesJSON, guestJSON string
+	if err := row.Scan(&s.Name, &s.CatalogEntry, &s.Destination, &s.DockerHost, &paramsJSON, &containersJSON, &secretsJSON, &retentionJSON, &s.Project, &s.ProxmoxNode, &s.ProxmoxVMID, &excludesJSON, &s.Kind, &guestJSON); err != nil {
 		return Service{}, err
 	}
 	var err error
@@ -683,6 +747,12 @@ func scanService(row interface{ Scan(...any) error }) (Service, error) {
 	if excludesJSON != "" {
 		if err := json.Unmarshal([]byte(excludesJSON), &s.Excludes); err != nil {
 			return Service{}, fmt.Errorf("service %s: decoding excludes: %w", s.Name, err)
+		}
+	}
+	if guestJSON != "" {
+		s.Guest = &GuestJob{}
+		if err := json.Unmarshal([]byte(guestJSON), s.Guest); err != nil {
+			return Service{}, fmt.Errorf("service %s: decoding guest job: %w", s.Name, err)
 		}
 	}
 	if retentionJSON != "" {

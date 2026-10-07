@@ -100,6 +100,9 @@ func (cl *Client) VerifyGuestConfig(ctx context.Context, res GuestBackupResult) 
 	if found.Size <= 0 {
 		return fail("the backup file %s is empty", res.Volume)
 	}
+	if res.Size > 0 && found.Size != res.Size {
+		return fail("the backup file %s is %d bytes now but Proxmox reported %d when it finished", res.Volume, found.Size, res.Size)
+	}
 	conf, err := cl.ExtractConfig(ctx, res.Node, res.Volume)
 	if err != nil {
 		return fail("the guest's settings could not be read back out of the backup: %v", err)

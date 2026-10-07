@@ -391,3 +391,43 @@ func TestMigration017GivesEveryServiceOneTarget(t *testing.T) {
 		t.Errorf("target = %q parts %q retention %q, want ssd, all parts, the service's retention", dest, parts, ret)
 	}
 }
+
+// TestMigration018KeepsServicesAndTargets proves rebuilding the services
+// table (to allow a guest job with no destination) loses no service and
+// no destination target.
+func TestMigration018KeepsServicesAndTargets(t *testing.T) {
+	s, err := Open(filepath.Join(t.TempDir(), "ballast.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	db := s.DB()
+	for _, q := range []string{
+		`DROP TABLE proxmox_dumps`,
+		`DELETE FROM schema_migrations WHERE version = 18`,
+		`INSERT INTO destinations (name, location, password_credential, created_at, updated_at) VALUES ('ssd', '/srv', 'pw', 'now', 'now')`,
+		`INSERT INTO services (name, catalog_entry, destination, retention_json, project, created_at, updated_at) VALUES ('immich', 'immich', 'ssd', '{"keep_daily":2}', 'photos', 'now', 'now')`,
+		`INSERT INTO service_targets (service, position, destination) VALUES ('immich', 0, 'ssd')`,
+	} {
+		if _, err := db.Exec(q); err != nil {
+			t.Fatalf("%s: %v", q, err)
+		}
+	}
+	if err := migrate(db); err != nil {
+		t.Fatalf("migrate: %v", err)
+	}
+	var dest, project, kind string
+	if err := db.QueryRow(`SELECT destination, project, kind FROM services WHERE name = 'immich'`).Scan(&dest, &project, &kind); err != nil {
+		t.Fatalf("reading migrated service: %v", err)
+	}
+	if dest != "ssd" || project != "photos" || kind != "" {
+		t.Errorf("service = %q %q %q", dest, project, kind)
+	}
+	var n int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM service_targets WHERE service = 'immich'`).Scan(&n); err != nil || n != 1 {
+		t.Errorf("targets after rebuild = %d (%v), want 1", n, err)
+	}
+	if _, err := db.Exec(`INSERT INTO services (name, catalog_entry, created_at, updated_at) VALUES ('g', 'proxmox-guest', 'now', 'now')`); err != nil {
+		t.Errorf("a service with no destination must be allowed: %v", err)
+	}
+}

@@ -835,3 +835,43 @@ func TestDeleteDumpURLEscaping(t *testing.T) {
 		t.Errorf("unescaped path = %q, want containing %q", unescaped, volume)
 	}
 }
+
+func TestPruneOwnedNeverTouchesForeignDumps(t *testing.T) {
+	dumps := []DumpVolume{
+		{Volume: "s:backup/vzdump-lxc-100-d.tar.zst", CTime: 4, Size: 1, VMID: 100},
+		{Volume: "s:backup/vzdump-lxc-100-c.tar.zst", CTime: 3, Size: 1, VMID: 100}, // foreign
+		{Volume: "s:backup/vzdump-lxc-100-b.tar.zst", CTime: 2, Size: 1, VMID: 100},
+		{Volume: "s:backup/vzdump-lxc-100-a.tar.zst", CTime: 1, Size: 1, VMID: 100},
+	}
+	var deleted []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodDelete {
+			deleted = append(deleted, r.URL.Path[strings.Index(r.URL.Path, "/content/")+len("/content/"):])
+			_, _ = w.Write([]byte(`{"data":""}`))
+			return
+		}
+		b, _ := json.Marshal(map[string]any{"data": dumps})
+		_, _ = w.Write(b)
+	}))
+	defer srv.Close()
+	cl := &Client{Host: srv.URL, TokenID: "u@pve!t", TokenSecret: "x", HTTPClient: srv.Client()}
+	owned := []string{"s:backup/vzdump-lxc-100-d.tar.zst", "s:backup/vzdump-lxc-100-b.tar.zst", "s:backup/vzdump-lxc-100-a.tar.zst", "s:backup/vzdump-lxc-100-vanished.tar.zst"}
+	pruned, gone, err := cl.PruneOwned(context.Background(), "pve", "s", 100, owned, 1, time.Millisecond)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(pruned) != 2 || pruned[0] != "s:backup/vzdump-lxc-100-b.tar.zst" || pruned[1] != "s:backup/vzdump-lxc-100-a.tar.zst" {
+		t.Errorf("pruned = %v, want the two oldest owned dumps", pruned)
+	}
+	if len(gone) != 1 || !strings.Contains(gone[0], "vanished") {
+		t.Errorf("gone = %v", gone)
+	}
+	for _, d := range deleted {
+		if strings.Contains(d, "-c.") {
+			t.Errorf("deleted the foreign dump %s", d)
+		}
+	}
+	if p, _, _ := cl.PruneOwned(context.Background(), "pve", "s", 100, owned, 0, time.Millisecond); p != nil {
+		t.Errorf("keep-last 0 must prune nothing, got %v", p)
+	}
+}
