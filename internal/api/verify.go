@@ -202,7 +202,9 @@ func (o *Ops) runVerifyChecks(ctx context.Context, service string, checkers []ve
 		vres := checker.Check(ctx, verify.Request{Service: service, Artifacts: artifacts, SourceContainer: sourceContainer})
 		c := VerifyCheck{Method: vres.Method, Passed: vres.Passed, Warning: o.redact(vres.Warning), Detail: o.redact(vres.Detail)}
 		checks = append(checks, c)
-		if !c.Passed {
+		if vres.Unverifiable {
+			unverifiable = true
+		} else if !c.Passed {
 			failed = true
 		}
 	}

@@ -190,11 +190,6 @@ func TestForValidation(t *testing.T) {
 			entry: &catalog.Entry{Service: "svc", Verify: catalog.Verify{Method: "read-back"}},
 			opts:  Options{Runner: r}, wantErr: `verification method "read-back" is not available`,
 		},
-		{
-			name:  "exec-script is not available",
-			entry: &catalog.Entry{Service: "svc", Verify: catalog.Verify{Method: "exec-script"}},
-			opts:  Options{Runner: r}, wantErr: `verification method "exec-script" is not available`,
-		},
 	}
 
 	for _, tt := range tests {

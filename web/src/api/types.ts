@@ -486,3 +486,25 @@ export interface ProxmoxGuest {
   name: string;
   status: string;
 }
+
+/** A starting point for a custom catalog entry. */
+export interface CatalogTemplate {
+  id: string;
+  label: string;
+  description: string;
+  yaml: string;
+}
+
+/** The result of checking a custom catalog entry's text. */
+export interface CatalogValidation {
+  valid: boolean;
+  service?: string;
+  error?: string;
+  notice?: string;
+}
+
+/** Where an installed custom entry was saved. */
+export interface CatalogInstallResult {
+  service: string;
+  path: string;
+}

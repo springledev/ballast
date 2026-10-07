@@ -45,6 +45,7 @@ onMounted(checkSession);
 
       <div class="nav-group">Settings</div>
       <router-link to="/services">Backups</router-link>
+      <router-link to="/custom-services">Custom services</router-link>
       <router-link to="/destinations">Destinations</router-link>
       <router-link to="/docker-hosts">Docker hosts</router-link>
       <router-link to="/proxmox">Proxmox</router-link>

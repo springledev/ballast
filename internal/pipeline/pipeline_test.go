@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"fmt"
 	"github.com/springledev/keel/dockerhost"
 	"os"
 	"path/filepath"
@@ -914,5 +915,79 @@ func TestRunEnvFileSecret(t *testing.T) {
 	state, err := p.Run(context.Background(), "dumpsecret")
 	if state != engine.FAILED || err == nil || !strings.Contains(err.Error(), envPath) || !strings.Contains(err.Error(), "DB_PASSWORD") {
 		t.Fatalf("Run = %s, %v; want FAILED naming %s and DB_PASSWORD", state, err, envPath)
+	}
+}
+
+// execScriptEntryYAML is an exec service; %s is the verifyScript line
+// (empty for none).
+const execScriptEntryYAML = `apiVersion: ballast.dev/v1
+service: myexec
+version: 1
+backup:
+  strategy: exec
+  exec:
+    script: %s
+%s
+verify:
+  method: exec-script
+`
+
+// TestRunExecScriptVerification checks the exec-script contract end to
+// end: a passing verify script is green, a failing one is red, and an
+// exec service without one is amber (never green).
+func TestRunExecScriptVerification(t *testing.T) {
+	tests := []struct {
+		name        string
+		verifyBody  string // "" = no verifyScript
+		wantState   engine.State
+		wantRecord  bool
+		wantPassing bool
+	}{
+		{"passing verify script", "#!/bin/sh\ntest -s \"$BALLAST_ARTIFACT_DIR/out.txt\"\n", engine.SUCCESS, true, true},
+		{"failing verify script", "#!/bin/sh\nexit 1\n", engine.FAILED, true, false},
+		{"no verify script", "", engine.SUCCESS_UNVERIFIED, true, false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			h := newHarness(t)
+			if err := inventory.PutService(h.db, inventory.Service{Name: "myexec", CatalogEntry: "myexec", Destination: "local"}); err != nil {
+				t.Fatalf("PutService: %v", err)
+			}
+			backup := writeStub(t, "backup.sh", "#!/bin/sh\necho data > \"$BALLAST_ARTIFACT_DIR/out.txt\"\n")
+			verifyLine := ""
+			if tt.verifyBody != "" {
+				verifyLine = "    verifyScript: " + writeStub(t, "verify.sh", tt.verifyBody)
+			}
+			p := h.pipeline()
+			p.Catalog = registryWith(t, map[string]string{"myexec.yaml": fmt.Sprintf(execScriptEntryYAML, backup, verifyLine)})
+
+			state, _ := p.Run(context.Background(), "myexec")
+			if state != tt.wantState {
+				t.Fatalf("state = %s, want %s", state, tt.wantState)
+			}
+			runs, err := engine.RecentRuns(h.db, "myexec", 1)
+			if err != nil || len(runs) != 1 {
+				t.Fatalf("RecentRuns: %v, %v", runs, err)
+			}
+			if seq := transitionsOf(t, h.db, runs[0].ID); !containsInOrder(seq, string(engine.VERIFYING), string(tt.wantState)) {
+				t.Errorf("transitions = %v, want VERIFYING then %s", seq, tt.wantState)
+			}
+			results, err := engine.VerificationResults(h.db, runs[0].ID)
+			if err != nil {
+				t.Fatalf("VerificationResults: %v", err)
+			}
+			var found bool
+			for _, r := range results {
+				if r.Method == "exec-script" {
+					found = true
+					if r.Passed != tt.wantPassing {
+						t.Errorf("exec-script Passed = %v, want %v (%s)", r.Passed, tt.wantPassing, r.Detail)
+					}
+				}
+			}
+			if found != tt.wantRecord {
+				t.Errorf("exec-script record present = %v, want %v", found, tt.wantRecord)
+			}
+		})
 	}
 }

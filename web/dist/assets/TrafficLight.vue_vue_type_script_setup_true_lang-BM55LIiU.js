@@ -1,1 +1,0 @@
-import{l as t}from"./status-Batsdnr1.js";import{d as e,k as s,c as l,n,t as r,p as i}from"./index-hpkfQ-cP.js";const f=e({__name:"TrafficLight",props:{light:{}},setup(a){return(o,c)=>(s(),l("span",{class:n(["lamp",`lamp--${a.light}`])},r(i(t)[a.light]),3))}});export{f as _};

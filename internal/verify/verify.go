@@ -27,8 +27,12 @@
 //     inside its own network succeeds (spec §7.4).
 //
 // An entry may declare several methods; every one must pass. A method
-// with no registered factory ("read-back" and "exec-script" today) is
+// with no registered factory ("read-back" today) is
 // a hard error from For — never a silent pass.
+//
+//   - exec-script: runs the entry's exec.verifyScript over the backup
+//     files; exit 0 verifies. With no verifyScript the result is
+//     unverifiable (amber).
 package verify
 
 import (
@@ -58,6 +62,11 @@ type Result struct {
 	// Passed is the verdict. Anything that is not Passed fails the
 	// VERIFYING phase.
 	Passed bool
+
+	// Unverifiable marks a result that is not a failure but could not
+	// prove anything (for example an exec service with no verify
+	// script). The run ends amber, never green and never red.
+	Unverifiable bool
 
 	// Warning is a non-fatal notice worth showing (image drift
 	// between the live container and the verify image, a command
@@ -206,6 +215,7 @@ func DefaultRegistry() *Registry {
 	r.Register(MethodDBRestoreDrill, newDBRestoreDrill)
 	r.Register(MethodRestartSmoke, newRestartSmoke)
 	r.Register(MethodComposeConfig, newComposeConfig)
+	r.Register(MethodExecScript, newExecScript)
 	return r
 }
 

@@ -364,8 +364,8 @@ func (p *Pipeline) Run(ctx context.Context, service string) (engine.State, error
 			rt.state, rt.detail = engine.FAILED, fmt.Sprintf("verification failed (%s): %s", sharedFail.rec.Method, sharedFail.rec.Detail)
 		case hard:
 			rt.state, rt.detail = engine.FAILED, fmt.Sprintf("verification failed (%s): %s", failed.rec.Method, failed.rec.Detail)
-		case anyUnverifiable(rt.checks):
-			rt.state, rt.detail = engine.SUCCESS_UNVERIFIED, "backup uploaded but could not be fully verified: "+unverifiableSummary(rt.checks)
+		case anyUnverifiable(rt.checks) || anyUnverifiable(shared):
+			rt.state, rt.detail = engine.SUCCESS_UNVERIFIED, "backup uploaded but could not be fully verified: "+unverifiableSummary(append(append([]verifyCheck(nil), shared...), rt.checks...))
 		default:
 			rt.state, rt.detail = engine.SUCCESS, "backup verified"
 		}
@@ -436,7 +436,7 @@ func (p *Pipeline) runCheckers(ctx context.Context, service string, entry *catal
 		if err := ctx.Err(); err != nil {
 			return nil, false, err
 		}
-		checks = append(checks, verifyCheck{rec: p.toRecord(vres)})
+		checks = append(checks, verifyCheck{rec: p.toRecord(vres), unverifiable: vres.Unverifiable})
 	}
 	return checks, foldArchive, nil
 }

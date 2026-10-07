@@ -48,6 +48,9 @@ func NewAuthedHandler(ops *Ops, auth *Auth) http.Handler {
 
 	protected.HandleFunc("GET /api/v1/status", h.status)
 	protected.HandleFunc("GET /api/v1/catalog", h.catalog)
+	protected.HandleFunc("GET /api/v1/catalog/templates", h.catalogTemplates)
+	protected.HandleFunc("POST /api/v1/catalog/validate", h.validateCatalog)
+	protected.HandleFunc("POST /api/v1/catalog/custom", h.installCatalog)
 	protected.HandleFunc("GET /api/v1/detect", h.detect)
 	protected.HandleFunc("GET /api/v1/preflight", h.preflight)
 	protected.HandleFunc("GET /api/v1/doctor", h.doctor)
@@ -195,6 +198,39 @@ func (h *handler) status(w http.ResponseWriter, r *http.Request) {
 
 func (h *handler) catalog(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, h.ops.ListCatalog())
+}
+
+func (h *handler) catalogTemplates(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, http.StatusOK, h.ops.CatalogTemplates())
+}
+
+// validateCatalog checks entry text as the user types. A bad entry is
+// a normal answer (valid=false), not an HTTP error.
+func (h *handler) validateCatalog(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		YAML string `json:"yaml"`
+	}
+	if err := decodeJSON(r, &body); err != nil {
+		h.writeErr(w, err, http.StatusBadRequest)
+		return
+	}
+	writeJSON(w, http.StatusOK, h.ops.ValidateCatalogYAML(body.YAML))
+}
+
+func (h *handler) installCatalog(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		YAML string `json:"yaml"`
+	}
+	if err := decodeJSON(r, &body); err != nil {
+		h.writeErr(w, err, http.StatusBadRequest)
+		return
+	}
+	res, err := h.ops.InstallCatalogYAML(body.YAML)
+	if err != nil {
+		h.writeErr(w, err, http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, http.StatusCreated, res)
 }
 
 func (h *handler) detect(w http.ResponseWriter, r *http.Request) {

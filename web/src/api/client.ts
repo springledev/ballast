@@ -2,7 +2,10 @@ import { markSignedOut } from "./auth";
 import type {
   ApiErrorBody,
   BallastHealth,
+  CatalogInstallResult,
   CatalogSummary, EnvSourceProposal,
+  CatalogTemplate,
+  CatalogValidation,
   ChannelInput,
   ChannelView,
   CreateDestinationRequest,
@@ -112,6 +115,15 @@ export const api = {
   },
   catalog(): Promise<CatalogSummary[]> {
     return request("GET", `${base}/catalog`);
+  },
+  catalogTemplates(): Promise<CatalogTemplate[]> {
+    return request("GET", `${base}/catalog/templates`);
+  },
+  validateCatalog(yaml: string): Promise<CatalogValidation> {
+    return request("POST", `${base}/catalog/validate`, { yaml });
+  },
+  installCatalog(yaml: string): Promise<CatalogInstallResult> {
+    return request("POST", `${base}/catalog/custom`, { yaml });
   },
   readEnvSource(entry: string, dir: string): Promise<EnvSourceProposal> {
     return request("POST", `${base}/catalog/${encodeURIComponent(entry)}/env-source`, { dir });

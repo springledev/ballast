@@ -10,6 +10,7 @@ const router = createRouter({
     { path: "/", redirect: "/dashboard" },
     { path: "/dashboard", name: "dashboard", component: () => import("./views/DashboardView.vue") },
     { path: "/services", name: "services", component: () => import("./views/ServicesView.vue") },
+    { path: "/custom-services", name: "custom-services", component: () => import("./views/CustomServicesView.vue") },
     { path: "/destinations", name: "destinations", component: () => import("./views/DestinationsView.vue") },
     { path: "/docker-hosts", name: "docker-hosts", component: () => import("./views/DockerHostsView.vue") },
     { path: "/proxmox", name: "proxmox", component: () => import("./views/ProxmoxView.vue") },

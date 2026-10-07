@@ -70,6 +70,10 @@ type Ops struct {
 	protonMu     sync.Mutex
 	protonLogins map[string]*protondrive.Login
 
+	// CatalogDirs are the user catalog directories; custom entries
+	// created in the web UI are installed into the first one.
+	CatalogDirs []string
+
 	// Repo builds a restic.Repository for a destination, using the
 	// same Runner/CredDir/ResticBin the pipeline uses. Built by wiring.
 	Repo func(dest inventory.Destination) (*restic.Repository, error)

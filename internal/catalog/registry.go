@@ -5,13 +5,18 @@ import (
 	"io/fs"
 	"path/filepath"
 	"sort"
+	"sync"
 )
 
 // Registry is a loaded, merged set of catalog entries (spec §6):
 // bundled entries embedded in the binary, overlaid with entries from
 // user catalog directories (~/.config/ballast/catalog.d/ by default).
 // A Registry is read-only after LoadRegistry returns.
+//
+// Entries installed from the UI are added while Ballast is running
+// (Install), so lookups are guarded by a mutex.
 type Registry struct {
+	mu      sync.RWMutex
 	entries map[string]registryEntry
 }
 
@@ -90,6 +95,8 @@ func (r *Registry) loadUserDir(dir string) error {
 // or other callers. ok is false when no entry with that service name
 // is loaded.
 func (r *Registry) Get(service string) (*Entry, bool) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
 	e, ok := r.entries[service]
 	if !ok {
 		return nil, false
@@ -100,6 +107,8 @@ func (r *Registry) Get(service string) (*Entry, bool) {
 // List returns every loaded entry, sorted by service name, each a
 // deep copy safe for the caller to mutate.
 func (r *Registry) List() []*Entry {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
 	names := make([]string, 0, len(r.entries))
 	for name := range r.entries {
 		names = append(names, name)
@@ -110,4 +119,37 @@ func (r *Registry) List() []*Entry {
 		out = append(out, r.entries[name].entry.DeepCopy())
 	}
 	return out
+}
+
+// Install adds a user entry that was just written to path, so a running
+// Ballast sees it without a restart. Installing over a bundled entry or
+// over a different user file for the same service is refused: the first
+// would silently replace a built-in definition, the second would make
+// the next start fail with a "defined in two user files" error.
+// Re-installing the same path updates the entry in place.
+func (r *Registry) Install(entry *Entry, path string) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if existing, ok := r.entries[entry.Service]; ok {
+		switch {
+		case !existing.fromUser:
+			return fmt.Errorf("service %q is a built-in catalog entry; pick a different service name for your own entry", entry.Service)
+		case existing.source != path:
+			return fmt.Errorf("service %q is already defined in %s; pick a different service name", entry.Service, existing.source)
+		}
+	}
+	if r.entries == nil {
+		r.entries = map[string]registryEntry{}
+	}
+	r.entries[entry.Service] = registryEntry{entry: entry, source: path, fromUser: true}
+	return nil
+}
+
+// IsUser reports whether the named entry came from a user catalog
+// directory (as opposed to being built in).
+func (r *Registry) IsUser(service string) bool {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	e, ok := r.entries[service]
+	return ok && e.fromUser
 }

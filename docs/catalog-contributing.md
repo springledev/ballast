@@ -135,14 +135,25 @@ empty string, that empty string wins, not the default.
 | `volume` | Copies each named Docker volume in `volumes` into a tar archive using a small temporary helper container on the service's Docker host (works the same on remote hosts; no host folders needed). With `stopStart.containers` set, those containers are stopped during the copy and always started again; without it the volume is copied live. | The data lives in a named Docker volume rather than a folder you can point at. Stop the containers for anything that writes constantly (databases); live is fine for media and rarely-changing files. See `catalog/docker-volume.yaml` and `catalog/docker-volume-live.yaml`. |
 | `files` | Backs up `files` paths directly, no container involved. | A plain folder, or any data that's already safe to read live. |
 | `compose` | Finds the named Docker Compose project by its containers' own Compose labels (never a host path you supply), and archives its config files (`docker-compose.yml` and any override files it was started from) plus `.env`, when present, through a small temporary helper container — works the same on remote hosts. Also captures each container's name, image and labels (never its environment variables — those commonly carry secrets) as a second artifact. | You want the stack's own configuration backed up alongside its data, so a full-stack restore has something to recreate the containers from. Config-only: pair it with `volume`/`dump` entries for the project's actual data. See `catalog/docker-compose.yaml`. |
-| `exec` | Runs a user-provided script instead of a built-in strategy. | **Not available for general use in v0.1** — this is a reserved Phase-2 interface (mobile/external triggers), tested only with stub scripts. Don't build a catalog entry around it yet. |
+| `exec` | Runs a user-provided script instead of a built-in strategy. | Your own backup logic. The script writes its files into `$BALLAST_ARTIFACT_DIR` and exits 0. Pair it with `exec.verifyScript` and the `exec-script` method so Ballast can prove the backup restores. The web UI's **Custom services** page has a script template. |
 
 ## Choosing a verification method
 
-Three methods are available today: **`archive-integrity`**, **`db-restore-drill`**
+Four methods are available today: **`archive-integrity`**, **`db-restore-drill`**
 (formerly called `container-restore`; the old name still works as an alias),
-and **`restart-smoke`**. Two others — `read-back` and `exec-script` — pass schema
-validation but are not yet implemented; don't declare them in a catalog entry.
+**`restart-smoke`** and **`exec-script`**. `read-back` passes schema validation
+but is not implemented; don't declare it in a catalog entry.
+
+**`exec-script`** runs the entry's `exec.verifyScript` with
+`BALLAST_ARTIFACT_DIR` set to the folder holding the backup files; exit 0 means
+verified, anything else fails the run. An `exec` entry with no `verifyScript`
+cannot be proven, so its light stays amber, never green.
+
+You do not need a terminal to add your own entry: the **Custom services** page
+in the web UI offers templates (database dump, stop-and-copy folder, volume,
+script), checks your YAML as you type with the same rules as
+`ballast catalog validate`, and installs it into your `catalog.d` folder.
+Built-in names cannot be replaced from the UI.
 
 You can declare either a single `verify.method` or a list `verify.methods`
 where all listed methods must pass. Every backup that reaches the verification
