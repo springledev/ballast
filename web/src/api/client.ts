@@ -20,6 +20,7 @@ import type {
   DockerHostTestResult,
   DockerVolume,
   ExcludePreview,
+  ServicePreview,
   NotificationSettings,
   PreflightResult,
   ProxmoxConnection,
@@ -147,6 +148,9 @@ export const api = {
   },
   updateService(name: string, s: Service): Promise<Service> {
     return request("PUT", `${base}/services/${encodeURIComponent(name)}`, s);
+  },
+  servicePreview(name: string): Promise<ServicePreview> {
+    return request("GET", `${base}/services/${encodeURIComponent(name)}/preview`);
   },
   previewExcludes(name: string, excludes: string[]): Promise<ExcludePreview> {
     return request("POST", `${base}/services/${encodeURIComponent(name)}/excludes/preview`, { excludes });

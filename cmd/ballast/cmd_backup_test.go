@@ -73,3 +73,27 @@ func TestBackupCommandInterruptedPreviousRunIsWarningNotFailure(t *testing.T) {
 		t.Errorf("ran = %v, want [immich]", r.ran)
 	}
 }
+
+func TestBackupPreviewRunsNothing(t *testing.T) {
+	withStubRestic(t)
+	r := &spyRunner{}
+	cliEnv(t, r)
+	if _, err := execCLI(t, "destination", "add", "local", "--location", "/srv/backups"); err != nil {
+		t.Fatalf("destination add: %v", err)
+	}
+	if _, err := execCLI(t, "service", "add", "immich", "--catalog", "folder", "--destination", "local", "--param", "path=/tmp"); err != nil {
+		t.Fatalf("service add: %v", err)
+	}
+	// Flags live on the shared command; reset so later tests run normally.
+	t.Cleanup(func() { _ = backupCmd.Flags().Set("preview", "false") })
+	out, err := execCLI(t, "backup", "immich", "--preview")
+	if err != nil {
+		t.Fatalf("backup --preview: %v (output %q)", err, out)
+	}
+	if !strings.Contains(out, "nothing was run") || !strings.Contains(out, "Where it goes") {
+		t.Errorf("output = %q, want a preview", out)
+	}
+	if len(r.ran) != 0 {
+		t.Errorf("ran = %v, want nothing", r.ran)
+	}
+}

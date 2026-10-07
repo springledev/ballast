@@ -117,6 +117,34 @@ export interface ExcludePreview {
   note?: string;
 }
 
+/** One part of a backup in a preview. */
+export interface PreviewPart {
+  name: string;
+  what: string;
+  goes: string[];
+}
+
+/** One destination in a preview. */
+export interface PreviewTarget {
+  destination: string;
+  parts: string[];
+  secondary?: boolean;
+  keeps?: string;
+  note?: string;
+}
+
+/** What a backup of a service would do, worked out without running it. */
+export interface ServicePreview {
+  service: string;
+  parts: PreviewPart[];
+  targets: PreviewTarget[];
+  estimated_bytes?: number;
+  stop_containers: string[];
+  stopped_seconds?: number;
+  excludes: string[];
+  notes?: string[];
+}
+
 /** One service's outcome within a full-stack restore (`ballast restore-project`). */
 export interface RestoreProjectResult {
   service: string;

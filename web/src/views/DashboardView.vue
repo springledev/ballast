@@ -7,6 +7,7 @@ import { api } from "@/api/client";
 import type { HealthItem, ServiceStatus } from "@/api/types";
 import { anyServiceVerified, checklistComplete, firstRunChecklist } from "@/lib/checklist";
 import { formatAgeSeconds, formatDateTime, formatRelative } from "@/lib/format";
+import { emptyProgress, parseProgress, scriptSteps, type ScriptProgress } from "@/lib/replaceScript";
 import { describeSchedule } from "@/lib/schedule";
 import { describeTier, summarize, worstLight } from "@/lib/status";
 
@@ -31,6 +32,39 @@ const checklist = computed(() =>
     : [],
 );
 const showChecklist = computed(() => checklist.value.length > 0 && !checklistComplete(checklist.value));
+
+// "Replace a script" tracker: ticked by hand, kept in this browser only.
+const SCRIPT_KEY = "ballast_replace_script";
+const scriptProgress = ref<Record<string, ScriptProgress>>({});
+const scriptOpen = ref(true);
+try {
+  scriptProgress.value = parseProgress(localStorage.getItem(SCRIPT_KEY));
+  scriptOpen.value = localStorage.getItem(SCRIPT_KEY + "_hidden") !== "1";
+} catch {
+  /* private window: start empty */
+}
+
+function progressFor(name: string): ScriptProgress {
+  return scriptProgress.value[name] ?? emptyProgress();
+}
+
+function tickStep(name: string, key: keyof ScriptProgress, value: boolean) {
+  scriptProgress.value = { ...scriptProgress.value, [name]: { ...progressFor(name), [key]: value } };
+  try {
+    localStorage.setItem(SCRIPT_KEY, JSON.stringify(scriptProgress.value));
+  } catch {
+    /* not saved; still works until the page is closed */
+  }
+}
+
+function hideScriptPanel() {
+  scriptOpen.value = false;
+  try {
+    localStorage.setItem(SCRIPT_KEY + "_hidden", "1");
+  } catch {
+    /* ignore */
+  }
+}
 
 const healthLabels: Record<HealthItem["area"], string> = {
   "self-backup": "Ballast's own backup",
@@ -146,6 +180,31 @@ onUnmounted(() => clearInterval(timer));
           <router-link v-else :to="item.to">{{ item.label }}</router-link>
         </li>
       </ul>
+    </div>
+
+    <div v-if="services.length > 0 && scriptOpen" class="panel">
+      <h3 style="margin-top: 0">Replacing a backup script?</h3>
+      <p class="muted">
+        Run Ballast beside your script first. Tick each step as you go; the last one unlocks when the service is green. The guide is in docs/replace-a-script.md.
+      </p>
+      <div v-for="s in services" :key="s.service" style="margin: 0.5rem 0">
+        <strong>{{ s.service }}</strong>
+        <ul style="list-style: none; padding: 0; margin: 0.2rem 0 0">
+          <li v-for="step in scriptSteps(progressFor(s.service), worstLight(s))" :key="step.key">
+            <label v-if="step.key !== 'retire'">
+              <input
+                type="checkbox"
+                :checked="step.done"
+                :disabled="!step.enabled"
+                @change="tickStep(s.service, step.key as keyof ScriptProgress, ($event.target as HTMLInputElement).checked)"
+              />
+              {{ step.label }}
+            </label>
+            <span v-else :class="step.enabled ? '' : 'muted'">{{ step.enabled ? "✓" : "…" }} {{ step.label }}. {{ step.hint }}</span>
+          </li>
+        </ul>
+      </div>
+      <button class="btn btn-quiet" type="button" @click="hideScriptPanel">I'm done with this</button>
     </div>
 
     <div v-if="services.length === 0" class="empty">

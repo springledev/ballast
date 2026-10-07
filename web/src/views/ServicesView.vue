@@ -2,7 +2,7 @@
 import { computed, onMounted, reactive, ref, watch } from "vue";
 
 import { api } from "@/api/client";
-import type { CatalogSummary, Destination, DockerComposeProject, ExcludePreview, DockerHost, DockerVolume, ProxmoxGuest, Retention, Service, ServiceTarget, Snapshot } from "@/api/types";
+import type { CatalogSummary, Destination, DockerComposeProject, ExcludePreview, ServicePreview, DockerHost, DockerVolume, ProxmoxGuest, Retention, Service, ServiceTarget, Snapshot } from "@/api/types";
 import { formatBytes, formatDateTime, formatRelative } from "@/lib/format";
 import { describeServiceRetention } from "@/lib/retention";
 
@@ -117,6 +117,20 @@ async function saveRetentionOverride(s: Service) {
 const excludeText = reactive<Record<string, string>>({});
 const excludePreviews = reactive<Record<string, ExcludePreview | undefined>>({});
 const excludeBusy = ref<Set<string>>(new Set());
+const previews = reactive<Record<string, ServicePreview | undefined>>({});
+const previewBusy = ref<Set<string>>(new Set());
+
+async function loadPreview(s: Service) {
+  previewBusy.value.add(s.name);
+  error.value = "";
+  try {
+    previews[s.name] = await api.servicePreview(s.name);
+  } catch (e) {
+    error.value = (e as Error).message;
+  } finally {
+    previewBusy.value.delete(s.name);
+  }
+}
 
 function excludeTextFor(s: Service): string {
   if (excludeText[s.name] === undefined) excludeText[s.name] = (s.excludes ?? []).join("\n");
@@ -600,6 +614,43 @@ onMounted(load);
               >
                 Use {{ s.destination }}'s setting
               </button>
+            </div>
+          </div>
+        </details>
+
+        <details class="advanced">
+          <summary>What would a backup do?</summary>
+          <div class="advanced-body">
+            <p class="hint">A look ahead. Nothing is backed up, stopped or changed.</p>
+            <div class="actions">
+              <button class="btn btn-quiet" type="button" :disabled="previewBusy.has(s.name)" @click="loadPreview(s)">
+                Show me
+              </button>
+            </div>
+            <div v-if="previews[s.name]" class="hint">
+              <p v-if="previews[s.name]!.stop_containers.length">
+                Stops {{ previews[s.name]!.stop_containers.join(", ") }} while the data is copied<template
+                  v-if="previews[s.name]!.stopped_seconds !== undefined"
+                  >; last time that took about {{ previews[s.name]!.stopped_seconds }} seconds</template
+                >.
+              </p>
+              <p v-else>Nothing is stopped; the service keeps running.</p>
+              <p v-if="previews[s.name]!.estimated_bytes !== undefined">
+                About {{ formatBytes(previews[s.name]!.estimated_bytes!) }} of folders on this machine.
+              </p>
+              <ul>
+                <li v-for="p in previews[s.name]!.parts" :key="p.name">
+                  <strong>{{ p.name }}</strong>: {{ p.what }}. Goes to {{ p.goes.length ? p.goes.join(", ") : "nowhere" }}.
+                </li>
+              </ul>
+              <ul>
+                <li v-for="t in previews[s.name]!.targets" :key="t.destination">
+                  <strong>{{ t.destination }}</strong
+                  ><template v-if="t.secondary"> (second copy)</template>: keeps {{ t.keeps }}. {{ t.note }}
+                </li>
+              </ul>
+              <p v-if="previews[s.name]!.excludes.length">Skipped: {{ previews[s.name]!.excludes.join(", ") }}</p>
+              <p v-for="n in previews[s.name]!.notes" :key="n">{{ n }}</p>
             </div>
           </div>
         </details>

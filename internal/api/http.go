@@ -65,6 +65,7 @@ func NewAuthedHandler(ops *Ops, auth *Auth) http.Handler {
 	protected.HandleFunc("PUT /api/v1/services/{name}", h.putService)
 	protected.HandleFunc("DELETE /api/v1/services/{name}", h.deleteService)
 	protected.HandleFunc("POST /api/v1/services/{name}/excludes/preview", h.previewExcludes)
+	protected.HandleFunc("GET /api/v1/services/{name}/preview", h.previewService)
 	protected.HandleFunc("POST /api/v1/services/{name}/backup", h.startBackup)
 	protected.HandleFunc("GET /api/v1/services/{name}/snapshots", h.snapshots)
 	protected.HandleFunc("POST /api/v1/services/{name}/verify", h.verifyService)
@@ -310,6 +311,15 @@ func (h *handler) deleteService(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+func (h *handler) previewService(w http.ResponseWriter, r *http.Request) {
+	res, err := h.ops.Preview(r.Context(), pathName(r))
+	if err != nil {
+		h.writeErr(w, err, http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, http.StatusOK, res)
 }
 
 func (h *handler) previewExcludes(w http.ResponseWriter, r *http.Request) {
