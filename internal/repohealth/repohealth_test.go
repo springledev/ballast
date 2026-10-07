@@ -257,3 +257,22 @@ func TestCheckBusy(t *testing.T) {
 		t.Errorf("after finishing: %v", err)
 	}
 }
+
+func TestListSkipsProtonDriveCopies(t *testing.T) {
+	f := newFixture(t)
+	if err := inventory.PutDestination(f.db, inventory.Destination{Name: "proton", Type: backend.ProtonDrive}); err != nil {
+		t.Fatal(err)
+	}
+	list, err := f.c.List()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, st := range list {
+		if st.Destination == "proton" {
+			t.Errorf("a Proton Drive copy has no repository to check but was listed: %+v", st)
+		}
+	}
+	if len(list) != 1 {
+		t.Errorf("list = %+v, want only the restic destination", list)
+	}
+}

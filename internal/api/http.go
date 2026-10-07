@@ -88,6 +88,8 @@ func NewAuthedHandler(ops *Ops, auth *Auth) http.Handler {
 	protected.HandleFunc("DELETE /api/v1/destinations/{name}", h.deleteDestination)
 	protected.HandleFunc("POST /api/v1/destinations/{name}/test", h.testDestination)
 	protected.HandleFunc("POST /api/v1/destinations/{name}/init", h.initDestination)
+	protected.HandleFunc("POST /api/v1/destinations/{name}/proton/sign-in", h.protonSignIn)
+	protected.HandleFunc("GET /api/v1/destinations/{name}/proton/sign-in", h.protonSignInStatus)
 	protected.HandleFunc("GET /api/v1/destinations/health", h.listRepoHealth)
 	protected.HandleFunc("GET /api/v1/destinations/{name}/health", h.getRepoHealth)
 	protected.HandleFunc("PUT /api/v1/destinations/{name}/health", h.putRepoHealth)

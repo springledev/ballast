@@ -47,10 +47,22 @@ const (
 	// (rest-server, rclone:, ...). Ballast manages no backend
 	// credentials for it.
 	Custom Type = "custom"
+	// ProtonDrive is a second copy of verified backup files in Proton
+	// Drive, sent with Proton's official command-line tool. It is not a
+	// restic repository: it is a report-only tier (spec §12, §19.8).
+	ProtonDrive Type = "proton-drive"
 )
 
 // Types lists every supported Type, in the order a form offers them.
-var Types = []Type{Local, B2, S3, R2, SFTP, Custom}
+var Types = []Type{Local, B2, S3, R2, SFTP, Custom, ProtonDrive}
+
+// DefaultProtonFolder is the Proton Drive folder a copy goes to when
+// none is chosen.
+const DefaultProtonFolder = "/my-files/ballast"
+
+// IsResticRepository reports whether t is stored as a restic repository
+// (every type except the Proton Drive second copy).
+func (t Type) IsResticRepository() bool { return t != ProtonDrive }
 
 // Valid reports whether t is a supported backend type.
 func (t Type) Valid() bool {
@@ -123,6 +135,10 @@ type Settings struct {
 	User string `json:"user,omitempty"`
 	// URL is the raw restic repository string for Custom.
 	URL string `json:"url,omitempty"`
+	// MaxArtifactMB is the largest single file (in megabytes) a Proton
+	// Drive copy accepts; bigger files are skipped and listed. Zero
+	// means the default (1024).
+	MaxArtifactMB int `json:"max_artifact_mb,omitempty"`
 }
 
 var (
@@ -198,6 +214,18 @@ func Location(t Type, s Settings) (string, error) {
 		// absolute path shows up as "//srv/...", a relative one is
 		// relative to the user's home directory.
 		return "sftp://" + s.User + "@" + s.Host + ":" + strconv.Itoa(port) + "/" + s.Path, nil
+	case ProtonDrive:
+		folder := s.Path
+		if folder == "" {
+			folder = DefaultProtonFolder
+		}
+		if !strings.HasPrefix(folder, "/") || strings.Trim(folder, "/") == "" {
+			return "", fmt.Errorf("a Proton Drive copy needs the folder to keep backups in, starting with / (for example %s)", DefaultProtonFolder)
+		}
+		if s.MaxArtifactMB < 0 {
+			return "", fmt.Errorf("the Proton Drive size limit must not be negative")
+		}
+		return "proton-drive:" + strings.TrimRight(folder, "/"), nil
 	case Custom:
 		if s.URL == "" {
 			return "", fmt.Errorf("a custom destination needs a restic repository string (for example rest:https://backup.example.com/ballast)")
@@ -239,17 +267,20 @@ func onlyFields(t Type, s Settings) error {
 		R2:     {"path", "bucket", "account_id"},
 		SFTP:   {"path", "host", "port", "user"},
 		Custom: {"url"},
+
+		ProtonDrive: {"path", "max_artifact_mb"},
 	}[t]
 	set := map[string]bool{
 		"path": s.Path != "", "endpoint": s.Endpoint != "", "bucket": s.Bucket != "",
 		"region": s.Region != "", "account_id": s.AccountID != "", "host": s.Host != "",
 		"port": s.Port != 0, "user": s.User != "", "url": s.URL != "",
+		"max_artifact_mb": s.MaxArtifactMB != 0,
 	}
 	for _, a := range allowed {
 		delete(set, a)
 	}
 	var extra []string
-	for _, f := range []string{"path", "endpoint", "bucket", "region", "account_id", "host", "port", "user", "url"} {
+	for _, f := range []string{"path", "endpoint", "bucket", "region", "account_id", "host", "port", "user", "url", "max_artifact_mb"} {
 		if set[f] {
 			extra = append(extra, f)
 		}

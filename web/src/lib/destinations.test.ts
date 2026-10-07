@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { buildSettings, credentialKind, needsCredentials, typeLabel } from "./destinations";
+import { buildSettings, credentialKind, isCopyOnly, needsCredentials, typeLabel } from "./destinations";
 
 describe("buildSettings", () => {
   it("keeps only the fields a local destination uses", () => {
@@ -87,5 +87,26 @@ describe("typeLabel", () => {
     expect(typeLabel("r2")).toBe("Cloudflare R2");
     expect(typeLabel("sftp")).toBe("SFTP server");
     expect(typeLabel("custom")).toContain("Custom");
+  });
+});
+
+describe("Proton Drive copies", () => {
+  it("keeps the folder and the size limit, and nothing else", () => {
+    expect(buildSettings("proton-drive", { path: " /my-files/ballast ", max_artifact_mb: "512", bucket: "x" })).toEqual({
+      path: "/my-files/ballast",
+      max_artifact_mb: 512,
+    });
+  });
+
+  it("leaves the size limit out when blank", () => {
+    expect(buildSettings("proton-drive", { max_artifact_mb: "" })).toEqual({});
+  });
+
+  it("needs no credentials and is a copy only", () => {
+    expect(needsCredentials("proton-drive")).toBe(false);
+    expect(credentialKind("proton-drive")).toBe("none");
+    expect(isCopyOnly("proton-drive")).toBe(true);
+    expect(isCopyOnly("local")).toBe(false);
+    expect(typeLabel("proton-drive")).toContain("Proton Drive");
   });
 });

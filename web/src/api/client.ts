@@ -9,6 +9,7 @@ import type {
   CreateDockerHostRequest,
   CreateDockerHostResponse,
   Destination,
+  ProtonSignIn,
   DetectResult,
   DigestSendResult,
   DockerComposeProject,
@@ -225,6 +226,13 @@ export const api = {
   },
   initDestination(name: string): Promise<{ initialized: boolean }> {
     return request("POST", `${base}/destinations/${encodeURIComponent(name)}/init`);
+  },
+
+  protonSignIn(name: string): Promise<ProtonSignIn> {
+    return request("POST", `${base}/destinations/${encodeURIComponent(name)}/proton/sign-in`);
+  },
+  protonSignInStatus(name: string): Promise<ProtonSignIn> {
+    return request("GET", `${base}/destinations/${encodeURIComponent(name)}/proton/sign-in`);
   },
 
   // --- docker hosts ---

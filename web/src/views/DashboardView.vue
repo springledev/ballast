@@ -183,9 +183,10 @@ onUnmounted(() => clearInterval(timer));
           </p>
           <template v-if="(s.targets?.length ?? 0) > 1">
             <p v-for="t in s.targets" :key="`tg-${t.destination}`" class="status-line">
-              <TrafficLight :light="t.light" /> <strong>{{ t.destination }}:</strong>
-              {{ t.light === "green" ? "backed up and checked" : t.light === "amber" ? "backed up, but could not be fully checked" : t.light === "red" ? "failed" : t.light === "running" ? "backing up now" : "no backup yet" }}
+              <TrafficLight :light="t.light" /> <strong>{{ t.destination }}<template v-if="t.secondary"> (second copy)</template>:</strong>
+              {{ t.secondary ? (t.light === "green" ? "copied and checked" : t.light === "none" ? "no copy yet" : t.light === "running" ? "waiting for the main backup" : "needs attention") : t.light === "green" ? "backed up and checked" : t.light === "amber" ? "backed up, but could not be fully checked" : t.light === "red" ? "failed" : t.light === "running" ? "backing up now" : "no backup yet" }}
               <template v-if="t.last_error && t.light !== 'green'"> — {{ t.last_error }}</template>
+              <router-link v-if="t.sign_in_needed" to="/destinations"> Sign in to Proton Drive again</router-link>
             </p>
           </template>
           <p v-for="t in s.tiers.filter((t) => t.light === 'red' && t.last_error)" :key="`err-${t.tier}`" class="notice notice--error" style="margin: 0.6rem 0 0">

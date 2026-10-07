@@ -107,9 +107,14 @@ func (o *Ops) Doctor(ctx context.Context) (DoctorReport, error) {
 	if err != nil {
 		return rep, fmt.Errorf("doctor: listing destinations: %w", err)
 	}
+	o.protonDoctor(ctx, dests, add)
 	for _, d := range dests {
 		if err := o.TestDestination(ctx, d.Name); err != nil {
 			add("destination", d.Name, DoctorFail, err.Error())
+			continue
+		}
+		if !d.Type.IsResticRepository() {
+			add("destination", d.Name, DoctorOK, "signed in to Proton Drive and the folder can be read")
 			continue
 		}
 		add("destination", d.Name, DoctorOK, "credentials work and the repository can be read")

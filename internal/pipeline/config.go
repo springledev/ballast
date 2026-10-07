@@ -27,10 +27,15 @@ const configSnapshotMethod = "config-snapshot"
 func (p *Pipeline) runConfigSnapshot(ctx context.Context, svc inventory.Service) (engine.State, error) {
 	service := svc.Name
 	var targets []*runTarget
+	var copies []*copyTarget
 	for _, t := range svc.EffectiveTargets() {
 		dest, err := inventory.GetDestination(p.DB, t.Destination)
 		if err != nil {
 			return "", fmt.Errorf("service %s: %w", service, err)
+		}
+		if !dest.Type.IsResticRepository() {
+			copies = append(copies, &copyTarget{target: t, dest: dest})
+			continue
 		}
 		targets = append(targets, &runTarget{target: t, dest: dest})
 	}
@@ -185,6 +190,10 @@ func (p *Pipeline) runConfigSnapshot(ctx context.Context, svc inventory.Service)
 		if err := m.RecordTarget(engine.TargetResult{Destination: rt.dest.Name, State: rt.state, SnapshotID: rt.snapshotID, Detail: rt.detail}); err != nil {
 			return fail(err)
 		}
+	}
+	// A copy of a snapshot that could not be proven complete is not sent.
+	if layer.Passed {
+		p.runCopies(ctx, m, service, targets, copies, res)
 	}
 	defer p.retainTargets(ctx, service, targets)
 

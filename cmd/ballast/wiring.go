@@ -17,6 +17,7 @@ import (
 	"github.com/springledev/ballast/internal/inventory"
 	"github.com/springledev/ballast/internal/notify"
 	"github.com/springledev/ballast/internal/pipeline"
+	"github.com/springledev/ballast/internal/protondrive"
 	"github.com/springledev/ballast/internal/proxmox"
 	"github.com/springledev/ballast/internal/repohealth"
 	"github.com/springledev/ballast/internal/restic"
@@ -175,6 +176,7 @@ func openApp(cfg config.Config, logw io.Writer) (*app, error) {
 		Locks:  scheduler.FileLocker{Dir: filepath.Join(cfg.DataDir, "locks", "repo-checks")},
 	}
 	pl.RepoHealth = health
+	pl.CopyAlerts = &protondrive.NotifyAlerter{DB: st.DB(), Notifier: notifier}
 	dockerHosts := pl.DockerHosts()
 	dockerHosts.CredDirs = credDirs
 	proxmoxResolver := proxmox.Resolver{CredDirs: credDirs, Redact: secrets}
@@ -234,6 +236,9 @@ func loadRepositoryPasswords(st *store.Store, credDirs []string, secrets *secret
 		return fmt.Errorf("listing destinations: %w", err)
 	}
 	for _, d := range dests {
+		if d.PasswordCredential == "" {
+			continue // a Proton Drive copy has no repository password
+		}
 		dir := execrunner.FindCredentialDir(d.PasswordCredential, credDirs...)
 		secrets.AddFile(filepath.Join(dir, d.PasswordCredential))
 	}

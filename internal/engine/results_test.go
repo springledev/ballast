@@ -213,3 +213,26 @@ func TestRecordTargetAndRunTargets(t *testing.T) {
 		t.Errorf("verification target = %+v", recs)
 	}
 }
+
+func TestRecordTargetKeepsTheTier(t *testing.T) {
+	db := openTestDB(t).DB()
+	m, err := StartRun(db, "vault")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, r := range []TargetResult{
+		{Destination: "ssd", State: SUCCESS},
+		{Destination: "proton", State: SUCCESS_UNVERIFIED, Detail: "sign in again", Secondary: true},
+	} {
+		if err := m.RecordTarget(r); err != nil {
+			t.Fatal(err)
+		}
+	}
+	got, err := RunTargets(db, m.Run().ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 2 || got[0].Secondary || !got[1].Secondary || got[1].Detail != "sign in again" {
+		t.Errorf("RunTargets = %+v, want ssd primary and proton secondary", got)
+	}
+}

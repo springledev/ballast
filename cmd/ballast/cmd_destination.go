@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/springledev/ballast/internal/api"
 	"github.com/springledev/ballast/internal/backend"
@@ -34,6 +35,7 @@ var (
 	destPort      int
 	destUser      string
 	destURL       string
+	destMaxMB     int
 
 	// Backend credential flags. The secret access key itself is never
 	// accepted as a flag value (it would sit in shell history and be
@@ -72,6 +74,10 @@ flags. Examples:
   ballast destination add nas --type sftp --host backup.example.com --user ballast --path /srv/backups/ballast \
       --ssh-key-file ./ballast_key --init
 
+  # A second copy of config and database backups in Proton Drive (report-only),
+  # then sign in with: ballast destination sign-in proton
+  ballast destination add proton --type proton-drive --path /my-files/ballast --keep-last 7
+
   # A raw restic repository string for advanced setups (rest-server, rclone:, ...)
   ballast destination add rest --type custom --url rest:https://backup.example.com/ballast --init
 
@@ -97,7 +103,7 @@ anything else as a custom restic repository string.`,
 				d.Type = backend.Type(destType)
 				d.Settings = backend.Settings{
 					Path: destPath, Endpoint: destEndpoint, Bucket: destBucket, Region: destRegion,
-					AccountID: destAccountID, Host: destHost, Port: destPort, User: destUser, URL: destURL,
+					AccountID: destAccountID, Host: destHost, Port: destPort, User: destUser, URL: destURL, MaxArtifactMB: destMaxMB,
 				}
 			} else {
 				d.Location = destLocation
@@ -175,6 +181,53 @@ var destinationListCmd = &cobra.Command{
 			for _, d := range list {
 				cmd.Printf("%s\t%s\t%s\tkeep=%dd/%dw/%dm\n", d.Name, d.Type, d.Location, d.KeepDaily, d.KeepWeekly, d.KeepMonthly)
 			}
+			return nil
+		})
+	},
+}
+
+// destinationSignInCmd is `ballast destination sign-in <name>`: the
+// terminal twin of the web UI's "Sign in to Proton Drive".
+var destinationSignInCmd = &cobra.Command{
+	Use:   "sign-in <name>",
+	Short: "Sign in to Proton Drive for a Proton Drive destination",
+	Long: `Starts Proton's own browser sign-in and prints the link to open (on any
+device). Your Proton password and 2FA code are typed on Proton's page and
+never pass through Ballast.`,
+	Args: cobra.ExactArgs(1),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		cfg, err := loadConfig()
+		if err != nil {
+			return err
+		}
+		return withApp(cfg, cmd.ErrOrStderr(), func(a *app) error {
+			info, err := a.ops.ProtonSignIn(cmd.Context(), args[0])
+			if err != nil {
+				return err
+			}
+			shown := false
+			for !info.Done {
+				if info.Link != "" && !shown {
+					shown = true
+					cmd.Printf("Open this link and sign in to Proton:\n  %s\n", info.Link)
+					if info.Code != "" {
+						cmd.Printf("If asked for a code, enter: %s\n", info.Code)
+					}
+					cmd.Println("Waiting for you to finish...")
+				}
+				select {
+				case <-cmd.Context().Done():
+					return cmd.Context().Err()
+				case <-time.After(time.Second):
+				}
+				if info, err = a.ops.ProtonSignInStatus(cmd.Context(), args[0]); err != nil {
+					return err
+				}
+			}
+			if info.Error != "" {
+				return fmt.Errorf("destination %s: %s", args[0], info.Error)
+			}
+			cmd.Printf("%s: signed in to Proton Drive\n", args[0])
 			return nil
 		})
 	},
@@ -328,6 +381,7 @@ func registerDestinationCommands(root *cobra.Command) {
 	destinationAddCmd.Flags().IntVar(&destPort, "port", 0, "server port (sftp only, default 22)")
 	destinationAddCmd.Flags().StringVar(&destUser, "user", "", "user to log in as (sftp only)")
 	destinationAddCmd.Flags().StringVar(&destURL, "url", "", "raw restic repository string (custom only)")
+	destinationAddCmd.Flags().IntVar(&destMaxMB, "max-artifact-mb", 0, "largest single file in MB a Proton Drive copy accepts (default 1024)")
 	destinationAddCmd.Flags().StringVar(&destAccessKeyID, "access-key-id", "", "access key ID (s3, b2, r2); the matching secret access key is then read from stdin, one line")
 	destinationAddCmd.Flags().StringVar(&destSSHKeyFile, "ssh-key-file", "", "path to an unencrypted SSH private key file (sftp only)")
 	destinationAddCmd.Flags().StringVar(&destPasswordCredential, "password-credential", "", "credential file name holding the repository password (default: ballast-restic-password.<name>)")
@@ -342,6 +396,6 @@ func registerDestinationCommands(root *cobra.Command) {
 	destinationCheckCmd.Flags().BoolVar(&healthOff, "off", false, "turn scheduled checks off for this destination")
 
 	destinationCmd := &cobra.Command{Use: "destination", Short: "Manage backup destinations"}
-	destinationCmd.AddCommand(destinationAddCmd, destinationListCmd, destinationTestCmd, destinationInitCmd, destinationCheckCmd, destinationRemoveCmd)
+	destinationCmd.AddCommand(destinationAddCmd, destinationListCmd, destinationTestCmd, destinationInitCmd, destinationSignInCmd, destinationCheckCmd, destinationRemoveCmd)
 	root.AddCommand(destinationCmd)
 }

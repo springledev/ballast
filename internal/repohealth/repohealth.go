@@ -219,6 +219,9 @@ func (c *Checker) List() ([]Status, error) {
 	}
 	out := make([]Status, 0, len(dests))
 	for _, d := range dests {
+		if !d.Type.IsResticRepository() {
+			continue // a Proton Drive copy has no restic repository to check
+		}
 		st, err := c.Get(d.Name)
 		if err != nil {
 			return nil, err

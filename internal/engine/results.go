@@ -216,16 +216,19 @@ type TargetResult struct {
 	// Detail is a plain-English summary (the failure reason, if any).
 	// Must not contain secrets.
 	Detail string
+	// Secondary marks a report-only second copy (spec §12): its outcome
+	// is shown and alerted on its own and never changes the run's state.
+	Secondary bool
 }
 
 // RecordTarget stores one destination's outcome for this run, replacing
 // an earlier record for the same destination.
 func (m *Machine) RecordTarget(t TargetResult) error {
 	_, err := m.store.Exec(`
-		INSERT INTO run_targets (run_id, destination, state, snapshot_id, detail)
-		VALUES (?, ?, ?, ?, ?)
-		ON CONFLICT(run_id, destination) DO UPDATE SET state = excluded.state, snapshot_id = excluded.snapshot_id, detail = excluded.detail`,
-		m.run.ID, t.Destination, string(t.State), t.SnapshotID, t.Detail)
+		INSERT INTO run_targets (run_id, destination, state, snapshot_id, detail, tier)
+		VALUES (?, ?, ?, ?, ?, ?)
+		ON CONFLICT(run_id, destination) DO UPDATE SET state = excluded.state, snapshot_id = excluded.snapshot_id, detail = excluded.detail, tier = excluded.tier`,
+		m.run.ID, t.Destination, string(t.State), t.SnapshotID, t.Detail, tierName(t.Secondary))
 	if err != nil {
 		return fmt.Errorf("recording target %s for %s run %d: %w", t.Destination, m.run.Service, m.run.ID, err)
 	}
@@ -235,7 +238,7 @@ func (m *Machine) RecordTarget(t TargetResult) error {
 // RunTargets returns every destination outcome recorded for runID, in
 // the order they were recorded.
 func RunTargets(db *sql.DB, runID int64) ([]TargetResult, error) {
-	rows, err := db.Query(`SELECT destination, state, snapshot_id, detail FROM run_targets WHERE run_id = ? ORDER BY rowid`, runID)
+	rows, err := db.Query(`SELECT destination, state, snapshot_id, detail, tier FROM run_targets WHERE run_id = ? ORDER BY rowid`, runID)
 	if err != nil {
 		return nil, fmt.Errorf("listing targets of run %d: %w", runID, err)
 	}
@@ -243,15 +246,23 @@ func RunTargets(db *sql.DB, runID int64) ([]TargetResult, error) {
 	var out []TargetResult
 	for rows.Next() {
 		var t TargetResult
-		var state string
-		if err := rows.Scan(&t.Destination, &state, &t.SnapshotID, &t.Detail); err != nil {
+		var state, tier string
+		if err := rows.Scan(&t.Destination, &state, &t.SnapshotID, &t.Detail, &tier); err != nil {
 			return nil, fmt.Errorf("scanning target of run %d: %w", runID, err)
 		}
 		t.State = State(state)
+		t.Secondary = tier == "secondary"
 		out = append(out, t)
 	}
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("listing targets of run %d: %w", runID, err)
 	}
 	return out, nil
+}
+
+func tierName(secondary bool) string {
+	if secondary {
+		return "secondary"
+	}
+	return "primary"
 }

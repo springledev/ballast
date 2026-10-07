@@ -91,6 +91,7 @@ func resetCLIFlags() {
 	destKeepDaily, destKeepWeekly, destKeepMonthly = 7, 4, 6
 	destPath, destEndpoint, destBucket, destRegion = "", "", "", ""
 	destAccountID, destHost, destPort, destUser, destURL = "", "", 0, "", ""
+	destMaxMB = 0
 	destAccessKeyID, destSSHKeyFile = "", ""
 
 	hostKind, hostAddress, hostSSHKey = "", "", ""

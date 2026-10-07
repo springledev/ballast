@@ -25,6 +25,7 @@ import (
 	"github.com/springledev/ballast/internal/dotenv"
 	"github.com/springledev/ballast/internal/engine"
 	"github.com/springledev/ballast/internal/inventory"
+	"github.com/springledev/ballast/internal/protondrive"
 	"github.com/springledev/ballast/internal/proxmox"
 	"github.com/springledev/ballast/internal/repohealth"
 	"github.com/springledev/ballast/internal/strategy"
@@ -91,6 +92,12 @@ type Pipeline struct {
 	Proxmox     proxmox.Resolver
 	ProxmoxPoll time.Duration
 
+	// ProtonBin overrides the Proton Drive command-line tool; empty
+	// uses "proton-drive" from $PATH. CopyAlerts, when set, tells the
+	// user about a second copy that needs attention.
+	ProtonBin  string
+	CopyAlerts protondrive.Alerter
+
 	// RepoHealth, when set, clears a stale lock from this machine
 	// before each upload and explains any lock it leaves alone (spec
 	// §19.7). Nil skips the lock check.
@@ -148,10 +155,15 @@ func (p *Pipeline) Run(ctx context.Context, service string) (engine.State, error
 		return p.runConfigSnapshot(ctx, svc)
 	}
 	var targets []*runTarget
+	var copies []*copyTarget
 	for _, t := range svc.EffectiveTargets() {
 		dest, err := inventory.GetDestination(p.DB, t.Destination)
 		if err != nil {
 			return "", fmt.Errorf("service %s: %w", service, err)
+		}
+		if !dest.Type.IsResticRepository() {
+			copies = append(copies, &copyTarget{target: t, dest: dest})
+			continue
 		}
 		targets = append(targets, &runTarget{target: t, dest: dest})
 	}
@@ -186,6 +198,7 @@ func (p *Pipeline) Run(ctx context.Context, service string) (engine.State, error
 		}
 		err := ensureServiceContext(service, cause)
 		detail := p.redact(err.Error())
+		p.skipCopies(m, service, copies)
 		if terr := m.Transition(engine.FAILED, detail); terr != nil {
 			p.logf("%s: recording failure: %v", service, terr)
 		}
@@ -360,6 +373,9 @@ func (p *Pipeline) Run(ctx context.Context, service string) (engine.State, error
 			return fail(err)
 		}
 	}
+	// The second copy goes out only after the main backups have their
+	// verdicts, and never changes them (spec §12).
+	p.runCopies(ctx, m, service, targets, copies, res)
 	// Retention cleanup only for a target with a verified SUCCESS, and
 	// never lets its own failure change the run's outcome (spec plan
 	// step 8).

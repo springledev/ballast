@@ -51,6 +51,14 @@ func TestLocation(t *testing.T) {
 		{name: "r2 missing account id", typ: R2, s: Settings{Bucket: "bucket"}, wantErr: "needs your Cloudflare account ID"},
 		{name: "r2 field not applying (endpoint)", typ: R2, s: Settings{AccountID: "abc123def456", Bucket: "bucket", Endpoint: "x"}, wantErr: "do not apply to a r2 destination"},
 
+		// --- proton drive ---
+		{name: "proton default folder", typ: ProtonDrive, s: Settings{}, want: "proton-drive:/my-files/ballast"},
+		{name: "proton chosen folder trimmed", typ: ProtonDrive, s: Settings{Path: "/a/b/", MaxArtifactMB: 50}, want: "proton-drive:/a/b"},
+		{name: "proton relative folder", typ: ProtonDrive, s: Settings{Path: "backups"}, wantErr: "starting with /"},
+		{name: "proton negative limit", typ: ProtonDrive, s: Settings{MaxArtifactMB: -1}, wantErr: "must not be negative"},
+		{name: "proton field not applying", typ: ProtonDrive, s: Settings{Bucket: "b"}, wantErr: "do not apply to a proton-drive destination"},
+		{name: "local rejects the size limit", typ: Local, s: Settings{Path: "/x", MaxArtifactMB: 5}, wantErr: "max_artifact_mb"},
+
 		// --- sftp ---
 		{name: "sftp default port absolute path", typ: SFTP, s: Settings{Host: "h", User: "u", Path: "/srv/x"}, want: "sftp://u@h:22//srv/x"},
 		{name: "sftp custom port relative path", typ: SFTP, s: Settings{Host: "h", User: "u", Port: 2222, Path: "backups"}, want: "sftp://u@h:2222/backups"},
@@ -322,5 +330,18 @@ func TestCredentialsEmpty(t *testing.T) {
 	}
 	if (Credentials{AccessKeyID: "x"}).Empty() {
 		t.Error("Credentials with AccessKeyID set: Empty() = true, want false")
+	}
+}
+
+func TestProtonDriveIsNotAResticRepository(t *testing.T) {
+	if ProtonDrive.IsResticRepository() || !Local.IsResticRepository() || !SFTP.IsResticRepository() {
+		t.Error("only the Proton Drive copy is not a restic repository")
+	}
+	if ProtonDrive.CredentialKind() != NoCredential {
+		t.Error("a Proton Drive copy keeps its login in the tool's own session folder, not a credential file")
+	}
+	_, err := Resolver{}.Open(Target{Name: "p", Type: ProtonDrive})
+	if err == nil || !strings.Contains(err.Error(), "not a restic repository") {
+		t.Errorf("Open on a Proton Drive destination = %v, want a clear refusal", err)
 	}
 }

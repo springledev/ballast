@@ -53,6 +53,9 @@ type Resolver struct {
 // Open returns a restic.Repository for t with its password file,
 // backend credential file and backend options attached.
 func (r Resolver) Open(t Target) (*restic.Repository, error) {
+	if !t.Type.IsResticRepository() {
+		return nil, fmt.Errorf("destination %s is a %s copy, not a restic repository, so it cannot be opened as one", t.Name, t.Type)
+	}
 	if t.PasswordCredential == "" {
 		return nil, fmt.Errorf("destination %s: no repository password credential is configured", t.Name)
 	}

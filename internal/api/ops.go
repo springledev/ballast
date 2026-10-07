@@ -28,6 +28,7 @@ import (
 	"github.com/springledev/ballast/internal/engine"
 	"github.com/springledev/ballast/internal/inventory"
 	"github.com/springledev/ballast/internal/notify"
+	"github.com/springledev/ballast/internal/protondrive"
 	"github.com/springledev/ballast/internal/proxmox"
 	"github.com/springledev/ballast/internal/repohealth"
 	"github.com/springledev/ballast/internal/restic"
@@ -61,6 +62,13 @@ type Ops struct {
 	// checks (spec §19.7). Nil makes the repository-health calls
 	// report that it is not set up.
 	RepoHealth *repohealth.Checker
+
+	// ProtonBin overrides the Proton Drive command-line tool (empty
+	// uses "proton-drive"). Sign-ins in progress are kept per
+	// destination in protonLogins.
+	ProtonBin    string
+	protonMu     sync.Mutex
+	protonLogins map[string]*protondrive.Login
 
 	// Repo builds a restic.Repository for a destination, using the
 	// same Runner/CredDir/ResticBin the pipeline uses. Built by wiring.
@@ -308,6 +316,12 @@ type TargetStatus struct {
 	LastState   string   `json:"last_state,omitempty"`
 	LastError   string   `json:"last_error,omitempty"`
 	SnapshotID  string   `json:"snapshot_id,omitempty"`
+	// Secondary marks a report-only second copy (Proton Drive); its
+	// light never changes the service's own.
+	Secondary bool `json:"secondary,omitempty"`
+	// SignInNeeded is true when the copy failed because the Proton
+	// Drive login ended; the UI offers "Sign in again".
+	SignInNeeded bool `json:"sign_in_needed,omitempty"`
 }
 
 // VerificationRecord is the API/CLI-facing shape of an
@@ -486,6 +500,9 @@ func (o *Ops) targetStatuses(s inventory.Service, last engine.LatestRun, tier Ti
 	var out []TargetStatus
 	for i, t := range s.EffectiveTargets() {
 		ts := TargetStatus{Destination: t.Destination, Parts: t.Parts, Light: "none"}
+		if d, err := inventory.GetDestination(o.DB, t.Destination); err == nil {
+			ts.Secondary = !d.Type.IsResticRepository()
+		}
 		switch r, ok := recorded[t.Destination]; {
 		case last.InProgress && last.RunID != 0:
 			ts.Light = "running"
@@ -494,6 +511,7 @@ func (o *Ops) targetStatuses(s inventory.Service, last engine.LatestRun, tier Ti
 			ts.LastState, ts.SnapshotID = string(r.State), r.SnapshotID
 			if r.State != engine.SUCCESS {
 				ts.LastError = r.Detail
+				ts.SignInNeeded = ts.Secondary && strings.Contains(r.Detail, protondrive.SignInAgainText)
 			}
 		case i == 0 && len(recorded) == 0 && tier.LastRunID != 0:
 			ts.Light, ts.LastState, ts.LastError, ts.SnapshotID = tier.Light, tier.LastState, tier.LastError, tier.SnapshotID
@@ -1096,8 +1114,8 @@ func (o *Ops) SetupDestination(ctx context.Context, req DestinationSetup) (err e
 		}
 		return o.redactErr(fmt.Errorf("%w: %w", ErrValidation, wrapf("destination "+d.Name, err)))
 	}
-	if !req.Init {
-		return nil
+	if !req.Init || !d.Type.IsResticRepository() {
+		return nil // a Proton Drive copy has no repository to set up
 	}
 	got, err := inventory.GetDestination(o.DB, d.Name)
 	if err != nil {
@@ -1424,6 +1442,9 @@ func (o *Ops) TestDestination(ctx context.Context, name string) error {
 	dest, err := inventory.GetDestination(o.DB, name)
 	if err != nil {
 		return wrapf("destination "+name, err)
+	}
+	if !dest.Type.IsResticRepository() {
+		return o.testProton(ctx, dest)
 	}
 	repo, err := o.repoFor(dest)
 	if err != nil {

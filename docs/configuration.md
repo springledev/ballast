@@ -278,6 +278,31 @@ hours; Ballast writes its progress to the log every half minute. Cloud
 storage (Backblaze B2, S3) is billed by the amount stored, so check your
 provider's prices before sending a large library.
 
+## A second copy in Proton Drive
+
+Besides your main backups, Ballast can keep an extra copy of the small, important files (configs and
+database backups) in Proton Drive. It is a safety net, not a replacement: the copy is reported on its own,
+so a Proton problem shows as an amber light and never turns a good backup red.
+
+1. Install Proton's own command-line tool (`proton-drive`) from <https://proton.me/drive/download> and put it
+   on the PATH. `ballast doctor` checks that it is there.
+2. Add the destination: Destinations page, "Proton Drive", or
+   `ballast destination add proton --type proton-drive --path /my-files/ballast`.
+3. Sign in: "Sign in to Proton Drive" on the Destinations page, or `ballast destination sign-in proton`.
+   Ballast shows a link to open on any device. Your Proton password and 2FA code are typed on Proton's page
+   and never reach Ballast. The login is kept in a private folder (only Ballast's user can open it) next to
+   Ballast's other credentials.
+4. Add it to a service as an extra place ("Also send to…", or `ballast service targets --add proton`). Choose
+   only the small parts (for example the database dump) with the parts selector.
+
+What happens on each backup: once the main backup is verified, Ballast uploads that run's files to
+`<folder>/<service>/<date and time>/`, checks that every file arrived at the right size, downloads one of them
+(a different one each time) and compares it with the original. A copy that cannot be read back is amber.
+Files over the size limit (1024 MB unless you change it) are skipped and listed; folders of live files such as
+a photo library are never sent. Only the newest N dated folders are kept (7 unless you change it); Ballast only
+ever removes folders it created itself. If your Proton login ends, the light turns amber and says "sign in
+again". If the main backup fails, no copy is attempted.
+
 ## See also
 
 - [Quickstart](quickstart.md) — quick first-run setup.

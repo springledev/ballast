@@ -984,3 +984,43 @@ func TestTargetWants(t *testing.T) {
 		}
 	}
 }
+
+// TestProtonDriveDestination: a Proton Drive copy has no repository
+// password, defaults to keeping the newest 7 run folders, and can only
+// ever be an "also send to" target of a service.
+func TestProtonDriveDestination(t *testing.T) {
+	db := openDB(t).DB()
+	if err := PutDestination(db, Destination{Name: "local", Location: "/srv/backups", KeepDaily: 7}); err != nil {
+		t.Fatal(err)
+	}
+	if err := PutDestination(db, Destination{Name: "proton", Type: backend.ProtonDrive}); err != nil {
+		t.Fatalf("PutDestination: %v", err)
+	}
+	got, err := GetDestination(db, "proton")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.PasswordCredential != "" || got.BackendCredential != "" || got.KeepLast != DefaultCopyKeepLast || got.Location != "proton-drive:/my-files/ballast" {
+		t.Errorf("proton destination = %+v", got)
+	}
+	if err := PutDestination(db, Destination{Name: "p2", Type: backend.ProtonDrive, PasswordCredential: "x"}); err == nil || !strings.Contains(err.Error(), "no repository password") {
+		t.Errorf("a password on a Proton Drive copy: err = %v", err)
+	}
+	tests := []struct {
+		name    string
+		svc     Service
+		wantErr string
+	}{
+		{"as the main destination", Service{Name: "a", CatalogEntry: "x", Destination: "proton"}, "also send to"},
+		{"as an extra target", Service{Name: "b", CatalogEntry: "x", Destination: "local", Targets: []Target{{Destination: "local"}, {Destination: "proton"}}}, ""},
+		{"on a guest job", Service{Name: "c", Kind: KindProxmoxGuest, ProxmoxNode: "pve", ProxmoxVMID: 100, Guest: &GuestJob{Storage: "backup", CopyPath: t.TempDir()}, Destination: "local", Targets: []Target{{Destination: "local"}, {Destination: "proton"}}}, "too large"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := PutService(db, tt.svc)
+			if tt.wantErr == "" && err != nil || tt.wantErr != "" && (err == nil || !strings.Contains(err.Error(), tt.wantErr)) {
+				t.Errorf("PutService err = %v, want %q", err, tt.wantErr)
+			}
+		})
+	}
+}

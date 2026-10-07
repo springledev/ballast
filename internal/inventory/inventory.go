@@ -132,10 +132,20 @@ func (d *Destination) Normalize() error {
 		return fmt.Errorf("destination %s: %w", d.Name, err)
 	}
 	d.Location = loc
-	if d.PasswordCredential == "" {
+	if !d.Type.IsResticRepository() {
+		// A Proton Drive copy has no repository password and keeps only
+		// the newest N run folders.
+		if d.PasswordCredential != "" {
+			return fmt.Errorf("destination %s: a %s copy has no repository password", d.Name, d.Type)
+		}
+		if d.KeepLast == 0 {
+			d.KeepLast = DefaultCopyKeepLast
+		}
+		d.KeepDaily, d.KeepWeekly, d.KeepMonthly = 0, 0, 0
+	} else if d.PasswordCredential == "" {
 		d.PasswordCredential = "ballast-restic-password." + d.Name
 	}
-	if filepath.Base(d.PasswordCredential) != d.PasswordCredential {
+	if d.PasswordCredential != "" && filepath.Base(d.PasswordCredential) != d.PasswordCredential {
 		return fmt.Errorf("destination %s: password credential file name %q must be a plain file name (no path separators)", d.Name, d.PasswordCredential)
 	}
 	if d.Type.CredentialKind() == backend.NoCredential {
@@ -158,6 +168,10 @@ func (d *Destination) Normalize() error {
 	}
 	return nil
 }
+
+// DefaultCopyKeepLast is how many run folders a Proton Drive copy keeps
+// per service when nothing else is chosen.
+const DefaultCopyKeepLast = 7
 
 // Retention is a keep_daily/keep_weekly/keep_monthly policy: how many
 // of the newest daily, weekly and monthly backups to keep. Older
@@ -477,8 +491,17 @@ func normalizeTargets(db *sql.DB, s *Service) error {
 			return fmt.Errorf("destination %s is listed twice; each target needs a different destination", t.Destination)
 		}
 		seen[t.Destination] = true
-		if _, err := GetDestination(db, t.Destination); err != nil {
+		dest, err := GetDestination(db, t.Destination)
+		if err != nil {
 			return err
+		}
+		if !dest.Type.IsResticRepository() {
+			if i == 0 {
+				return fmt.Errorf("%s is a Proton Drive copy, which only holds a second copy: choose a backup destination first and add %s under \"also send to\"", t.Destination, t.Destination)
+			}
+			if s.IsGuestJob() {
+				return fmt.Errorf("target %s: Proton Drive copies are for small files (configs and database dumps); a Proxmox guest backup is too large to send there", t.Destination)
+			}
 		}
 		if t.Retention != nil {
 			if err := t.Retention.Validate(); err != nil {

@@ -1,9 +1,9 @@
 <script setup lang="ts">
-import { computed, reactive, ref } from "vue";
+import { computed, onBeforeUnmount, reactive, ref } from "vue";
 
 import { api } from "@/api/client";
-import type { Destination, DestinationType } from "@/api/types";
-import { buildSettings, credentialKind, destinationTypes, typeLabel, type DestinationFormFields } from "@/lib/destinations";
+import type { Destination, DestinationType, ProtonSignIn } from "@/api/types";
+import { buildSettings, credentialKind, destinationTypes, isCopyOnly, typeLabel, type DestinationFormFields } from "@/lib/destinations";
 import { describeRetention } from "@/lib/retention";
 
 const destinations = ref<Destination[]>([]);
@@ -17,6 +17,34 @@ const checking = ref<Set<string>>(new Set());
 const checkResult = reactive<Record<string, { ok: boolean; text: string }>>({});
 const initializing = ref<Set<string>>(new Set());
 const initResult = reactive<Record<string, { ok: boolean; text: string }>>({});
+
+// Proton Drive sign-ins in progress, by destination name.
+const signIns = reactive<Record<string, ProtonSignIn>>({});
+const signInTimers: Record<string, number> = {};
+
+async function signIn(name: string) {
+  error.value = "";
+  window.clearTimeout(signInTimers[name]);
+  try {
+    signIns[name] = await api.protonSignIn(name);
+    pollSignIn(name);
+  } catch (e) {
+    error.value = (e as Error).message;
+  }
+}
+
+function pollSignIn(name: string) {
+  signInTimers[name] = window.setTimeout(async () => {
+    try {
+      signIns[name] = await api.protonSignInStatus(name);
+      if (!signIns[name].done) pollSignIn(name);
+    } catch (e) {
+      signIns[name] = { done: true, error: (e as Error).message };
+    }
+  }, 1500);
+}
+
+onBeforeUnmount(() => Object.values(signInTimers).forEach((t) => window.clearTimeout(t)));
 
 interface Form extends DestinationFormFields {
   name: string;
@@ -44,6 +72,7 @@ function blankForm(): Form {
     port: "",
     user: "",
     url: "",
+    max_artifact_mb: "",
     init: true,
     keep_last: 0,
     keep_daily: 7,
@@ -105,6 +134,9 @@ function validate(): string {
     case "custom":
       if (!form.url) return "Enter the restic repository string.";
       break;
+    case "proton-drive":
+      if (form.path && !form.path.startsWith("/")) return "The Proton Drive folder must start with / (for example /my-files/ballast).";
+      break;
   }
   if (credKind.value === "keypair" && (form.access_key_id || form.secret_access_key)) {
     if (!form.access_key_id || !form.secret_access_key) return "Enter both the access key ID and the secret access key.";
@@ -136,7 +168,7 @@ async function submit() {
       keep_daily: form.keep_daily,
       keep_weekly: form.keep_weekly,
       keep_monthly: form.keep_monthly,
-      init: form.init,
+      init: form.init && !isCopyOnly(form.type),
       credentials,
     });
     created.value = saved;
@@ -201,7 +233,11 @@ load();
   <p v-if="error" class="notice notice--error" role="alert">{{ error }}</p>
   <div v-if="created" class="notice notice--ok" role="status">
     <p><strong>{{ created.name }}</strong> is ready.</p>
-    <p v-if="created.type === 'local'">
+    <p v-if="created.type === 'proton-drive'">
+      Next, choose <strong>Sign in to Proton Drive</strong> below. Your Proton password is only ever typed on Proton's
+      own page, never into Ballast.
+    </p>
+    <p v-else-if="created.type === 'local'">
       Its encryption password is saved on the server as <code>{{ created.password_credential }}</code> in Ballast's
       credential folder. <strong>Keep a copy somewhere safe, away from this machine</strong>: without it, nobody can
       restore these backups.
@@ -221,7 +257,10 @@ load();
             <button class="btn" type="button" :disabled="checking.has(d.name)" @click="check(d.name)">
               {{ checking.has(d.name) ? "Checking…" : "Test connection" }}
             </button>
-            <button class="btn" type="button" :disabled="initializing.has(d.name)" @click="initRepo(d.name)">
+            <button v-if="isCopyOnly(d.type)" class="btn" type="button" @click="signIn(d.name)">
+              Sign in to Proton Drive
+            </button>
+            <button v-else class="btn" type="button" :disabled="initializing.has(d.name)" @click="initRepo(d.name)">
               {{ initializing.has(d.name) ? "Setting up…" : "Set up repository" }}
             </button>
             <button class="btn btn-quiet btn-danger" type="button" @click="remove(d.name)">Forget</button>
@@ -235,6 +274,19 @@ load();
         >
           {{ checkResult[d.name].text }}
         </p>
+        <div v-if="signIns[d.name]" class="notice" :class="signIns[d.name].error ? 'notice--error' : signIns[d.name].done ? 'notice--ok' : ''" role="status" style="margin: 0.6rem 0 0">
+          <p v-if="signIns[d.name].error">{{ signIns[d.name].error }}</p>
+          <p v-else-if="signIns[d.name].done">Signed in. Proton Drive is ready to receive copies.</p>
+          <template v-else-if="signIns[d.name].link">
+            <p>
+              Open <a :href="signIns[d.name].link" target="_blank" rel="noopener">this Proton page</a> (on any device) and
+              sign in there.
+            </p>
+            <p v-if="signIns[d.name].code">If it asks for a code, enter <strong>{{ signIns[d.name].code }}</strong>.</p>
+            <p class="hint">Ballast waits here and never sees your password or 2FA code.</p>
+          </template>
+          <p v-else>Starting the Proton sign-in…</p>
+        </div>
         <p
           v-if="initResult[d.name]"
           class="notice"
@@ -249,14 +301,18 @@ load();
             <dl class="kv">
               <dt>Type</dt>
               <dd>{{ typeLabel(d.type) }}</dd>
-              <dt>Password file</dt>
-              <dd><code>{{ d.password_credential }}</code></dd>
+              <dt v-if="d.password_credential">Password file</dt>
+              <dd v-if="d.password_credential"><code>{{ d.password_credential }}</code></dd>
               <dt v-if="d.backend_credential">Backend credential file</dt>
               <dd v-if="d.backend_credential"><code>{{ d.backend_credential }}</code></dd>
               <dt>Old backups kept</dt>
               <dd>{{ describeRetention(d) }}</dd>
             </dl>
-            <p class="hint">
+            <p v-if="isCopyOnly(d.type)" class="hint">
+              This is a second copy of small files (configs and database backups). It never replaces your main backup,
+              and a problem here shows as amber without failing the backup.
+            </p>
+            <p v-else class="hint">
               "Set up repository" is only needed if this destination was added without setting it up, or if the
               storage it points at was emptied since — it's safe to use any time, even if it's already set up.
             </p>
@@ -399,6 +455,27 @@ load();
         </div>
       </template>
 
+      <!-- Proton Drive -->
+      <template v-else-if="form.type === 'proton-drive'">
+        <div class="field">
+          <label for="dest-proton-folder">Folder in Proton Drive</label>
+          <input id="dest-proton-folder" v-model="form.path" placeholder="/my-files/ballast" autocomplete="off" />
+          <p class="hint">
+            Ballast only ever adds and removes its own dated folders inside this one. You'll sign in to Proton on the next
+            step.
+          </p>
+        </div>
+        <div class="field">
+          <label for="dest-proton-max">Largest file to send, in MB (optional)</label>
+          <input id="dest-proton-max" v-model="form.max_artifact_mb" placeholder="1024" autocomplete="off" />
+          <p class="hint">Bigger files are skipped and listed, so photos and large dumps stay out of Proton Drive.</p>
+        </div>
+        <p class="hint" style="margin-bottom: 1rem">
+          Needs Proton's <code>proton-drive</code> command-line tool on this machine.
+          <a href="https://proton.me/drive/download" target="_blank" rel="noopener">Download it from Proton</a>.
+        </p>
+      </template>
+
       <!-- Credentials -->
       <template v-if="credKind === 'keypair'">
         <div class="field">
@@ -426,7 +503,7 @@ load();
         <p class="hint">Paste the full unencrypted private key. Ballast runs unattended, so it can't hold a passphrase.</p>
       </div>
 
-      <label class="choice" style="margin-top: 0.5rem">
+      <label v-if="!isCopyOnly(form.type)" class="choice" style="margin-top: 0.5rem">
         <input v-model="form.init" type="checkbox" />
         <span class="check-text">Set up the storage now (creates the backup repository if it doesn't exist yet)</span>
       </label>
@@ -440,15 +517,15 @@ load();
               <label for="dest-last" class="hint">Newest (any age)</label>
               <input id="dest-last" v-model.number="form.keep_last" type="number" min="0" />
             </div>
-            <div class="field">
+            <div v-if="!isCopyOnly(form.type)" class="field">
               <label for="dest-daily" class="hint">Daily</label>
               <input id="dest-daily" v-model.number="form.keep_daily" type="number" min="0" />
             </div>
-            <div class="field">
+            <div v-if="!isCopyOnly(form.type)" class="field">
               <label for="dest-weekly" class="hint">Weekly</label>
               <input id="dest-weekly" v-model.number="form.keep_weekly" type="number" min="0" />
             </div>
-            <div class="field">
+            <div v-if="!isCopyOnly(form.type)" class="field">
               <label for="dest-monthly" class="hint">Monthly</label>
               <input id="dest-monthly" v-model.number="form.keep_monthly" type="number" min="0" />
             </div>

@@ -59,6 +59,20 @@ export interface TargetStatus {
   last_state?: string;
   last_error?: string;
   snapshot_id?: string;
+  /** A report-only second copy (Proton Drive): its light never changes the service's own. */
+  secondary?: boolean;
+  /** The copy failed because the Proton Drive login ended. */
+  sign_in_needed?: boolean;
+}
+
+/** Progress of a Proton Drive sign-in. */
+export interface ProtonSignIn {
+  /** The Proton page to open (on any device). */
+  link?: string;
+  /** The code the page may ask for. */
+  code?: string;
+  done: boolean;
+  error?: string;
 }
 
 export interface Service {
@@ -120,7 +134,7 @@ export interface RestoreProjectReport {
 }
 
 /** Which storage backend a destination uses. */
-export type DestinationType = "local" | "b2" | "s3" | "r2" | "sftp" | "custom";
+export type DestinationType = "local" | "b2" | "s3" | "r2" | "sftp" | "custom" | "proton-drive";
 
 /**
  * A destination's non-secret backend settings. Which fields apply
@@ -136,6 +150,8 @@ export interface DestinationSettings {
   port?: number;
   user?: string;
   url?: string;
+  /** Proton Drive copies only: the largest single file to send, in megabytes. */
+  max_artifact_mb?: number;
 }
 
 export interface Destination {

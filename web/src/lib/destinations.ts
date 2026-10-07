@@ -27,11 +27,21 @@ export const destinationTypes: DestinationTypeInfo[] = [
     hint: "Paste a raw restic repository string, for setups like rest-server or rclone.",
     advanced: true,
   },
+  {
+    id: "proton-drive",
+    label: "Proton Drive (a second copy of small files)",
+    hint: "Keeps an extra copy of your configs and database backups. It never replaces your main backup.",
+  },
 ];
 
 /** The friendly label for a destination type, e.g. for a list row. */
 export function typeLabel(type: DestinationType): string {
   return destinationTypes.find((t) => t.id === type)?.label ?? type;
+}
+
+/** Whether a destination is a Proton Drive second copy rather than a backup repository. */
+export function isCopyOnly(type: DestinationType): boolean {
+  return type === "proton-drive";
 }
 
 /** Whether a destination type needs backend credentials (a key pair or an SSH key). */
@@ -64,6 +74,7 @@ const fieldsByType: Record<DestinationType, (keyof DestinationSettings)[]> = {
   r2: ["path", "bucket", "account_id"],
   sftp: ["path", "host", "port", "user"],
   custom: ["url"],
+  "proton-drive": ["path", "max_artifact_mb"],
 };
 
 /** Raw form values a destination form can collect, one field per key. */
@@ -77,6 +88,7 @@ export interface DestinationFormFields {
   port?: number | string;
   user?: string;
   url?: string;
+  max_artifact_mb?: number | string;
 }
 
 /**
@@ -88,12 +100,12 @@ export interface DestinationFormFields {
 export function buildSettings(type: DestinationType, raw: DestinationFormFields): DestinationSettings {
   const settings: Record<string, string | number> = {};
   for (const field of fieldsByType[type]) {
-    if (field === "port") {
-      const port = typeof raw.port === "string" ? parseInt(raw.port, 10) : raw.port;
-      if (port) settings.port = port;
+    if (field === "port" || field === "max_artifact_mb") {
+      const n = typeof raw[field] === "string" ? parseInt(raw[field] as string, 10) : raw[field];
+      if (n) settings[field] = n as number;
       continue;
     }
-    const value = raw[field as keyof Omit<DestinationFormFields, "port">];
+    const value = raw[field as keyof Omit<DestinationFormFields, "port" | "max_artifact_mb">];
     if (typeof value === "string" && value.trim() !== "") {
       settings[field] = value.trim();
     }
