@@ -38,7 +38,7 @@
 
  - Not a sync/sharing tool — backup and restore only.
 
- - **No phone backup in v0.1** (deferred to Phase 2 — but the plugin interface must support it; see §4.2 and §12).
+ - **No phone backup in v0.1** (deferred to Phase 2 — but the plugin interface must support it; see §4.2 and §12). Using the web UI from a phone is a different thing and is in scope (§20.5).
 
  - No telemetry of any kind.
 
@@ -488,6 +488,10 @@
 
 
 
+ **Scope note (v0.5):** "mobile" in this section means *backing up phones*. A mobile-friendly web UI (using Ballast from a phone) is in scope and is specified in §20.5.
+
+
+
  - **Phone backup:** iOS via `pymobiledevice3 backup2 backup` (wrapped through the `exec` strategy, encryption password as a credential file), Android via adb/seedvault-style local push. USB-attach trigger: udev rule → systemd unit → `ballast trigger <job> --token`.
 
  - **v0.1 MUST ship, and test with a stub script:** (a) the `exec` strategy end-to-end, (b) the `trigger` command with token auth. No mobile code ships in v0.1.
@@ -706,6 +710,37 @@
 
 
  51. Preview + migration (§19.9): per-service preview (UI and `ballast backup --preview`) — parts, where each goes, estimated size, which containers stop and for how long, excludes applied, what reaches the second copy; nothing runs. "Replace a script" guide and dashboard checklist (parallel run, 7 green days, one UI test restore per service, then retire the script) with a script-idiom map in the docs; final v0.4 acceptance sweep (§19.11) reproducing both reference scripts.
+
+
+ **v0.5 extension (steps 52–65, §20: findings from the first real migration) — design rationale and the evidence for each finding in `PLAN-v0.5.md`; this list is the normative order.**
+
+ 52. Repository locking that cannot starve verification (H1, §20.1): a pending prune must never block new read-backs on the same repository (retention after the batch of verifications, skipped-and-retried when the repo is busy, or restic's own lock as the only lock); "waiting for repository lock (held by <service>)" in the log and run status. Failing test first: held shared lock + pending retention + new read-back that must still complete.
+
+ 53. `service list` guard and job-creation behaviour (H2, H3, §20.1): `ballast service list` no longer panics for destination-less Proxmox guest jobs ("runs on Proxmox, no restic destination"); creating or editing a schedule or Proxmox job never runs it by surprise — the last successful run of any kind is the schedule baseline, "never backed up at all" stays the only always-due case and is said so; a separate explicit "run now".
+
+ 54. Edit Proxmox jobs and the main destination (H4, §20.2): `ballast proxmox job edit` (schedule, keep-last, copy-to) and `ballast service targets --primary NAME`, with API and UI parity, keeping run history and verification record.
+
+ 55. Drop-a-part cleanup with space preview (H5, §20.2): when a destination's parts change, offer to also remove old snapshots of the dropped part from that destination, show the space freed first, then `forget --prune` for exactly those snapshot ids.
+
+ 56. Disk projection in `doctor` and preview (H8, H9, §20.3): add up what services will put on each destination disk (last run size × retention) and warn above ~80% projected use, checked before a vzdump starts; `doctor` lists guests and reads one storage with the Proxmox token and names the missing role/path.
+
+ 57. Remote host files over SSH (H6, §20.2): a read-only "remote machine files" source with an allow-list (secrets such as Tailscale's node key opt-in), no install on the target. Design first: spec text for it is written before code.
+
+ 58. Per-job copy retention; compression guidance (H7, §20.1): a Proxmox job's `--keep-last` also applies to its copies (or the copy's retention is asked for), both policies printed after creation, the job card shows where each copy lives; docs on uncompressed dumps deduping better, per-job choice if vzdump allows. Confirm current behaviour with a test first.
+
+ 59. Docs: side-by-side exclusions and Proxmox token roles (H9 docs, H10, §20.3): `docs/replace-a-script.md` "Things to watch for" (exclude Ballast's folders from the old job first); `docs/proxmox.md` states the role needed for guest listing and settings snapshots and that a privilege-separated token needs its own ACL.
+
+ 60. Status shows phase (H11, §20.4): `ballast status` shows the phase and elapsed time of a running job; `ballast backup` says the daemon runs it and how to follow it. Shares one run-status field with steps 52 and 61.
+
+ 61. Upload progress in the web UI and `status` (R1, §20.4): latest restic progress per run and per destination kept in memory, added to the status the UI polls, a bar with "36.9 of 84.1 GiB" on the service card (percentage and bytes first, time left secondary); numbers and destination names only, blank after a daemon restart until the next report. Test first.
+
+ 62. Mobile-first redesign of the web UI (R2, §20.5): dashboard, services, destinations, schedule and restore work on a phone first and scale up; touch-sized controls, stacked cards on narrow screens, dark/light themes, no API changes. Prerequisite: the §12/AGENTS.md clarification that phone *backup* is Phase 2 while a mobile-friendly web UI is in scope (landed with the v0.5 spec text). Last in the order, after 61; built by Opus 5.5 or Fable 5.1 (operator's choice); screenshots at 375, 768 and 1280 px before and after; must not touch `internal/`.
+
+ 63. Green means every configured copy exists (H12, H13, H14, §20.1): a job with a copy target and no copy snapshot cannot be green and the light shows the copy's own result (H12 first, test first); the guest-copy read-back is logged and shown as its own phase ("verifying copy: downloading it back from B2"), with a full or bounded-sample choice for large single-file snapshots (H13); the Immich restore drill uses the live container's exact image so the warning goes away (H14).
+
+ 64. Restore drill readiness (H15, §20.1): the MySQL/MariaDB drill probes over TCP so it cannot start restoring on the image's temporary init server (same idea for `mysqladmin`, `pg_isready -h 127.0.0.1` for Postgres); failures say which phase failed. Test with a fake server that answers on the socket for 1 s, goes away, then answers on TCP.
+
+ 65. CouchDB behind a login (H16, §20.1): the built-in entry accepts 200 or 401 (or a catalog parameter for the expected status) and the failure message says a 401 probably means a password-protected server.
 
 
 
@@ -1093,3 +1128,90 @@
  - [ ] Every service restored once from the UI
 
  - [ ] Secrets never in DB, logs or API responses — re-asserted for the Proton session folder, database passwords and the Proxmox config snapshot
+
+
+ ## 20. v0.5 extension: findings from the first real migration (normative)
+
+
+
+ **Goal:** fix what the first real replacement of a homelab's scripts by the v0.4 build turned up (2026-10-07): verification that stalls behind an unrelated upload, a green light that can hide a missing copy, jobs that cannot be edited, missing disk and permission safety nets, and no live view of a running backup. Each requirement below was hit in practice or traced to code; the evidence, confidence tags (observed / inferred / expected) and wording of each finding (H1–H16, R1–R2) are in `PLAN-v0.5.md`. No mobile *backup* code (rule 6); the `exec` strategy and `ballast trigger --token` interfaces are untouched.
+
+
+
+ ### 20.1 Reliability and truthful lights
+
+ - A pending retention step never blocks a new restic read-back on the same repository; an unrelated long upload never leaves a finished backup un-verified. When a run waits for a repository lock, the log and the run status say which service holds it.
+
+ - `ballast service list` works when a service has no restic destination (Proxmox guest jobs).
+
+ - Creating or editing a schedule or a Proxmox job never starts a run by itself. The baseline for "due" is the last successful run of any kind; only a service that was never backed up is due immediately, and the CLI and UI say so.
+
+ - A job that has a configured copy target is never green unless that copy exists and is verified; the light shows the copy's own result. A Proxmox job's keep-last applies to its copies too, and both policies are shown after the job is created.
+
+ - Verification of a large single-file copy (a guest dump) is logged and shown as its own phase; the operator can choose a full read-back or a bounded sample, with the trade-off stated.
+
+ - The Immich restore drill uses the live container's exact image. The database restore drills confirm readiness over TCP so they cannot begin on an image's temporary init server, and a failure names the phase that failed. The CouchDB check treats a 401 as "running, password-protected" and says so.
+
+
+
+ ### 20.2 Editing and cleanup
+
+ - Proxmox jobs can be edited (schedule, keep-last, copy destination) and a service's main destination can be changed, without losing run history or the verification record.
+
+ - Dropping a part from a destination offers to remove that destination's old snapshots of the part, shows the space it would free, and then forgets and prunes exactly those snapshot ids. Ballast still deletes only what it created (§19 ownership rule).
+
+ - A read-only "remote machine files" source reads chosen files from a machine over SSH with no install on it, using an allow-list in which secrets (for example a VPN node key) are opt-in. The detailed design is written into this section before step 57 is built.
+
+
+
+ ### 20.3 Safety nets and guidance
+
+ - `doctor` and the preview add up what services will put on each destination disk (last run size × retention) and warn above about 80% projected use, before a vzdump starts rather than after.
+
+ - `doctor` checks that the Proxmox token can list guests and read a storage, and names the missing role or path. The Proxmox guide states the role needed and that a privilege-separated token needs its own permissions.
+
+ - The "replace a script" guide warns that an old job backing up the disk Ballast writes to must exclude Ballast's folders before Ballast is turned on.
+
+
+
+ ### 20.4 Live run status
+
+ - One run-status record (phase, elapsed time, upload bytes and percentage per destination, lock holder) is kept in memory and read by both the CLI and the web UI. `ballast status` shows the phase and elapsed time; `ballast backup` says the daemon runs the job and how to follow it; the service card shows a progress bar with bytes first and time left second.
+
+ - Only restic uploads have byte counts; other phases show phase and elapsed time. Progress is not persisted. The payload carries numbers and destination names only (rule 2).
+
+
+
+ ### 20.5 Mobile-first web UI
+
+ - The dashboard, services, destinations, schedule and restore screens work on a phone first and scale up to a desktop: touch-sized controls, tables as stacked cards on narrow screens, dark and light themes, plain-English wording. It adds no backup features and changes no API.
+
+ - **Clarification of §2 and §12:** phone *backup* is Phase 2; a mobile-friendly web UI is in scope. This clarification lands before any UI redesign work.
+
+
+
+ ### 20.6 Out of scope (v0.5)
+
+ Phone backup (§12); importing old script archives; writing Proxmox config; rclone providers; multi-user auth/RBAC, OIDC, TLS/ACME; a push stream (server-sent events) for progress.
+
+
+
+ ### 20.7 Acceptance checklist (v0.5 "done")
+
+ - [ ] A long upload to one destination never delays verification of other services' finished backups, shown by a test with a held shared lock, a pending retention and a new read-back
+
+ - [ ] `service list`, schedule creation and Proxmox job creation behave as in §20.1 on a host with Proxmox guest jobs; nothing runs on creation
+
+ - [ ] A Proxmox job with a copy target and no copy snapshot is not green; keep-last 2 with a copy leaves at most 2 copy snapshots after three runs
+
+ - [ ] Jobs and the main destination can be edited with history kept; dropping a part frees its space after a previewed cleanup
+
+ - [ ] `doctor` and the preview warn about projected disk use and about a Proxmox token that cannot see guests
+
+ - [ ] `ballast status` and the web UI show phase, elapsed time and upload progress of a running job
+
+ - [ ] The database restore drills no longer flip between red and green on an unchanged backup (repeated-run test)
+
+ - [ ] The web UI is usable at 375, 768 and 1280 px (screenshots before and after)
+
+ - [ ] Secrets never in DB, logs or API responses — re-asserted for the progress payload and the remote-files allow-list

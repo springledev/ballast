@@ -82,6 +82,8 @@
 
  6. **No mobile code in v0.1.** Test the reserved interfaces with stubs only.
 
+ Phone *backup* is Phase 2; a mobile-friendly web UI is in scope (spec §20.5).
+
 
 
  ## Working conventions
