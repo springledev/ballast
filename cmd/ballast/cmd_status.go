@@ -49,6 +49,9 @@ func printStatusPlain(cmd *cobra.Command, services []api.ServiceStatus) {
 	for _, s := range services {
 		tier := s.Tiers[0]
 		cmd.Printf("%s: %s\n", s.Service, lightLabel(tier.Light))
+		if tier.Waiting != "" {
+			cmd.Printf("  %s\n", tier.Waiting)
+		}
 		if tier.LastError != "" {
 			cmd.Printf("  last error: %s\n", tier.LastError)
 		}

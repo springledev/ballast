@@ -32,6 +32,17 @@ type runTarget struct {
 	err    error
 	state  engine.State
 	detail string
+
+	// run is the run this target belongs to, told what the target is
+	// waiting for (see Pipeline.holdShared). Nil records nothing.
+	run *engine.Machine
+}
+
+// attachRun ties every target to the run m, once it has started.
+func attachRun(targets []*runTarget, m *engine.Machine) {
+	for _, rt := range targets {
+		rt.run = m
+	}
 }
 
 // selectParts picks what one target receives out of everything the run
@@ -110,11 +121,13 @@ func (p *Pipeline) forEachTarget(targets []*runTarget, fn func(*runTarget)) {
 // progress so a first upload of many gigabytes is visibly alive.
 func (p *Pipeline) uploadTarget(ctx context.Context, service string, rt *runTarget, res *strategy.Result) (*restic.BackupResult, error) {
 	p.clearStaleLocks(ctx, service, rt)
-	// Uploading holds the repository's shared lock, so another
-	// service's prune never runs under it (see repoLocks).
-	shared := repoLock(rt.repo.Location)
-	shared.RLock()
-	defer shared.RUnlock()
+	// Uploading shares the repository's gate, so another service's
+	// prune never runs under it (see repoGates).
+	release, err := p.holdShared(ctx, service, rt)
+	if err != nil {
+		return nil, p.targetErr(rt, err)
+	}
+	defer release()
 	var last time.Time
 	br, err := rt.repo.Backup(ctx, restic.BackupOptions{
 		Paths:    append(append([]string(nil), rt.paths...), artifactPaths(rt.artifacts)...),
@@ -264,7 +277,7 @@ func targetsSummary(targets []*runTarget, state engine.State) string {
 func (p *Pipeline) retainTargets(ctx context.Context, service string, targets []*runTarget) {
 	for _, rt := range targets {
 		if rt.state == engine.SUCCESS {
-			p.applyRetention(ctx, service, rt.repo, rt.target.EffectiveRetention(rt.dest))
+			p.applyRetention(ctx, service, rt.dest.Name, rt.repo, rt.target.EffectiveRetention(rt.dest))
 		}
 	}
 }

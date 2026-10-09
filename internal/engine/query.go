@@ -19,6 +19,10 @@ type LatestRun struct {
 	// InProgress is true while the run has not reached a terminal
 	// state (finished_at is still NULL).
 	InProgress bool
+	// Waiting is what the in-progress run is waiting for (see
+	// Machine.SetWaiting), or "" when it is not waiting or has
+	// finished.
+	Waiting string
 }
 
 // LastStartedRun returns the most recently started run for service,
@@ -30,13 +34,14 @@ func LastStartedRun(db *sql.DB, service string) (LatestRun, error) {
 		id       int64
 		started  string
 		finished sql.NullString
+		waiting  sql.NullString
 	)
 	err := db.QueryRow(`
-		SELECT r.id, r.started_at, r.finished_at FROM runs r
+		SELECT r.id, r.started_at, r.finished_at, r.waiting FROM runs r
 		JOIN jobs j ON j.id = r.job_id
 		WHERE j.service = ?
 		ORDER BY r.id DESC LIMIT 1`, service,
-	).Scan(&id, &started, &finished)
+	).Scan(&id, &started, &finished, &waiting)
 	if errors.Is(err, sql.ErrNoRows) {
 		return LatestRun{}, nil
 	}
@@ -47,5 +52,9 @@ func LastStartedRun(db *sql.DB, service string) (LatestRun, error) {
 	if err != nil {
 		return LatestRun{}, fmt.Errorf("parsing start time of run %d for %s: %w", id, service, err)
 	}
-	return LatestRun{RunID: id, StartedAt: t, InProgress: !finished.Valid}, nil
+	lr := LatestRun{RunID: id, StartedAt: t, InProgress: !finished.Valid}
+	if lr.InProgress {
+		lr.Waiting = waiting.String
+	}
+	return lr, nil
 }

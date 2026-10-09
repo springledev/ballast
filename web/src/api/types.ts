@@ -236,6 +236,8 @@ export interface TierStatus {
   last_finished_at?: string;
   last_error?: string;
   snapshot_id?: string;
+  /** What a running backup is waiting for, e.g. "waiting for repository lock on b2 (held by immich)". */
+  waiting?: string;
   last_verified_at?: string;
   verified_age_seconds?: number;
   max_age_seconds?: number;

@@ -3,6 +3,7 @@ package pipeline
 import (
 	"bytes"
 	"context"
+	"database/sql"
 	"io"
 	"os"
 	"path/filepath"
@@ -161,43 +162,124 @@ func TestRunSkipsRetentionUnlessVerified(t *testing.T) {
 	}
 }
 
-// TestRepoLock: one lock per repository location; retention's
-// exclusive side waits for a backup's shared side, while other
-// repositories are unaffected.
-func TestRepoLock(t *testing.T) {
+// TestRepoGate: one gate per repository location; retention gets it
+// only when nobody uses the repository and is told who does; an
+// upload or read-back waits only while a prune actually runs, says
+// who holds the repository, and carries on once it is released.
+func TestRepoGate(t *testing.T) {
 	a, b := t.TempDir(), t.TempDir()
-	first, second := repoLock(a), repoLock(a)
-	if first != second {
-		t.Fatal("repoLock returned different locks for one location")
+	if repoGate(a) != repoGate(a) {
+		t.Fatal("repoGate returned different gates for one location")
 	}
-	if repoLock(a) == repoLock(b) {
-		t.Fatal("repoLock shared a lock between two locations")
+	if repoGate(a) == repoGate(b) {
+		t.Fatal("repoGate shared a gate between two locations")
 	}
+	ctx := context.Background()
 
-	repoLock(a).RLock()
-	acquired := make(chan struct{})
+	relImmich, err := repoGate(a).holdShared(ctx, "immich", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	relPaperless, err := repoGate(a).holdShared(ctx, "paperless", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rel, holder, _ := repoGate(a).tryExclusive("vaultwarden"); rel != nil || holder != "immich, paperless" {
+		t.Fatalf("tryExclusive while shared = (%v, %q), want refused, held by immich, paperless", rel != nil, holder)
+	}
+	// Another repository is not affected by a's uploads.
+	relB, _, _ := repoGate(b).tryExclusive("vaultwarden")
+	if relB == nil {
+		t.Fatal("another repository was blocked by a's uploads")
+	}
+	relB()
+	relImmich()
+	relPaperless()
+
+	relPrune, _, _ := repoGate(a).tryExclusive("vaultwarden")
+	if relPrune == nil {
+		t.Fatal("tryExclusive refused a free repository")
+	}
+	if rel, holder, _ := repoGate(a).tryExclusive("folder"); rel != nil || holder != "vaultwarden" {
+		t.Fatalf("second tryExclusive = (%v, %q), want refused, held by vaultwarden", rel != nil, holder)
+	}
+	var mu sync.Mutex
+	var waits []string
+	acquired := make(chan func())
 	go func() {
-		repoLock(a).Lock()
-		close(acquired)
-		repoLock(a).Unlock()
+		rel, err := repoGate(a).holdShared(ctx, "folder", func(h string) {
+			mu.Lock()
+			waits = append(waits, h)
+			mu.Unlock()
+		})
+		if err != nil {
+			t.Error(err)
+		}
+		acquired <- rel
 	}()
-
-	// Another repository is not blocked by a's backup.
-	if !repoLock(b).TryLock() {
-		t.Fatal("another repository was blocked by a's backup")
-	}
-	repoLock(b).Unlock()
-
 	select {
 	case <-acquired:
-		t.Fatal("exclusive lock acquired while a backup held the shared lock")
+		t.Fatal("read-back ran while a prune was running")
 	case <-time.After(50 * time.Millisecond):
 	}
-	repoLock(a).RUnlock()
+	relPrune()
 	select {
-	case <-acquired:
+	case rel := <-acquired:
+		rel()
 	case <-time.After(5 * time.Second):
-		t.Fatal("exclusive lock never acquired after the shared lock was released")
+		t.Fatal("read-back never ran after the prune finished")
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if want := []string{"vaultwarden", ""}; strings.Join(waits, "|") != strings.Join(want, "|") {
+		t.Errorf("waiting calls = %q, want %q (holder, then cleared)", waits, want)
+	}
+
+	// A cancelled wait gives up with the context's error.
+	relPrune, _, _ = repoGate(a).tryExclusive("vaultwarden")
+	defer relPrune()
+	cctx, cancel := context.WithCancel(ctx)
+	cancel()
+	if _, err := repoGate(a).holdShared(cctx, "folder", nil); err == nil {
+		t.Error("holdShared with a cancelled context succeeded during a prune")
+	}
+}
+
+// TestRetentionSkippedWhenRepositoryStaysBusy: retention that cannot
+// get the repository within its wait limit is skipped and says so;
+// it never runs forget or prune under another service's upload.
+func TestRetentionSkippedWhenRepositoryStaysBusy(t *testing.T) {
+	old := retentionWaitLimit
+	retentionWaitLimit = 50 * time.Millisecond
+	defer func() { retentionWaitLimit = old }()
+
+	h := newHarness(t)
+	loc := t.TempDir()
+	log := &syncBuffer{}
+	p := h.pipeline()
+	p.Log = log
+	repo, err := p.Resolver().Open(inventoryTarget(t, h))
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	repo.Location = loc
+	release, err := repoGate(loc).holdShared(context.Background(), "immich", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer release()
+
+	p.applyRetention(context.Background(), "vaultwarden", "local", repo, inventory.Retention{KeepDaily: 7})
+	for _, want := range []string{
+		"vaultwarden: waiting for repository lock on local (held by immich)",
+		"skipped removing old backups this time because local is still busy (in use by immich)",
+	} {
+		if !strings.Contains(log.String(), want) {
+			t.Errorf("log = %q, want %q", log.String(), want)
+		}
+	}
+	if data, err := os.ReadFile(h.resticLog); err == nil && len(data) > 0 {
+		t.Errorf("restic calls = %q, want none while the repository is busy", data)
 	}
 }
 
@@ -311,4 +393,229 @@ func (l lockedWriter) Write(b []byte) (int, error) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	return l.w.Write(b)
+}
+
+// syncBuffer is a goroutine-safe log sink a test can read while the
+// pipeline is still writing to it.
+type syncBuffer struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (b *syncBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.Write(p)
+}
+
+func (b *syncBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.String()
+}
+
+// waitFor polls cond until it is true or the deadline passes.
+func waitFor(d time.Duration, cond func() bool) bool {
+	deadline := time.Now().Add(d)
+	for time.Now().Before(deadline) {
+		if cond() {
+			return true
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	return cond()
+}
+
+// TestPendingRetentionNeverBlocksReadBack (H1): one service's long
+// upload holds the repository's shared lock, another service's
+// retention is waiting for the exclusive lock, and a third service's
+// new backup must still upload, read back and finish verified. The
+// pending retention says who it waits for, and runs once the upload
+// lets go.
+func TestPendingRetentionNeverBlocksReadBack(t *testing.T) {
+	h := newHarness(t)
+	loc := t.TempDir() // a lock key no other test shares
+	dest := inventory.Destination{Name: "shared", Location: loc, KeepDaily: 7}
+	if err := inventory.PutDestination(h.db, dest); err != nil {
+		t.Fatalf("PutDestination: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(h.credDir, "ballast-restic-password.shared"), []byte("stub-password\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := inventory.PutService(h.db, inventory.Service{Name: "folder", CatalogEntry: "folder", Destination: "shared"}); err != nil {
+		t.Fatalf("PutService: %v", err)
+	}
+	log := &syncBuffer{}
+	p := h.pipeline("RESTIC_STUB_FORGET=" + forgetRemovingOne)
+	p.Log = log
+	p.Catalog = registryWith(t, map[string]string{"folder.yaml": yamlf(folderEntryYAML, t.TempDir())})
+	stored, err := inventory.GetDestination(h.db, "shared")
+	if err != nil {
+		t.Fatalf("GetDestination: %v", err)
+	}
+	repo, err := p.Resolver().Open(stored.Target())
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	ctx := context.Background()
+
+	// immich's hours-long upload.
+	release, err := repoGate(loc).holdShared(ctx, "immich", nil)
+	if err != nil {
+		t.Fatalf("holdShared: %v", err)
+	}
+	released := false
+	defer func() {
+		if !released {
+			release()
+		}
+	}()
+
+	// vaultwarden's retention, pending behind it.
+	retained := make(chan struct{})
+	go func() {
+		p.applyRetention(ctx, "vaultwarden", "shared", repo, inventory.Retention{KeepDaily: 7})
+		close(retained)
+	}()
+	if !waitFor(5*time.Second, func() bool {
+		return strings.Contains(log.String(), "vaultwarden: waiting for repository lock on shared (held by immich) before removing old backups")
+	}) {
+		t.Errorf("log = %q, want the pending retention to say it waits for immich", log.String())
+	}
+
+	// folder's new backup must reach a verified SUCCESS regardless.
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		_, _ = p.Run(ctx, "folder")
+	}()
+	if !waitFor(10*time.Second, func() bool {
+		runs, err := engine.RecentRuns(h.db, "folder", 1)
+		return err == nil && len(runs) == 1 && runs[0].State == engine.SUCCESS
+	}) {
+		t.Fatalf("folder's read-back never completed while a retention step was pending; log = %q", log.String())
+	}
+	select {
+	case <-retained:
+		t.Fatal("retention ran while immich's upload held the repository")
+	default:
+	}
+
+	// SUCCESS must have come through VERIFYING, with a passed read-back.
+	runs, err := engine.RecentRuns(h.db, "folder", 1)
+	if err != nil || len(runs) != 1 {
+		t.Fatalf("RecentRuns: %v, %v", runs, err)
+	}
+	var states []string
+	rows, err := h.db.Query(`SELECT to_state FROM run_transitions WHERE run_id = ? ORDER BY id`, runs[0].ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for rows.Next() {
+		var s string
+		if err := rows.Scan(&s); err != nil {
+			t.Fatal(err)
+		}
+		states = append(states, s)
+	}
+	rows.Close()
+	if n := len(states); n < 2 || states[n-2] != string(engine.VERIFYING) || states[n-1] != string(engine.SUCCESS) {
+		t.Errorf("transitions = %v, want ... VERIFYING, SUCCESS", states)
+	}
+	results, err := engine.VerificationResults(h.db, runs[0].ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	readBack := false
+	for _, r := range results {
+		if r.Method == readBackMethod && r.Passed {
+			readBack = true
+		}
+	}
+	if !readBack {
+		t.Errorf("verification results = %+v, want a passed %s", results, readBackMethod)
+	}
+
+	release()
+	released = true
+	for name, ch := range map[string]chan struct{}{"vaultwarden retention": retained, "folder run": done} {
+		select {
+		case <-ch:
+		case <-time.After(10 * time.Second):
+			t.Fatalf("%s never finished after the upload released the repository", name)
+		}
+	}
+	if got := len(resticCalls(t, h.resticLog, "prune")); got != 2 {
+		t.Errorf("prune calls = %d, want 2 (vaultwarden's and folder's retention both run eventually)", got)
+	}
+}
+
+// TestRunSaysWhichServiceHoldsTheRepository: a backup that has to wait
+// for another service's running prune says who holds the repository
+// in the log and in its run status, clears it once it carries on, and
+// still finishes verified.
+func TestRunSaysWhichServiceHoldsTheRepository(t *testing.T) {
+	h := newHarness(t)
+	loc := t.TempDir()
+	if err := inventory.PutDestination(h.db, inventory.Destination{Name: "shared", Location: loc, KeepDaily: 7}); err != nil {
+		t.Fatalf("PutDestination: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(h.credDir, "ballast-restic-password.shared"), []byte("stub-password\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := inventory.PutService(h.db, inventory.Service{Name: "folder", CatalogEntry: "folder", Destination: "shared"}); err != nil {
+		t.Fatalf("PutService: %v", err)
+	}
+	log := &syncBuffer{}
+	p := h.pipeline()
+	p.Log = log
+	p.Catalog = registryWith(t, map[string]string{"folder.yaml": yamlf(folderEntryYAML, t.TempDir())})
+
+	// vaultwarden's prune is running.
+	release, _, _ := repoGate(loc).tryExclusive("vaultwarden")
+	if release == nil {
+		t.Fatal("tryExclusive refused a free repository")
+	}
+	type result struct {
+		state engine.State
+		err   error
+	}
+	done := make(chan result, 1)
+	go func() {
+		state, err := p.Run(context.Background(), "folder")
+		done <- result{state, err}
+	}()
+
+	const note = "waiting for repository lock on shared (held by vaultwarden)"
+	if !waitFor(10*time.Second, func() bool {
+		last, err := engine.LastStartedRun(h.db, "folder")
+		return err == nil && last.Waiting == note
+	}) {
+		last, _ := engine.LastStartedRun(h.db, "folder")
+		t.Errorf("run waiting = %q, want %q", last.Waiting, note)
+	}
+	if !strings.Contains(log.String(), "folder: "+note) {
+		t.Errorf("log = %q, want %q", log.String(), note)
+	}
+	release()
+
+	select {
+	case r := <-done:
+		if r.err != nil || r.state != engine.SUCCESS {
+			t.Fatalf("Run = %s, %v; want SUCCESS once the prune finished", r.state, r.err)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("run never finished after the prune released the repository")
+	}
+	runs, err := engine.RecentRuns(h.db, "folder", 1)
+	if err != nil || len(runs) != 1 {
+		t.Fatalf("RecentRuns: %v, %v", runs, err)
+	}
+	var waiting sql.NullString
+	if err := h.db.QueryRow(`SELECT waiting FROM runs WHERE id = ?`, runs[0].ID).Scan(&waiting); err != nil {
+		t.Fatal(err)
+	}
+	if waiting.Valid {
+		t.Errorf("waiting = %q after the run carried on, want cleared", waiting.String)
+	}
 }

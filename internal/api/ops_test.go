@@ -1202,6 +1202,19 @@ func TestOpsStatusLightsAndFreshness(t *testing.T) {
 	if err != nil {
 		t.Fatalf("StartRun: %v", err)
 	}
+
+	// While it runs, the tier says what it is waiting for.
+	const note = "waiting for repository lock on local (held by immich)"
+	if err := m.SetWaiting(note); err != nil {
+		t.Fatalf("SetWaiting: %v", err)
+	}
+	st, err = h.ops.Status(context.Background(), "svc", false)
+	if err != nil {
+		t.Fatalf("Status: %v", err)
+	}
+	if got := st[0].Tiers[0]; got.Light != "running" || got.Waiting != note {
+		t.Errorf("running tier = %s, waiting %q; want running, %q", got.Light, got.Waiting, note)
+	}
 	for _, s := range []engine.State{engine.PREPARING, engine.DUMPING, engine.UPLOADING, engine.VERIFYING} {
 		if err := m.Transition(s, "step"); err != nil {
 			t.Fatalf("Transition %s: %v", s, err)
@@ -1223,6 +1236,9 @@ func TestOpsStatusLightsAndFreshness(t *testing.T) {
 	}
 	if st[0].FreshnessAgeSeconds == nil {
 		t.Error("freshness = nil, want set after a SUCCESS")
+	}
+	if st[0].Tiers[0].Waiting != "" {
+		t.Errorf("finished tier waiting = %q, want empty", st[0].Tiers[0].Waiting)
 	}
 	if len(st[0].Verification) != 1 || st[0].Verification[0].Method != "archive-integrity" {
 		t.Errorf("verification = %+v, want the recorded archive-integrity check", st[0].Verification)

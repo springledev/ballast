@@ -41,6 +41,46 @@ func TestSetSnapshotID(t *testing.T) {
 	}
 }
 
+// TestSetWaiting: a running run's waiting note shows in LastStartedRun,
+// can be cleared, and is never reported once the run has finished.
+func TestSetWaiting(t *testing.T) {
+	const note = "waiting for repository lock on b2 (held by immich)"
+	tests := []struct {
+		name   string
+		notes  []string
+		finish bool
+		want   string
+	}{
+		{name: "waiting", notes: []string{note}, want: note},
+		{name: "cleared", notes: []string{note, ""}, want: ""},
+		{name: "finished run", notes: []string{note}, finish: true, want: ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			db := openTestDB(t).DB()
+			m, err := StartRun(db, "vaultwarden")
+			if err != nil {
+				t.Fatalf("StartRun: %v", err)
+			}
+			for _, n := range tt.notes {
+				if err := m.SetWaiting(n); err != nil {
+					t.Fatalf("SetWaiting(%q): %v", n, err)
+				}
+			}
+			if tt.finish {
+				finishRun(t, m)
+			}
+			got, err := LastStartedRun(db, "vaultwarden")
+			if err != nil {
+				t.Fatalf("LastStartedRun: %v", err)
+			}
+			if got.Waiting != tt.want {
+				t.Errorf("Waiting = %q, want %q", got.Waiting, tt.want)
+			}
+		})
+	}
+}
+
 func TestRecordVerificationAndResults(t *testing.T) {
 	db := openTestDB(t).DB()
 	m, err := StartRun(db, "immich")

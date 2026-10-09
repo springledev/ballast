@@ -28,6 +28,7 @@ import (
 	"github.com/springledev/ballast/internal/protondrive"
 	"github.com/springledev/ballast/internal/proxmox"
 	"github.com/springledev/ballast/internal/repohealth"
+	"github.com/springledev/ballast/internal/restic"
 	"github.com/springledev/ballast/internal/strategy"
 	"github.com/springledev/ballast/internal/verify"
 	"github.com/springledev/keel/runner"
@@ -179,6 +180,7 @@ func (p *Pipeline) Run(ctx context.Context, service string) (engine.State, error
 	if err != nil {
 		return "", fmt.Errorf("service %s: %w", service, err)
 	}
+	attachRun(targets, m)
 	if p.Notifier != nil {
 		m.SetNotifier(ctx, p.Notifier)
 	}
@@ -446,10 +448,12 @@ func (p *Pipeline) runCheckers(ctx context.Context, service string, entry *catal
 // recorded as an explicit result either way — never silently skipped.
 func (p *Pipeline) targetChecks(ctx context.Context, service string, rt *runTarget, foldArchive bool) []verifyCheck {
 	var readBack verifyCheck
-	shared := repoLock(rt.repo.Location)
-	shared.RLock()
-	rb, rbErr := rt.repo.ReadBack(ctx, rt.snapshotID)
-	shared.RUnlock()
+	var rb *restic.ReadBackResult
+	release, rbErr := p.holdShared(ctx, service, rt)
+	if rbErr == nil {
+		rb, rbErr = rt.repo.ReadBack(ctx, rt.snapshotID)
+		release()
+	}
 	switch {
 	case rbErr != nil:
 		readBack = verifyCheck{

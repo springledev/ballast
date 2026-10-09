@@ -43,6 +43,7 @@ func (p *Pipeline) runConfigSnapshot(ctx context.Context, svc inventory.Service)
 	if err != nil {
 		return "", fmt.Errorf("service %s: %w", service, err)
 	}
+	attachRun(targets, m)
 	if p.Notifier != nil {
 		m.SetNotifier(ctx, p.Notifier)
 	}

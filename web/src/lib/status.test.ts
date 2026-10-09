@@ -25,6 +25,13 @@ describe("describeTier", () => {
     );
   });
 
+  it("says what a running backup is waiting for", () => {
+    expect(describeTier({ tier: "restic", light: "running" })).toBe("Backing up now…");
+    expect(describeTier({ tier: "restic", light: "running", waiting: "waiting for repository lock on b2 (held by immich)" })).toBe(
+      "Backing up now, waiting for repository lock on b2 (held by immich)…",
+    );
+  });
+
   it("covers failure and no backup yet", () => {
     expect(describeTier({ tier: "restic", light: "red" })).toBe("The last backup failed.");
     expect(describeTier({ tier: "restic", light: "none" })).toBe("Hasn't been backed up yet.");

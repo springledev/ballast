@@ -50,6 +50,24 @@ func (m *Machine) SetSnapshotID(id string) error {
 	return nil
 }
 
+// SetWaiting records what the run is waiting for right now (a plain
+// English note such as "waiting for repository lock on b2 (held by
+// immich)"), or clears it when note is empty, so a run that is stalled
+// on something outside its control says why while it is in progress.
+// note must already be redacted. Unlike the rest of Machine, SetWaiting
+// touches only the database row, so it may be called from the
+// goroutines that upload and verify a run's destinations in parallel.
+func (m *Machine) SetWaiting(note string) error {
+	var v any
+	if note != "" {
+		v = note
+	}
+	if _, err := m.store.Exec(`UPDATE runs SET waiting = ? WHERE id = ?`, v, m.run.ID); err != nil {
+		return fmt.Errorf("recording what %s run %d is waiting for: %w", m.run.Service, m.run.ID, err)
+	}
+	return nil
+}
+
 // RecordVerification persists one verification check result for this
 // run (spec §7: verification results are first-class records, shown
 // in the GUI and `ballast status --verify`). Detail and Output are

@@ -30,7 +30,7 @@ export function describeTier(t: TierStatus): string {
     case "red":
       return t.last_finished_at ? `The last backup failed (${when}).` : "The last backup failed.";
     case "running":
-      return "Backing up now…";
+      return t.waiting ? `Backing up now, ${t.waiting}…` : "Backing up now…";
     default:
       return "Hasn't been backed up yet.";
   }

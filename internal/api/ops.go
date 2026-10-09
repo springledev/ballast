@@ -296,6 +296,10 @@ type TierStatus struct {
 	LastFinishedAt *time.Time `json:"last_finished_at,omitempty"`
 	LastError      string     `json:"last_error,omitempty"`
 	SnapshotID     string     `json:"snapshot_id,omitempty"`
+	// Waiting says what a running backup is waiting for, such as
+	// "waiting for repository lock on b2 (held by immich)"; empty when
+	// it is not waiting or not running.
+	Waiting string `json:"waiting,omitempty"`
 	// LastVerifiedAt is when this tier's last verified (SUCCESS, never
 	// SUCCESS_UNVERIFIED) backup finished — i.e. the last restore-checked
 	// copy — or nil if there never was one.
@@ -436,6 +440,7 @@ func (o *Ops) statusOne(s inventory.Service, sched scheduler.ScheduledJob, withV
 		tier.LastError = run.Error
 		tier.SnapshotID = run.SnapshotID
 		tier.Light = lightFor(run.State, last.InProgress)
+		tier.Waiting = last.Waiting
 
 		if withVerify {
 			recs, err := engine.VerificationResults(o.DB, run.ID)

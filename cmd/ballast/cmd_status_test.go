@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -8,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/springledev/ballast/internal/api"
+	"github.com/spf13/cobra"
 )
 
 func TestStatusCommandNoServices(t *testing.T) {
@@ -69,5 +71,30 @@ func TestStatusCommandAfterBackup(t *testing.T) {
 	}
 	if len(st) != 1 || st[0].Service != "docs" {
 		t.Fatalf("status --json = %+v, want [docs]", st)
+	}
+}
+
+// TestPrintStatusPlainWaiting: a running backup that waits for another
+// service's use of the repository says so under its light.
+func TestPrintStatusPlainWaiting(t *testing.T) {
+	const note = "waiting for repository lock on b2 (held by immich)"
+	tests := []struct {
+		name    string
+		tier    api.TierStatus
+		wantOut bool
+	}{
+		{name: "waiting", tier: api.TierStatus{Tier: "restic", Light: "running", Waiting: note}, wantOut: true},
+		{name: "not waiting", tier: api.TierStatus{Tier: "restic", Light: "running"}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var buf bytes.Buffer
+			cmd := &cobra.Command{}
+			cmd.SetOut(&buf)
+			printStatusPlain(cmd, []api.ServiceStatus{{Service: "vaultwarden", Tiers: []api.TierStatus{tt.tier}}})
+			if got := strings.Contains(buf.String(), note); got != tt.wantOut {
+				t.Errorf("output = %q, want note shown = %v", buf.String(), tt.wantOut)
+			}
+		})
 	}
 }
