@@ -37,3 +37,4 @@ The dashboard shows this as a checklist for each service. You tick the steps; th
 - **Big first uploads.** The first backup to B2 or S3 can take hours. Progress is logged every 30 seconds; do not stop it because it looks quiet.
 - **Shared Proxmox storage.** If the guest dumps land on storage your script also writes to, Ballast leaves the script's dumps alone, but the storage can fill up twice as fast. Give Ballast its own storage if you can.
 - **Same schedule.** Two jobs stopping the same container at the same minute is confusing. Give Ballast a different hour while you compare.
+- **Your old job may back up Ballast's files.** If your old backup job copies the disk Ballast writes to (for example a whole backup SSD), it will start copying Ballast's repository and Proxmox dumps too, doubling the disk and cloud bucket use. Before the first Ballast run, check the old job's `--exclude` list (or its equivalent) and exclude Ballast's folders.

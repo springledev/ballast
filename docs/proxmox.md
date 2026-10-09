@@ -15,6 +15,18 @@ In the Proxmox web UI:
 
 Keep the permissions small. Ballast never needs to create or delete guests.
 
+### Which permissions Ballast needs
+
+Backing up needs `VM.Backup` on `/vms`. To list your guests and to save a copy of each guest's settings, Ballast also needs to read them, so give the token these as well:
+
+- `VM.Audit` on `/vms` (see the guest list and settings)
+- `Sys.Audit` on `/` (see the node)
+- `Datastore.Audit` on the backup storage, and `Datastore.AllocateSpace` there so dumps can be written
+
+The built-in `PVEAuditor` role covers the three read-only ones.
+
+**A privilege-separated token needs its own permissions.** When you create a token with "Privilege Separation" ticked (the default), it does not inherit anything from its user. Granting roles to `ballast@pve` is not enough: add each permission under **Datacenter → Permissions → Add → API Token Permission** for the token itself. A token with no permissions of its own can still log in, so Ballast may report that the token is accepted while `ballast proxmox guests` says "No guests found". If that happens, this is the first thing to check.
+
 ## 2. Connect Ballast
 
 Save the token secret to a file (no trailing whitespace), then:
