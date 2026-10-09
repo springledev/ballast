@@ -428,7 +428,11 @@ func (o *Ops) SetPrimaryTarget(ctx context.Context, name, dest string) (inventor
 	if err != nil {
 		return inventory.Service{}, wrapf("service "+name, err)
 	}
-	old := s.EffectiveTargets()
+	// Read the targets as saved, so a retention derived from the job's
+	// keep-last is not frozen into them.
+	plain := s
+	plain.Guest = nil
+	old := plain.EffectiveTargets()
 	idx := -1
 	for i, t := range old {
 		if t.Destination == dest {

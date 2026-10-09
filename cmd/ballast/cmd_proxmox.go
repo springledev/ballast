@@ -268,6 +268,7 @@ Example:
 				cmd.Printf("%s: scheduled %q\n", jobName, jobSchedule)
 				cmd.Println("A new schedule never starts a backup by surprise. It first runs at its next slot, unless this has never been backed up at all, which runs on the next check. To back up right now, run `ballast backup`.")
 			}
+			printJobPolicies(cmd, a, jobName)
 			if chk, err := a.ops.CheckProxmoxStorage(cmd.Context(), jobName, jobNode, jobStorage, jobVMID); err == nil && chk.Warning != "" {
 				cmd.Println("Note: " + chk.Warning)
 			}
@@ -393,6 +394,7 @@ Examples:
 				return err
 			}
 			cmd.Printf("%s: updated. Its run history and verification record are kept.\n", args[0])
+			printJobPolicies(cmd, a, args[0])
 			return nil
 		})
 	},
@@ -452,4 +454,30 @@ func registerProxmoxCommands(root *cobra.Command) {
 	proxmoxCmd := &cobra.Command{Use: "proxmox", Short: "Manage Ballast's connection to a Proxmox host"}
 	proxmoxCmd.AddCommand(proxmoxConnectCmd, proxmoxTestCmd, proxmoxGuestsCmd, proxmoxBackupCmd, proxmoxRemoveCmd, jobCmd, configCmd)
 	root.AddCommand(proxmoxCmd)
+}
+
+// printJobPolicies says how many backups of a Proxmox job are kept on
+// the Proxmox storage and in each copy destination, so a copy never
+// quietly keeps more than the operator expects.
+func printJobPolicies(cmd *cobra.Command, a *app, name string) {
+	s, err := a.ops.GetService(cmd.Context(), name)
+	if err != nil || s.Guest == nil {
+		return
+	}
+	if s.Guest.KeepLast > 0 {
+		cmd.Printf("%s: on %s Ballast keeps the newest %d dump(s) it made.\n", name, s.Guest.Storage, s.Guest.KeepLast)
+	} else {
+		cmd.Printf("%s: on %s Ballast keeps every dump it makes (give --keep-last to limit this).\n", name, s.Guest.Storage)
+	}
+	for _, t := range s.EffectiveTargets() {
+		d, err := a.ops.GetDestination(cmd.Context(), t.Destination)
+		if err != nil {
+			continue
+		}
+		own := ""
+		if t.Retention == nil {
+			own = " (set with `ballast service retention` to change it)"
+		}
+		cmd.Printf("%s: in %s the copies keep %s%s.\n", name, d.Name, retentionWords(t.EffectiveRetention(d)), own)
+	}
 }

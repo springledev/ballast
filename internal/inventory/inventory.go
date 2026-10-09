@@ -440,13 +440,24 @@ type Target struct {
 // service saved without any gets one made of its Destination and
 // Retention.
 func (s Service) EffectiveTargets() []Target {
+	var ts []Target
 	if len(s.Targets) > 0 {
-		return s.Targets
-	}
-	if s.IsGuestJob() && s.Destination == "" {
+		ts = append(ts, s.Targets...)
+	} else if s.IsGuestJob() && s.Destination == "" {
 		return nil
+	} else {
+		ts = []Target{{Destination: s.Destination, Retention: s.Retention}}
 	}
-	return []Target{{Destination: s.Destination, Retention: s.Retention}}
+	if s.IsGuestJob() && s.Guest != nil && s.Guest.KeepLast > 0 {
+		// A job's "keep the newest N" also covers its copies unless the
+		// copy was given a retention of its own.
+		for i := range ts {
+			if ts[i].Retention == nil {
+				ts[i].Retention = &Retention{KeepLast: s.Guest.KeepLast}
+			}
+		}
+	}
+	return ts
 }
 
 // Wants reports whether the target receives the named part.
@@ -594,6 +605,11 @@ func loadTargets(db *sql.DB, list []Service) error {
 // EffectiveRetention is the policy applied to s's backups in d: its
 // own override when set, otherwise the destination's.
 func (s Service) EffectiveRetention(d Destination) Retention {
+	for _, t := range s.EffectiveTargets() {
+		if t.Destination == d.Name && t.Retention != nil {
+			return *t.Retention
+		}
+	}
 	if s.Retention != nil {
 		return *s.Retention
 	}

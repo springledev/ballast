@@ -270,3 +270,43 @@ func TestRunGuestJobChecksStorageRoomBeforeDump(t *testing.T) {
 		})
 	}
 }
+
+// TestRunGuestJobKeepLastAppliesToCopy checks that a job's keep-last
+// also trims its copy, and that an explicit copy retention wins.
+func TestRunGuestJobKeepLastAppliesToCopy(t *testing.T) {
+	for _, tt := range []struct {
+		name      string
+		retention *inventory.Retention
+		want      string
+	}{
+		{"job keep-last covers the copy", nil, "--keep-last 2"},
+		{"copy's own retention wins", &inventory.Retention{KeepLast: 5}, "--keep-last 5"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			h := newHarness(t)
+			f := newFakePVE()
+			p := h.guestPipeline(t, f)
+			copyDir := t.TempDir()
+			if err := os.MkdirAll(filepath.Join(copyDir, "dump"), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(filepath.Join(copyDir, "dump", "vzdump-lxc-100-101.tar.zst"), make([]byte, 4096), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			if err := inventory.PutService(h.db, inventory.Service{
+				Name: "pve-ct100", Kind: inventory.KindProxmoxGuest, ProxmoxNode: "pve", ProxmoxVMID: 100,
+				Guest:       &inventory.GuestJob{Storage: "backup", CopyPath: copyDir, KeepLast: 2},
+				Destination: "local", Retention: tt.retention,
+			}); err != nil {
+				t.Fatal(err)
+			}
+			if state, err := p.Run(context.Background(), "pve-ct100"); state != engine.SUCCESS {
+				t.Fatalf("state = %s (%v)", state, err)
+			}
+			log, _ := os.ReadFile(h.resticLog)
+			if !strings.Contains(string(log), tt.want) {
+				t.Errorf("restic forget missing %q:\n%s", tt.want, log)
+			}
+		})
+	}
+}

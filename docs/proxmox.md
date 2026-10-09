@@ -52,6 +52,14 @@ ballast proxmox backup --node pve1 --vmid 101 --storage local --mode snapshot --
 
 Ballast starts the job, waits for it to finish, and reports the result.
 
+### Copies and "keep last"
+
+A scheduled job's `--keep-last N` applies to its copies too: with `--copy-to b2 --keep-last 2`, B2 also keeps only the newest 2 copies. After `ballast proxmox job add` or `edit`, Ballast prints how many backups are kept on the Proxmox storage and in each copy destination. To give a copy its own count, use `ballast service retention <job> --keep-last N ...`; that setting wins over the job's.
+
+### Compression and copies
+
+Ballast asks Proxmox for zstd-compressed dumps. Compressed files barely dedupe, so every weekly dump uploads in full (about the size of the guest each time). Uncompressed dumps dedupe far better, so a copy of one only uploads what changed. Ballast does not yet let you choose compression per job; until it does, keep `--keep-last` small for big guests.
+
 ## 4. Back up the services inside a guest
 
 Attach a catalog service (Vaultwarden, Postgres, a plain folder…) to a guest, in the web UI under **Proxmox → guests**.
