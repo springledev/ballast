@@ -152,3 +152,30 @@ func TestPutConfigSnapshotService(t *testing.T) {
 		})
 	}
 }
+
+func TestTargetSizeAndLastDumpSize(t *testing.T) {
+	db := openDB(t).DB()
+	if n, err := TargetSize(db, "immich", "usb"); err != nil || n != 0 {
+		t.Fatalf("TargetSize before any run = %d, %v; want 0", n, err)
+	}
+	for _, size := range []int64{100, 250} {
+		if err := RecordTargetSize(db, "immich", "usb", size); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if n, _ := TargetSize(db, "immich", "usb"); n != 250 {
+		t.Errorf("TargetSize = %d, want the latest (250)", n)
+	}
+	if n, err := LastProxmoxDumpSize(db, "vm1"); err != nil || n != 0 {
+		t.Errorf("LastProxmoxDumpSize with no dumps = %d, %v; want 0", n, err)
+	}
+	if err := RecordProxmoxDump(db, "vm1", "pve", "bk", "v1", 1, 500); err != nil {
+		t.Fatal(err)
+	}
+	if n, _ := LastProxmoxDumpSize(db, "vm1"); n != 500 {
+		t.Errorf("LastProxmoxDumpSize = %d, want 500", n)
+	}
+	if n, _ := OwnedProxmoxDumpBytes(db, "vm1", "pve", "bk"); n != 500 {
+		t.Errorf("OwnedProxmoxDumpBytes = %d, want 500", n)
+	}
+}

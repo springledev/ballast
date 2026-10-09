@@ -80,7 +80,9 @@ func (o *Ops) Preview(ctx context.Context, name string) (*ServicePreview, error)
 		dests[t.Destination] = d
 	}
 	if s.Kind != "" {
-		return previewJob(s, targets, dests), nil
+		pv := previewJob(s, targets, dests)
+		o.addDiskNotes(ctx, pv, s, dests)
+		return pv, nil
 	}
 	_, entry, err := o.resolvedEntry(ctx, name)
 	if err != nil {
@@ -94,6 +96,7 @@ func (o *Ops) Preview(ctx context.Context, name string) (*ServicePreview, error)
 			pv.EstimatedBytes = &b
 		}
 	}
+	o.addDiskNotes(ctx, pv, s, dests)
 	if len(pv.StopContainers) > 0 {
 		if secs, ok := o.lastStoppedSeconds(name); ok {
 			pv.StoppedSeconds = &secs
@@ -257,4 +260,24 @@ func keepsText(r inventory.Retention) string {
 		return "everything"
 	}
 	return strings.Join(bits, ", ")
+}
+
+// addDiskNotes warns in the preview when a local destination disk this
+// service writes to is expected to pass about 80% use (spec §20.3).
+func (o *Ops) addDiskNotes(ctx context.Context, pv *ServicePreview, s inventory.Service, dests map[string]inventory.Destination) {
+	projs, err := o.LocalDiskProjections(ctx)
+	if err != nil {
+		return
+	}
+	for _, p := range projs {
+		if !p.Warn() {
+			continue
+		}
+		for _, name := range p.Services {
+			if name == s.Name {
+				pv.Notes = append(pv.Notes, fmt.Sprintf("Warning: the disk holding %s is expected to be %.0f%% full once backups reach their full retention.", p.Name, p.Fraction()*100))
+				break
+			}
+		}
+	}
 }

@@ -101,6 +101,7 @@ func (o *Ops) Doctor(ctx context.Context) (DoctorReport, error) {
 		add("proxmox", "proxmox", DoctorFail, err.Error())
 	default:
 		add("proxmox", "proxmox", DoctorOK, "Proxmox VE "+tr.Version+" accepted the API token")
+		o.proxmoxDoctor(ctx, add)
 	}
 
 	dests, err := o.ListDestinations(ctx)
@@ -127,6 +128,8 @@ func (o *Ops) Doctor(ctx context.Context) (DoctorReport, error) {
 	if o.InTerminal {
 		add("runtime", "terminal", DoctorWarn, TerminalNotice)
 	}
+
+	o.diskProjectionDoctor(ctx, add)
 
 	if o.WorkRoot != "" {
 		st, detail := diskCheck(o.WorkRoot)
@@ -163,4 +166,53 @@ func diskCheck(dir string) (DoctorStatus, string) {
 		return DoctorWarn, fmt.Sprintf("%.1f GiB free; large databases may not fit in a verification drill.", gib)
 	}
 	return DoctorOK, fmt.Sprintf("%.1f GiB free for verification drills", gib)
+}
+
+// proxmoxDoctor checks that the token can list guests and read a
+// storage (a privilege-separated token can pass the version check yet
+// see nothing), and adds the Proxmox storage projections.
+func (o *Ops) proxmoxDoctor(ctx context.Context, add func(area, name string, st DoctorStatus, detail string)) {
+	conn, err := inventory.GetProxmoxConnection(o.DB)
+	if err != nil {
+		return
+	}
+	cl, err := o.Proxmox.Client(conn)
+	if err != nil {
+		return
+	}
+	storage := ""
+	if services, err := inventory.ListServices(o.DB); err == nil {
+		for _, s := range services {
+			if s.IsGuestJob() && s.Guest != nil && s.Guest.Storage != "" {
+				storage = s.Guest.Storage
+				break
+			}
+		}
+	}
+	st, detail := proxmoxAccessAdvice(cl.CheckAccess(ctx, storage))
+	add("proxmox", "access", st, detail)
+	if projs, err := o.ProxmoxStorageProjections(ctx, cl); err == nil {
+		for _, p := range projs {
+			add("disk", "proxmox storage "+p.Name, projStatus(p), p.Detail())
+		}
+	}
+}
+
+// diskProjectionDoctor adds one line per local destination disk.
+func (o *Ops) diskProjectionDoctor(ctx context.Context, add func(area, name string, st DoctorStatus, detail string)) {
+	projs, err := o.LocalDiskProjections(ctx)
+	if err != nil {
+		add("disk", "projection", DoctorWarn, "could not work out how full the backup disks will get: "+err.Error())
+		return
+	}
+	for _, p := range projs {
+		add("disk", p.Name, projStatus(p), p.Detail())
+	}
+}
+
+func projStatus(p DiskProjection) DoctorStatus {
+	if p.Warn() {
+		return DoctorWarn
+	}
+	return DoctorOK
 }

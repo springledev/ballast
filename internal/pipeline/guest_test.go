@@ -27,6 +27,7 @@ type fakePVE struct {
 	config      string
 	configFails bool
 	size        int64
+	storage     *proxmox.StorageStatus // reply to storage-status reads when set
 }
 
 func newFakePVE(foreign ...string) *fakePVE {
@@ -51,6 +52,8 @@ func (f *fakePVE) handler(t *testing.T) http.Handler {
 			f.next++
 			f.dumps = append([]proxmox.DumpVolume{{Volume: fmt.Sprintf("backup:backup/vzdump-lxc-100-%d.tar.zst", f.next), CTime: f.next, Size: f.size, VMID: 100}}, f.dumps...)
 			reply("UPID:pve:1")
+		case f.storage != nil && strings.Contains(p, "/storage/") && strings.HasSuffix(p, "/status"):
+			reply(f.storage)
 		case strings.HasSuffix(p, "/status"):
 			reply(map[string]string{"status": "stopped", "exitstatus": "OK"})
 		case r.Method == http.MethodDelete:
@@ -222,5 +225,48 @@ func TestRunGuestJobNotifiesOnFailure(t *testing.T) {
 	}
 	if n.jobFailures+n.verificationFails != 1 {
 		t.Errorf("failure notifications = %d job + %d verification, want exactly one", n.jobFailures, n.verificationFails)
+	}
+}
+
+func TestRunGuestJobChecksStorageRoomBeforeDump(t *testing.T) {
+	tests := []struct {
+		name      string
+		storage   proxmox.StorageStatus
+		wantState engine.State
+		wantDumps int // dumps on the storage after the second run
+	}{
+		{"roomy storage runs normally", proxmox.StorageStatus{Total: 1 << 30, Used: 1 << 20, Avail: 1<<30 - 1<<20}, engine.SUCCESS, 2},
+		{"over 80 percent warns but still verifies", proxmox.StorageStatus{Total: 10000, Used: 8000, Avail: 2000 + 4096}, engine.SUCCESS, 2},
+		{"no room fails before vzdump starts", proxmox.StorageStatus{Total: 10000, Used: 9990, Avail: 10}, engine.FAILED, 1},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			h := newHarness(t)
+			f := newFakePVE()
+			p := h.guestPipeline(t, f)
+			putGuest(t, h, inventory.GuestJob{Storage: "backup"}, "")
+			if st, _ := p.Run(context.Background(), "pve-ct100"); st != engine.SUCCESS {
+				t.Fatalf("first run = %s, want SUCCESS", st)
+			}
+			f.mu.Lock()
+			f.storage = &tt.storage
+			f.mu.Unlock()
+			state, err := p.Run(context.Background(), "pve-ct100")
+			if state != tt.wantState {
+				t.Fatalf("second run = %s (%v), want %s", state, err, tt.wantState)
+			}
+			if len(f.dumps) != tt.wantDumps {
+				t.Errorf("%d dump(s) on storage, want %d", len(f.dumps), tt.wantDumps)
+			}
+			if tt.wantState == engine.FAILED && (err == nil || !strings.Contains(err.Error(), "would fill it")) {
+				t.Errorf("error = %v, want a plain-English 'would fill it' message", err)
+			}
+			if tt.wantState == engine.SUCCESS {
+				runs, _ := engine.RecentRuns(h.db, "pve-ct100", 1)
+				if tr := transitionsOf(t, h.db, runs[0].ID); !containsInOrder(tr, string(engine.VERIFYING), string(engine.SUCCESS)) {
+					t.Errorf("transitions %v do not pass VERIFYING before SUCCESS", tr)
+				}
+			}
+		})
 	}
 }

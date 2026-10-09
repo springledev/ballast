@@ -110,3 +110,53 @@ func MarkProxmoxDumpsPruned(db *sql.DB, node string, volumes []string) error {
 	}
 	return nil
 }
+
+// RecordTargetSize remembers how many bytes the latest backup of
+// service sent to destination, for disk-use projections.
+func RecordTargetSize(db *sql.DB, service, destination string, bytes int64) error {
+	_, err := db.Exec(`INSERT OR REPLACE INTO target_sizes (service, destination, bytes, updated_at) VALUES (?, ?, ?, ?)`,
+		service, destination, bytes, time.Now().UTC().Format(time.RFC3339Nano))
+	if err != nil {
+		return fmt.Errorf("service %s: recording backup size for %s: %w", service, destination, err)
+	}
+	return nil
+}
+
+// TargetSize returns the recorded size of service's latest backup to
+// destination, or 0 when none is known.
+func TargetSize(db *sql.DB, service, destination string) (int64, error) {
+	var n int64
+	err := db.QueryRow(`SELECT bytes FROM target_sizes WHERE service = ? AND destination = ?`, service, destination).Scan(&n)
+	if errors.Is(err, sql.ErrNoRows) {
+		return 0, nil
+	}
+	if err != nil {
+		return 0, fmt.Errorf("service %s: reading backup size for %s: %w", service, destination, err)
+	}
+	return n, nil
+}
+
+// LastProxmoxDumpSize returns the size of the newest dump service
+// created, or 0 when it has made none.
+func LastProxmoxDumpSize(db *sql.DB, service string) (int64, error) {
+	var n int64
+	err := db.QueryRow(`SELECT size FROM proxmox_dumps WHERE service = ? ORDER BY created_at DESC LIMIT 1`, service).Scan(&n)
+	if errors.Is(err, sql.ErrNoRows) {
+		return 0, nil
+	}
+	if err != nil {
+		return 0, fmt.Errorf("service %s: reading last dump size: %w", service, err)
+	}
+	return n, nil
+}
+
+// OwnedProxmoxDumpBytes is the total size of the dumps service created
+// on node/storage that have not been pruned.
+func OwnedProxmoxDumpBytes(db *sql.DB, service, node, storage string) (int64, error) {
+	var n int64
+	err := db.QueryRow(`SELECT COALESCE(SUM(size), 0) FROM proxmox_dumps WHERE service = ? AND node = ? AND storage = ? AND pruned_at = ''`, service, node, storage).Scan(&n)
+	if err != nil {
+		return 0, fmt.Errorf("service %s: summing recorded dumps: %w", service, err)
+	}
+	return n, nil
+}

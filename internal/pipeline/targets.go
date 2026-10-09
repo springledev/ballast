@@ -148,6 +148,9 @@ func (p *Pipeline) uploadTarget(ctx context.Context, service string, rt *runTarg
 	if err != nil {
 		return nil, p.targetErr(rt, err)
 	}
+	if err := inventory.RecordTargetSize(p.DB, service, rt.dest.Name, int64(br.TotalBytesProcessed)); err != nil {
+		p.logf("%s: warning: %v", service, err)
+	}
 	return br, nil
 }
 

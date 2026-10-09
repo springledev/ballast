@@ -100,6 +100,20 @@ func (p *Pipeline) runGuest(ctx context.Context, svc inventory.Service) (engine.
 	if err := m.Transition(engine.DUMPING, "dumping"); err != nil {
 		return fail(err)
 	}
+	// Check the Proxmox storage has room before the dump starts, not
+	// after (spec §20.3). A storage that cannot be read is not fatal:
+	// the dump itself will report any real problem.
+	if last, lerr := inventory.LastProxmoxDumpSize(p.DB, service); lerr == nil && last > 0 {
+		if st, serr := cl.StorageStatus(ctx, opts.Node, opts.Storage); serr == nil {
+			warn, cerr := proxmox.CheckStorageRoom(st, opts.Storage, last)
+			if cerr != nil {
+				return fail(cerr)
+			}
+			if warn != "" {
+				p.logf("%s: warning: %s", service, warn)
+			}
+		}
+	}
 	res, err := cl.CreateDump(ctx, opts, p.pollInterval())
 	if err != nil {
 		return fail(fmt.Errorf("%s", p.redact(err.Error())))
