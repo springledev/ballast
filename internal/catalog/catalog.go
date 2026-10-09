@@ -117,6 +117,18 @@ type Backup struct {
 	// snapshots (config files + .env + container labels; spec §14
 	// step 22).
 	Compose *ComposeSpec `yaml:"compose,omitempty" json:"compose,omitempty"`
+	// RemoteFiles lists files read from another machine over SSH by the
+	// remote-files strategy (spec §20.2.1).
+	RemoteFiles *RemoteFilesSpec `yaml:"remoteFiles,omitempty" json:"remoteFiles,omitempty"`
+}
+
+// RemoteFilesSpec names the files the remote-files strategy reads from
+// the service's remote machine. Paths must sit inside Ballast's
+// allow-list of folders; Secrets opts in to secret classes (for example
+// "tailscale-node-key") that are otherwise left out.
+type RemoteFilesSpec struct {
+	Paths   []string `yaml:"paths" json:"paths"`
+	Secrets []string `yaml:"secrets,omitempty" json:"secrets,omitempty"`
 }
 
 // Dump is one dump command run inside a container (typically docker exec)

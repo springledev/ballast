@@ -86,7 +86,9 @@ func TestPlanDrop(t *testing.T) {
 	withLib := func(id string, day int) restic.Snapshot {
 		return dropSnap(id, day, "/data/library", "/data/config", "/work/database.sql")
 	}
-	noLib := func(id string, day int) restic.Snapshot { return dropSnap(id, day, "/data/config", "/work/database.sql") }
+	noLib := func(id string, day int) restic.Snapshot {
+		return dropSnap(id, day, "/data/config", "/work/database.sql")
+	}
 	sizes := map[string]uint64{"old1": 80, "old2": 5, "new1": 10}
 	tests := []struct {
 		name        string

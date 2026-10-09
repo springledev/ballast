@@ -94,3 +94,12 @@ ballast doctor
 ```
 
 This checks restic, each Docker host, the Proxmox connection, your destinations, and free disk space for restore tests, and says in plain English what to fix.
+
+## Backing up the Proxmox host's own files
+
+The settings snapshot covers `/etc/pve`, but the host also has files such as `/etc/fstab`, `/etc/exports` and `/etc/nfs.conf`. Ballast can copy these over SSH without installing anything on the Proxmox host (it only needs `sshd` and `tar`):
+
+1. Add the Proxmox host under Docker hosts as an SSH host (the host does not need Docker).
+2. Add a service from the "Files from another machine" entry on that host and list the files, separated by commas.
+
+It only reads, only from `/etc`, `/usr/local`, `/opt`, `/srv` and `/var/spool/cron`, and leaves secrets out unless you opt in under "secrets": `tailscale-node-key`, `ssh-host-keys` or `password-hashes`. The run log says what was left out.

@@ -1,0 +1,32 @@
+# catalog/remote-files.yaml — files of another machine, read over SSH
+# (spec §20.2.1).
+#
+# Copies chosen files (for example a Proxmox host's /etc/fstab,
+# /etc/exports and /etc/nfs.conf) from a machine you registered as an
+# SSH host, into one archive. Read-only, nothing is installed on that
+# machine (it only needs sshd and tar). Only folders on Ballast's
+# allow-list can be read; secrets such as Tailscale's node key are left
+# out unless you list them under "secrets".
+apiVersion: ballast.dev/v1
+service: remote-files
+version: 1
+display:
+  name: Files from another machine
+  description: Copy chosen config files from another machine over SSH, read-only, with nothing installed on it
+parameters:
+  - name: paths
+    required: true
+    default: "/etc/fstab,/etc/exports,/etc/nfs.conf,/etc/hosts,/etc/hostname,/etc/network/interfaces"
+    prompt: "Files or folders to copy from that machine, separated by commas"
+  - name: secrets
+    default: "none"
+    prompt: "Secrets to include on purpose, separated by commas (tailscale-node-key, ssh-host-keys, password-hashes); say none for none"
+backup:
+  strategy: remote-files
+  remoteFiles:
+    paths: ["{{ .Params.paths }}"]
+    secrets: ["{{ .Params.secrets }}"]
+verify:
+  method: archive-integrity
+notifications:
+  failureVerbosity: full

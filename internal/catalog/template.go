@@ -59,6 +59,12 @@ func (e *Entry) DeepCopy() *Entry {
 		cs := *e.Backup.Compose
 		c.Backup.Compose = &cs
 	}
+	if e.Backup.RemoteFiles != nil {
+		rf := *e.Backup.RemoteFiles
+		rf.Paths = append([]string(nil), rf.Paths...)
+		rf.Secrets = append([]string(nil), rf.Secrets...)
+		c.Backup.RemoteFiles = &rf
+	}
 	c.Verify.FilterStderr = append([]string(nil), e.Verify.FilterStderr...)
 	c.Verify.Methods = append([]string(nil), e.Verify.Methods...)
 	if sm := e.Verify.Smoke; sm != nil {
@@ -264,6 +270,17 @@ func (e *Entry) Resolve(ctx TemplateContext) error {
 			return fmt.Errorf("compose project: %w", err)
 		}
 		cs.Project = p
+	}
+	if rf := e.Backup.RemoteFiles; rf != nil {
+		for _, list := range []*[]string{&rf.Paths, &rf.Secrets} {
+			for i, v := range *list {
+				n, err := substitute(v, ctx)
+				if err != nil {
+					return fmt.Errorf("remoteFiles entry %q: %w", v, err)
+				}
+				(*list)[i] = n
+			}
+		}
 	}
 	ss := e.Backup.StopStart
 	if ss != nil {

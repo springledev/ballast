@@ -281,8 +281,16 @@ func For(entry *catalog.Entry, opts Options) (Strategy, error) {
 			return nil, err
 		}
 		return &Compose{entry: entry, opts: opts}, nil
+	case "remote-files":
+		if opts.Runner == nil {
+			return nil, fmt.Errorf("service %s: remote-files strategy needs a command runner", entry.Service)
+		}
+		if err := validateRemoteFilesEntry(entry); err != nil {
+			return nil, err
+		}
+		return &RemoteFiles{entry: entry, opts: opts}, nil
 	default:
-		return nil, fmt.Errorf("service %s: unknown backup strategy %q (want one of: files, dump, stop-start, exec, volume, compose)", entry.Service, entry.Backup.Strategy)
+		return nil, fmt.Errorf("service %s: unknown backup strategy %q (want one of: files, dump, stop-start, exec, volume, compose, remote-files)", entry.Service, entry.Backup.Strategy)
 	}
 }
 

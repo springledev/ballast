@@ -1160,9 +1160,23 @@
 
  - Dropping a part from a destination offers to remove that destination's old snapshots of the part, shows the space it would free, and then forgets and prunes exactly those snapshot ids. Ballast still deletes only what it created (§19 ownership rule).
 
- - A read-only "remote machine files" source reads chosen files from a machine over SSH with no install on it, using an allow-list in which secrets (for example a VPN node key) are opt-in. The detailed design is written into this section before step 57 is built.
+ - A read-only "remote machine files" source reads chosen files from a machine over SSH with no install on it, using an allow-list in which secrets (for example a VPN node key) are opt-in. The design is in §20.2.1.
 
 
+
+ ### 20.2.1 Remote machine files (design for step 57)
+
+ - **What it is.** A catalog strategy `remote-files` (built-in entry `remote-files`) that copies chosen files from another machine, for example a Proxmox host's `/etc/fstab`, `/etc/exports` and `/etc/nfs.conf`, into one tar artifact that is uploaded and verified like any other. It is read-only and installs nothing on the target: Ballast runs `ssh <machine> tar -cf - ...` and nothing else (plus `ls -d` to check the paths exist). The target needs only `sshd` and `tar`.
+
+ - **Which machine.** The service's Docker host (§17.2) of kind remote-ssh names the machine, its address and its SSH key; the host does not have to run Docker, because only SSH is used. SSH host keys are trusted on first use in Ballast's own known-hosts file, as for SFTP destinations. A local host is refused with a message to register the machine first.
+
+ - **Allow-list.** Every path must be absolute, clean (no `..`) and inside an allowed root: `/etc`, `/usr/local`, `/opt`, `/srv`, `/var/spool/cron`. Anything else is refused before connecting, with the reason in plain English. `/etc/pve` is always refused (it is covered by the Proxmox settings snapshot, §17.3).
+
+ - **Secrets are opt-in.** Some files are secrets and are left out unless the service names their class in `secrets`: `tailscale-node-key` (`/var/lib/tailscale`, which sits outside the roots and so also needs the opt-in to be asked for), `ssh-host-keys` (`/etc/ssh/ssh_host_*`) and `password-hashes` (`/etc/shadow`, `/etc/gshadow` and their backups). When a requested folder (for example `/etc`) holds a secret that was not opted in, tar skips it, and the run log names what was skipped. An unknown class name is a configuration error. Secret contents are never shown in the UI, API or logs (rule 2); they are protected by the repository's encryption.
+
+ - **Verification.** The archive-integrity check (every header read to the end) plus restic's read-back. A missing path fails the run before anything is uploaded; a file that changes while it is read is not tolerated silently (tar's non-zero exit fails the run).
+
+ - **Restore.** The archive is an ordinary tar with the original absolute paths minus the leading `/`; restore extracts to a folder the operator chooses. Ballast never writes back to the remote machine.
 
  ### 20.3 Safety nets and guidance
 
