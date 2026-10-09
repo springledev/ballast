@@ -266,7 +266,7 @@ Example:
 					return err
 				}
 				cmd.Printf("%s: scheduled %q\n", jobName, jobSchedule)
-			cmd.Println("A new schedule never starts a backup by surprise. It first runs at its next slot, unless this has never been backed up at all, which runs on the next check. To back up right now, run `ballast backup`.")
+				cmd.Println("A new schedule never starts a backup by surprise. It first runs at its next slot, unless this has never been backed up at all, which runs on the next check. To back up right now, run `ballast backup`.")
 			}
 			if chk, err := a.ops.CheckProxmoxStorage(cmd.Context(), jobName, jobNode, jobStorage, jobVMID); err == nil && chk.Warning != "" {
 				cmd.Println("Note: " + chk.Warning)
@@ -354,6 +354,50 @@ nothing is changed in Proxmox.`,
 	},
 }
 
+var proxmoxJobEditCmd = &cobra.Command{
+	Use:   "edit <name>",
+	Short: "Change a Proxmox backup job's schedule, keep-last or copy destination",
+	Long: `Change a Proxmox guest backup job in place. Only the settings you give are
+changed; the job keeps its run history and verification record.
+
+Examples:
+
+  ballast proxmox job edit pve-vm100 --schedule "0 4 * * 0" --keep-last 3
+  ballast proxmox job edit pve-vm100 --copy-to b2 --copy-path /mnt/pve-backup
+  ballast proxmox job edit pve-vm100 --copy-to ""    # stop copying offsite`,
+	Args: cobra.ExactArgs(1),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		fl := cmd.Flags()
+		var e api.GuestJobEdit
+		if fl.Changed("schedule") {
+			e.Schedule = &jobSchedule
+		}
+		if fl.Changed("keep-last") {
+			e.KeepLast = &jobKeepLast
+		}
+		if fl.Changed("copy-to") {
+			e.CopyTo = &jobCopyTo
+		}
+		if fl.Changed("copy-path") {
+			e.CopyPath = &jobCopyPath
+		}
+		if e == (api.GuestJobEdit{}) {
+			return fmt.Errorf("nothing to change: give --schedule, --keep-last, --copy-to or --copy-path")
+		}
+		cfg, err := loadConfig()
+		if err != nil {
+			return err
+		}
+		return withApp(cfg, cmd.ErrOrStderr(), func(a *app) error {
+			if _, err := a.ops.EditGuestJob(cmd.Context(), args[0], e); err != nil {
+				return err
+			}
+			cmd.Printf("%s: updated. Its run history and verification record are kept.\n", args[0])
+			return nil
+		})
+	},
+}
+
 // registerProxmoxCommands attaches `ballast proxmox ...` (spec §14
 // step 24, §17.3) to root.
 func registerProxmoxCommands(root *cobra.Command) {
@@ -389,7 +433,12 @@ func registerProxmoxCommands(root *cobra.Command) {
 		_ = proxmoxJobAddCmd.MarkFlagRequired(n)
 	}
 	jobCmd := &cobra.Command{Use: "job", Short: "Scheduled Proxmox guest backups"}
-	jobCmd.AddCommand(proxmoxJobAddCmd)
+	ef := proxmoxJobEditCmd.Flags()
+	ef.StringVar(&jobSchedule, "schedule", "", "new cron schedule")
+	ef.IntVar(&jobKeepLast, "keep-last", 0, "keep this many of the dumps Ballast made (0 keeps them all)")
+	ef.StringVar(&jobCopyTo, "copy-to", "", "copy each dump to this backup destination (empty stops copying)")
+	ef.StringVar(&jobCopyPath, "copy-path", "", "folder on this machine where the Proxmox storage appears")
+	jobCmd.AddCommand(proxmoxJobAddCmd, proxmoxJobEditCmd)
 
 	cf := proxmoxConfigAddCmd.Flags()
 	cf.StringVar(&cfgName, "name", "proxmox-config", "name for this job")

@@ -9,9 +9,10 @@ import (
 )
 
 var (
-	targetAdd    []string
-	targetRemove []string
-	serviceAlso  []string
+	targetAdd     []string
+	targetRemove  []string
+	serviceAlso   []string
+	targetPrimary string
 )
 
 // parseTargetFlag reads "destination" (every part) or
@@ -64,7 +65,8 @@ hides how the other did.
 With no flags this lists the destinations. --add NAME sends to one more
 destination (everything), or --add NAME=part,part sends it only those
 parts, for example --add b2=library. --remove NAME stops sending to one.
-The first destination is the main one.`,
+The first destination is the main one; --primary NAME makes a different one
+the main one, keeping the service's run history and verification record.`,
 	Args: cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		cfg, err := loadConfig()
@@ -77,6 +79,16 @@ The first destination is the main one.`,
 				return err
 			}
 			targets := s.EffectiveTargets()
+			if targetPrimary != "" {
+				if len(targetAdd) > 0 || len(targetRemove) > 0 {
+					return fmt.Errorf("use --primary on its own; run --add or --remove as a separate command")
+				}
+				s, err = a.ops.SetPrimaryTarget(cmd.Context(), s.Name, targetPrimary)
+				if err != nil {
+					return err
+				}
+				targets = s.EffectiveTargets()
+			}
 			if len(targetAdd) > 0 || len(targetRemove) > 0 {
 				targets = append([]inventory.Target(nil), targets...)
 				for _, name := range targetRemove {
@@ -129,5 +141,6 @@ The first destination is the main one.`,
 
 func init() {
 	serviceTargetsCmd.Flags().StringArrayVar(&targetAdd, "add", nil, "send to one more destination: NAME or NAME=part,part (repeatable)")
+	serviceTargetsCmd.Flags().StringVar(&targetPrimary, "primary", "", "make this destination the main one (it must already be one of the service's destinations)")
 	serviceTargetsCmd.Flags().StringArrayVar(&targetRemove, "remove", nil, "stop sending to this destination (repeatable)")
 }

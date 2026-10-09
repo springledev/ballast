@@ -484,6 +484,17 @@ async function submit() {
   }
 }
 
+async function makeMain(name: string, destination: string) {
+  error.value = "";
+  try {
+    await api.setPrimaryTarget(name, destination);
+    saved.value = `${destination} is now the main destination for ${name}. Its backup history is kept.`;
+    await load();
+  } catch (e) {
+    error.value = (e as Error).message;
+  }
+}
+
 async function remove(name: string) {
   if (!confirm(`Stop backing up "${name}"? Backups already made are kept; Ballast just stops making new ones.`)) {
     return;
@@ -541,6 +552,7 @@ onMounted(load);
         <p class="item-sub">{{ retentionLine(s) }}</p>
         <p v-for="t in (s.targets ?? []).slice(1)" :key="t.destination" class="item-sub">
           Also sends to {{ t.destination }}{{ t.parts?.length ? " (only " + t.parts.join(", ") + ")" : "" }}
+          <button class="btn btn-quiet" type="button" @click="makeMain(s.name, t.destination)">Make main</button>
         </p>
 
         <div v-if="stateFor(s.name).open" class="panel" style="margin-top: 0.6rem">

@@ -9,6 +9,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/springledev/ballast/internal/engine"
 	"github.com/springledev/ballast/internal/inventory"
 	"github.com/springledev/ballast/internal/proxmox"
 	"github.com/springledev/keel/secret"
@@ -389,5 +390,168 @@ func TestInGuestLayers(t *testing.T) {
 				t.Fatalf("layers = %+v, err = %v, want passed=%v", layers, err, tt.want)
 			}
 		})
+	}
+}
+
+func TestEditGuestJob(t *testing.T) {
+	ctx := context.Background()
+	h := newHarness(t)
+	h.ops.Redact = secret.NewSet()
+	h.ops.Proxmox = proxmox.Resolver{CredDirs: []string{h.credDir}, Redact: h.ops.Redact}
+	h.addDestination("local")
+	h.addDestination("b2")
+	if _, err := h.ops.SetupProxmoxConnection(ctx, ProxmoxConnectionSetup{
+		Connection:  proxmox.Connection{Host: "https://pve.invalid:8006", TokenID: "ballast@pve!backup"},
+		Credentials: proxmox.Credentials{TokenSecret: "s3cr3t"}, SkipTest: true,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	job := inventory.Service{
+		Name: "pve-vm100", Kind: inventory.KindProxmoxGuest, ProxmoxNode: "pve", ProxmoxVMID: 100,
+		Guest: &inventory.GuestJob{Storage: "nas", KeepLast: 2},
+	}
+	if err := h.ops.PutService(ctx, job); err != nil {
+		t.Fatal(err)
+	}
+	finishVerifiedRun(t, h, "pve-vm100")
+	defer requireVerifiedRunKept(t, h, "pve-vm100")
+	intp := func(i int) *int { return &i }
+	strp := func(s string) *string { return &s }
+
+	tests := []struct {
+		name    string
+		edit    GuestJobEdit
+		wantErr bool
+		check   func(t *testing.T, s inventory.Service)
+	}{
+		{name: "keep-last only", edit: GuestJobEdit{KeepLast: intp(5)}, check: func(t *testing.T, s inventory.Service) {
+			if s.Guest.KeepLast != 5 || s.Guest.Storage != "nas" {
+				t.Errorf("guest = %+v", s.Guest)
+			}
+		}},
+		{name: "negative keep-last", edit: GuestJobEdit{KeepLast: intp(-1)}, wantErr: true},
+		{name: "bad cron", edit: GuestJobEdit{Schedule: strp("nope")}, wantErr: true},
+		{name: "unknown destination", edit: GuestJobEdit{CopyTo: strp("missing"), CopyPath: strp("/mnt/x")}, wantErr: true},
+		{name: "schedule and copy", edit: GuestJobEdit{Schedule: strp("0 4 * * 0"), CopyTo: strp("b2"), CopyPath: strp("/mnt/x")}, check: func(t *testing.T, s inventory.Service) {
+			if s.Destination != "b2" || s.Guest.CopyPath != "/mnt/x" || s.Guest.KeepLast != 5 {
+				t.Errorf("service = %+v / %+v", s, s.Guest)
+			}
+			j, err := h.ops.GetSchedule(ctx, "pve-vm100")
+			if err != nil || j.Cron != "0 4 * * 0" {
+				t.Errorf("schedule = %+v, %v", j, err)
+			}
+		}},
+		{name: "stop copying", edit: GuestJobEdit{CopyTo: strp("")}, check: func(t *testing.T, s inventory.Service) {
+			if s.Destination != "" || len(s.Targets) != 0 {
+				t.Errorf("still copying: %+v", s)
+			}
+		}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := h.ops.EditGuestJob(ctx, "pve-vm100", tt.edit)
+			if (err != nil) != tt.wantErr {
+				t.Fatalf("err = %v, wantErr %v", err, tt.wantErr)
+			}
+			if tt.check != nil {
+				got, err := h.ops.GetService(ctx, "pve-vm100")
+				if err != nil {
+					t.Fatal(err)
+				}
+				tt.check(t, got)
+			}
+		})
+	}
+	if _, err := h.ops.EditGuestJob(ctx, "nope", GuestJobEdit{KeepLast: intp(1)}); err == nil {
+		t.Error("editing a missing job should fail")
+	}
+}
+
+func TestSetPrimaryTarget(t *testing.T) {
+	ctx := context.Background()
+	h := newHarness(t)
+	h.addDestination("local")
+	h.addDestination("b2")
+	h.addDestination("other")
+	svc := inventory.Service{
+		Name: "immich", CatalogEntry: "folder", Destination: "local",
+		Params:  map[string]string{"path": "/data"},
+		Targets: []inventory.Target{{Destination: "local"}, {Destination: "b2", Parts: []string{"library"}}},
+	}
+	if err := h.ops.PutService(ctx, svc); err != nil {
+		t.Fatal(err)
+	}
+	finishVerifiedRun(t, h, "immich")
+	defer requireVerifiedRunKept(t, h, "immich")
+	if _, err := h.ops.SetPrimaryTarget(ctx, "immich", "other"); err == nil {
+		t.Error("a destination the service does not use cannot become main")
+	}
+	if _, err := h.ops.SetPrimaryTarget(ctx, "missing", "b2"); err == nil {
+		t.Error("missing service should fail")
+	}
+	if _, err := h.ops.SetPrimaryTarget(ctx, "immich", "b2"); err != nil {
+		t.Fatal(err)
+	}
+	got, err := h.ops.GetService(ctx, "immich")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Destination != "b2" || len(got.Targets) != 2 || got.Targets[0].Destination != "b2" || got.Targets[1].Destination != "local" {
+		t.Errorf("targets = %+v destination = %q", got.Targets, got.Destination)
+	}
+	if len(got.Targets[0].Parts) != 1 || got.Targets[0].Parts[0] != "library" {
+		t.Errorf("parts lost: %+v", got.Targets[0])
+	}
+}
+
+func TestHTTPPrimaryTargetAndJobEdit(t *testing.T) {
+	h := newHarness(t)
+	h.addDestination("local")
+	h.addDestination("b2")
+	if err := h.ops.PutService(context.Background(), inventory.Service{
+		Name: "s", CatalogEntry: "folder", Destination: "local", Params: map[string]string{"path": "/d"},
+		Targets: []inventory.Target{{Destination: "local"}, {Destination: "b2"}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	mux := NewHandler(h.ops, testAPIToken)
+	do := func(method, path string, body any) *httptest.ResponseRecorder {
+		req := httptest.NewRequest(method, path, jsonBody(t, body))
+		req.Header.Set("Authorization", "Bearer "+testAPIToken)
+		rr := httptest.NewRecorder()
+		mux.ServeHTTP(rr, req)
+		return rr
+	}
+	if rr := do(http.MethodPut, "/api/v1/services/s/primary-target", map[string]string{"destination": "b2"}); rr.Code != http.StatusOK {
+		t.Fatalf("primary-target = %d: %s", rr.Code, rr.Body.String())
+	}
+	if got, _ := h.ops.GetService(context.Background(), "s"); got.Destination != "b2" {
+		t.Errorf("destination = %q", got.Destination)
+	}
+	if rr := do(http.MethodPatch, "/api/v1/proxmox/jobs/s", map[string]int{"keep_last": 2}); rr.Code == http.StatusOK {
+		t.Errorf("editing a non-guest service as a job should fail: %s", rr.Body.String())
+	}
+}
+
+// finishVerifiedRun walks a run for service through VERIFYING to SUCCESS.
+func finishVerifiedRun(t *testing.T, h *harness, service string) {
+	t.Helper()
+	m, err := engine.StartRun(h.ops.DB, service)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, st := range []engine.State{engine.PREPARING, engine.DUMPING, engine.UPLOADING, engine.VERIFYING, engine.SUCCESS} {
+		if err := m.Transition(st, "test"); err != nil {
+			t.Fatalf("transition to %s: %v", st, err)
+		}
+	}
+}
+
+// requireVerifiedRunKept fails unless service's latest run is still SUCCESS.
+func requireVerifiedRunKept(t *testing.T, h *harness, service string) {
+	t.Helper()
+	runs, err := engine.RecentRuns(h.ops.DB, service, 1)
+	if err != nil || len(runs) != 1 || runs[0].State != engine.SUCCESS {
+		t.Fatalf("run history lost after edit: %+v, %v", runs, err)
 	}
 }

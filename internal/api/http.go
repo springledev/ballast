@@ -119,6 +119,8 @@ func NewAuthedHandler(ops *Ops, auth *Auth) http.Handler {
 	protected.HandleFunc("POST /api/v1/proxmox/backup", h.backupProxmoxGuest)
 	protected.HandleFunc("GET /api/v1/proxmox/storage-check", h.checkProxmoxStorage)
 	protected.HandleFunc("GET /api/v1/proxmox/config", h.viewProxmoxConfig)
+	protected.HandleFunc("PATCH /api/v1/proxmox/jobs/{name}", h.editGuestJob)
+	protected.HandleFunc("PUT /api/v1/services/{name}/primary-target", h.putPrimaryTarget)
 
 	protected.HandleFunc("GET /api/v1/auth/session", auth.session)
 	protected.HandleFunc("POST /api/v1/auth/rotate", auth.rotate)
@@ -1000,4 +1002,38 @@ func (h *handler) viewProxmoxConfig(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, v)
+}
+
+// editGuestJob handles PATCH /api/v1/proxmox/jobs/{name}: change a
+// guest backup job's schedule, keep-last or copy destination.
+func (h *handler) editGuestJob(w http.ResponseWriter, r *http.Request) {
+	var body GuestJobEdit
+	if err := decodeJSON(r, &body); err != nil {
+		h.writeErr(w, err, http.StatusBadRequest)
+		return
+	}
+	s, err := h.ops.EditGuestJob(r.Context(), pathName(r), body)
+	if err != nil {
+		h.writeErr(w, err, http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, http.StatusOK, s)
+}
+
+// putPrimaryTarget handles PUT /api/v1/services/{name}/primary-target:
+// make one of the service's destinations its main one.
+func (h *handler) putPrimaryTarget(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Destination string `json:"destination"`
+	}
+	if err := decodeJSON(r, &body); err != nil {
+		h.writeErr(w, err, http.StatusBadRequest)
+		return
+	}
+	s, err := h.ops.SetPrimaryTarget(r.Context(), pathName(r), body.Destination)
+	if err != nil {
+		h.writeErr(w, err, http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, http.StatusOK, s)
 }

@@ -11,6 +11,7 @@ import (
 	"github.com/springledev/ballast/internal/engine"
 	"github.com/springledev/ballast/internal/inventory"
 	"github.com/springledev/ballast/internal/proxmox"
+	"github.com/springledev/ballast/internal/scheduler"
 	"github.com/springledev/keel/dockerhost"
 )
 
@@ -358,4 +359,96 @@ func (o *Ops) ViewProxmoxConfig(ctx context.Context) (ProxmoxConfigView, error) 
 		v.Parts[part] = b
 	}
 	return v, nil
+}
+
+// GuestJobEdit is a partial change to a Proxmox guest backup job. A nil
+// field is left as it is.
+type GuestJobEdit struct {
+	// Schedule is a new cron expression.
+	Schedule *string `json:"schedule,omitempty"`
+	// KeepLast is how many of the dumps Ballast made to keep (0 keeps all).
+	KeepLast *int `json:"keep_last,omitempty"`
+	// CopyTo is the destination each dump is also copied to; an empty
+	// string stops copying.
+	CopyTo *string `json:"copy_to,omitempty"`
+	// CopyPath is the folder on this machine where the Proxmox storage appears.
+	CopyPath *string `json:"copy_path,omitempty"`
+}
+
+// EditGuestJob changes a Proxmox guest backup job in place. The job keeps
+// its run history and verification record, because it is saved under the
+// same name rather than removed and re-added.
+func (o *Ops) EditGuestJob(ctx context.Context, name string, e GuestJobEdit) (inventory.Service, error) {
+	s, err := inventory.GetService(o.DB, name)
+	if err != nil {
+		return inventory.Service{}, wrapf("service "+name, err)
+	}
+	if !s.IsGuestJob() || s.Guest == nil {
+		return inventory.Service{}, fmt.Errorf("service %s: %w: this is not a Proxmox guest backup job", name, ErrValidation)
+	}
+	if e.Schedule != nil {
+		if _, err := scheduler.ParseCron(*e.Schedule); err != nil {
+			return inventory.Service{}, fmt.Errorf("service %s: %w: %w", name, ErrValidation, err)
+		}
+	}
+	g := *s.Guest
+	if e.KeepLast != nil {
+		if *e.KeepLast < 0 {
+			return inventory.Service{}, fmt.Errorf("service %s: %w: keep-last cannot be negative", name, ErrValidation)
+		}
+		g.KeepLast = *e.KeepLast
+	}
+	if e.CopyPath != nil {
+		g.CopyPath = *e.CopyPath
+	}
+	s.Guest = &g
+	if e.CopyTo != nil {
+		s.Destination = *e.CopyTo
+		s.Targets = nil
+		if *e.CopyTo != "" {
+			s.Targets = []inventory.Target{{Destination: *e.CopyTo}}
+		}
+	}
+	if err := o.putGuestJob(ctx, s); err != nil {
+		return inventory.Service{}, err
+	}
+	if e.Schedule != nil {
+		if err := o.SetSchedule(ctx, name, *e.Schedule); err != nil {
+			return inventory.Service{}, err
+		}
+	}
+	return s, nil
+}
+
+// SetPrimaryTarget makes dest the main destination of service name,
+// moving it to the front of the service's destinations. The service keeps
+// its run history and verification record.
+func (o *Ops) SetPrimaryTarget(ctx context.Context, name, dest string) (inventory.Service, error) {
+	s, err := inventory.GetService(o.DB, name)
+	if err != nil {
+		return inventory.Service{}, wrapf("service "+name, err)
+	}
+	old := s.EffectiveTargets()
+	idx := -1
+	for i, t := range old {
+		if t.Destination == dest {
+			idx = i
+		}
+	}
+	if idx < 0 {
+		return inventory.Service{}, fmt.Errorf("service %s: %w: it does not back up to %q, so it cannot be the main destination (add it first)", name, ErrValidation, dest)
+	}
+	targets := []inventory.Target{old[idx]}
+	for i, t := range old {
+		if i != idx {
+			targets = append(targets, t)
+		}
+	}
+	s.Targets = targets
+	s.Destination = dest
+	s.Retention = targets[0].Retention
+	if err := o.PutService(ctx, s); err != nil {
+		return inventory.Service{}, err
+	}
+	return s, nil
 }

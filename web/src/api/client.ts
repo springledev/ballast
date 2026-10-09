@@ -189,6 +189,17 @@ export const api = {
     return request("PUT", `${base}/services/${encodeURIComponent(name)}/schedule/enabled`, { enabled });
   },
 
+  // --- editing in place (keeps run history and verification record) ---
+  setPrimaryTarget(name: string, destination: string): Promise<Service> {
+    return request("PUT", `${base}/services/${encodeURIComponent(name)}/primary-target`, { destination });
+  },
+  editProxmoxJob(
+    name: string,
+    edit: { schedule?: string; keep_last?: number; copy_to?: string; copy_path?: string },
+  ): Promise<Service> {
+    return request("PATCH", `${base}/proxmox/jobs/${encodeURIComponent(name)}`, edit);
+  },
+
   // --- trigger tokens ---
   generateTriggerToken(name: string): Promise<{ token: string }> {
     return request("POST", `${base}/services/${encodeURIComponent(name)}/trigger-token`);
