@@ -47,6 +47,7 @@ case "$cmd" in
   restore) exit 0 ;;
   forget) cat "$STUB_FIXTURE_DIR/forget-keep-remove.json" ;;
   prune) exit 0 ;;
+  stats) echo '{"total_size": 4096, "snapshots_count": 2}' ;;
   check|unlock) exit 0 ;;
   list) printf '%s\n' $STUB_LOCK_IDS ;;
   cat) cat "$STUB_FIXTURE_DIR/lock.json" ;;
@@ -1229,5 +1230,44 @@ func TestProgressWriterReportsStatusLines(t *testing.T) {
 	}
 	if !strings.Contains(w.all.String(), `"snapshot_id":"abc"`) {
 		t.Error("the full output must still be kept for parsing the summary")
+	}
+}
+
+// TestForgetSnapshots: exactly the named snapshots are forgotten, and
+// anything that is not a plain snapshot ID is refused before restic runs.
+func TestForgetSnapshots(t *testing.T) {
+	s := newResticStub(t)
+	repo := s.openStub(t)
+	if err := repo.ForgetSnapshots(context.Background(), []string{"aaaa1111", "bbbb2222"}); err != nil {
+		t.Fatalf("ForgetSnapshots: %v", err)
+	}
+	log := s.invocations(t)
+	if len(log) != 1 || log[0] != "forget aaaa1111 bbbb2222" {
+		t.Errorf("invocations = %v, want one forget with exactly those IDs", log)
+	}
+	for _, ids := range [][]string{nil, {"--keep-last"}, {"latest"}, {"abc"}, {"aaaa1111", ""}} {
+		if err := repo.ForgetSnapshots(context.Background(), ids); err == nil {
+			t.Errorf("ForgetSnapshots(%v) = nil error, want refusal", ids)
+		}
+	}
+	if len(s.invocations(t)) != 1 {
+		t.Errorf("a refused call must not run restic: %v", s.invocations(t))
+	}
+}
+
+// TestRawDataSize reads the stored size of a set of snapshots.
+func TestRawDataSize(t *testing.T) {
+	s := newResticStub(t)
+	repo := s.openStub(t)
+	n, err := repo.RawDataSize(context.Background(), []string{"aaaa1111"})
+	if err != nil || n != 4096 {
+		t.Fatalf("RawDataSize = %d, %v, want 4096", n, err)
+	}
+	if _, err := repo.RawDataSize(context.Background(), nil); err == nil {
+		t.Error("no IDs should be refused")
+	}
+	bad := s.withEnv(t, repo, "STUB_GARBAGE_CMD=stats")
+	if _, err := bad.RawDataSize(context.Background(), []string{"aaaa1111"}); err == nil {
+		t.Error("unparseable stats output should fail")
 	}
 }

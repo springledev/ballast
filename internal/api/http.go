@@ -7,6 +7,7 @@ import (
 	"github.com/springledev/keel/dockerhost"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/springledev/ballast/internal/backend"
@@ -121,6 +122,8 @@ func NewAuthedHandler(ops *Ops, auth *Auth) http.Handler {
 	protected.HandleFunc("GET /api/v1/proxmox/config", h.viewProxmoxConfig)
 	protected.HandleFunc("PATCH /api/v1/proxmox/jobs/{name}", h.editGuestJob)
 	protected.HandleFunc("PUT /api/v1/services/{name}/primary-target", h.putPrimaryTarget)
+	protected.HandleFunc("GET /api/v1/services/{name}/drop-preview", h.previewDropParts)
+	protected.HandleFunc("POST /api/v1/services/{name}/drop-cleanup", h.dropParts)
 
 	protected.HandleFunc("GET /api/v1/auth/session", auth.session)
 	protected.HandleFunc("POST /api/v1/auth/rotate", auth.rotate)
@@ -1036,4 +1039,48 @@ func (h *handler) putPrimaryTarget(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, s)
+}
+
+// previewDropParts handles GET /api/v1/services/{name}/drop-preview
+// ?destination=X&parts=a,b: which old backups hold the dropped parts and
+// how much space removing them frees. Nothing is deleted.
+func (h *handler) previewDropParts(w http.ResponseWriter, r *http.Request) {
+	q := r.URL.Query()
+	plan, err := h.ops.PreviewDropParts(r.Context(), pathName(r), q.Get("destination"), splitParts(q.Get("parts")))
+	if err != nil {
+		h.writeErr(w, err, http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, http.StatusOK, plan)
+}
+
+// dropParts handles POST /api/v1/services/{name}/drop-cleanup: remove
+// exactly the listed backups from one destination, then reclaim space.
+func (h *handler) dropParts(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Destination string   `json:"destination"`
+		Parts       []string `json:"parts"`
+		Snapshots   []string `json:"snapshots"`
+	}
+	if err := decodeJSON(r, &body); err != nil {
+		h.writeErr(w, err, http.StatusBadRequest)
+		return
+	}
+	plan, err := h.ops.DropParts(r.Context(), pathName(r), body.Destination, body.Parts, body.Snapshots)
+	if err != nil {
+		h.writeErr(w, err, http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, http.StatusOK, plan)
+}
+
+// splitParts reads a comma-separated list of part names.
+func splitParts(v string) []string {
+	var out []string
+	for _, p := range strings.Split(v, ",") {
+		if p = strings.TrimSpace(p); p != "" {
+			out = append(out, p)
+		}
+	}
+	return out
 }

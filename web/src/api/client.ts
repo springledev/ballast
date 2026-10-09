@@ -193,6 +193,13 @@ export const api = {
   setPrimaryTarget(name: string, destination: string): Promise<Service> {
     return request("PUT", `${base}/services/${encodeURIComponent(name)}/primary-target`, { destination });
   },
+  previewDropParts(name: string, destination: string, parts: string[]): Promise<DropPlan> {
+    const q = new URLSearchParams({ destination, parts: parts.join(",") });
+    return request("GET", `${base}/services/${encodeURIComponent(name)}/drop-preview?${q}`);
+  },
+  dropParts(name: string, destination: string, parts: string[], snapshots: string[]): Promise<DropPlan> {
+    return request("POST", `${base}/services/${encodeURIComponent(name)}/drop-cleanup`, { destination, parts, snapshots });
+  },
   editProxmoxJob(
     name: string,
     edit: { schedule?: string; keep_last?: number; copy_to?: string; copy_path?: string },
@@ -299,3 +306,14 @@ export const api = {
     return request("GET", `${base}/proxmox/guests`);
   },
 };
+
+/** Old backups on one destination that still hold a part it no longer receives. */
+export interface DropPlan {
+  service: string;
+  destination: string;
+  parts: string[];
+  snapshots: { id: string; time: string; holds: string[] }[];
+  freed_bytes: number;
+  blocked?: string;
+  warning?: string;
+}

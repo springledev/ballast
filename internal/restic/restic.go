@@ -815,6 +815,53 @@ func (r *Repository) Prune(ctx context.Context) error {
 	return err
 }
 
+// validSnapshotIDs rejects an empty list or an ID that is not a plain
+// hex snapshot ID, so a typo can never turn into a restic flag or a
+// broader command than the caller meant.
+func validSnapshotIDs(op string, ids []string) error {
+	if len(ids) == 0 {
+		return fmt.Errorf("restic %s: no snapshot IDs given", op)
+	}
+	for _, id := range ids {
+		if len(id) < 8 || strings.Trim(id, "0123456789abcdef") != "" {
+			return fmt.Errorf("restic %s: %q is not a snapshot ID", op, id)
+		}
+	}
+	return nil
+}
+
+// ForgetSnapshots removes exactly the snapshots with the given IDs
+// (metadata only, no retention policy involved); call Prune to reclaim
+// their space. Used when the operator drops a part from a destination.
+func (r *Repository) ForgetSnapshots(ctx context.Context, ids []string) error {
+	if err := validSnapshotIDs("forget", ids); err != nil {
+		return err
+	}
+	_, err := r.run(ctx, append([]string{"forget"}, ids...)...)
+	return err
+}
+
+// RawDataSize returns the bytes of deduplicated stored data that the
+// given snapshots together reference (`restic stats --mode raw-data`).
+// Comparing it for a set of snapshots with and without some of them
+// shows how much space removing those would free.
+func (r *Repository) RawDataSize(ctx context.Context, ids []string) (uint64, error) {
+	if err := validSnapshotIDs("stats", ids); err != nil {
+		return 0, err
+	}
+	res, err := r.run(ctx, append([]string{"stats", "--json", "--no-lock", "--mode", "raw-data"}, ids...)...)
+	if err != nil {
+		return 0, err
+	}
+	var out struct {
+		TotalSize uint64 `json:"total_size"`
+	}
+	if err := json.Unmarshal(res.Stdout, &out); err != nil {
+		return 0, &ParseError{Op: "stats", Text: snippet(res.Stdout), Err: err}
+	}
+	return out.TotalSize, nil
+}
+
 // Version is the restic binary's self-reported version.
 type Version struct {
 	// Raw is the full `restic version` line.

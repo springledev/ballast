@@ -1,9 +1,11 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"strings"
 
+	"github.com/springledev/ballast/internal/api"
 	"github.com/springledev/ballast/internal/inventory"
 	"github.com/spf13/cobra"
 )
@@ -13,6 +15,8 @@ var (
 	targetRemove  []string
 	serviceAlso   []string
 	targetPrimary string
+	// targetCleanup deletes old backups of parts a destination dropped.
+	targetCleanup bool
 )
 
 // parseTargetFlag reads "destination" (every part) or
@@ -65,6 +69,9 @@ hides how the other did.
 With no flags this lists the destinations. --add NAME sends to one more
 destination (everything), or --add NAME=part,part sends it only those
 parts, for example --add b2=library. --remove NAME stops sending to one.
+When --add takes parts away from a destination, the old backups there still
+hold them: Ballast shows which backups and how much space removing them
+frees, and --remove-old-snapshots removes exactly those backups.
 The first destination is the main one; --primary NAME makes a different one
 the main one, keeping the service's run history and verification record.`,
 	Args: cobra.ExactArgs(1),
@@ -125,8 +132,12 @@ the main one, keeping the service's run history and verification record.`,
 				if len(targets) == 0 {
 					return fmt.Errorf("service %s: needs at least one destination", s.Name)
 				}
+				before := s.EffectiveTargets()
 				s.Targets = targets
 				if err := a.ops.PutService(cmd.Context(), s); err != nil {
+					return err
+				}
+				if err := offerDropCleanup(cmd, a, s.Name, before, targets); err != nil {
 					return err
 				}
 			}
@@ -139,8 +150,81 @@ the main one, keeping the service's run history and verification record.`,
 	},
 }
 
+// offerDropCleanup shows, for every destination that lost parts in this
+// change, the old backups still holding them and the space removing them
+// frees; with --remove-old-snapshots it removes exactly those backups.
+func offerDropCleanup(cmd *cobra.Command, a *app, name string, before, after []inventory.Target) error {
+	pv, err := a.ops.Preview(cmd.Context(), name)
+	if err != nil {
+		return nil // a service without a preview has no parts to drop
+	}
+	var all []string
+	for _, p := range pv.Parts {
+		all = append(all, p.Name)
+	}
+	for _, nt := range after {
+		for _, ot := range before {
+			if ot.Destination != nt.Destination {
+				continue
+			}
+			if dropped := api.DroppedParts(ot, nt, all); len(dropped) > 0 {
+				if err := dropCleanup(cmd.Context(), cmd, a, name, nt, dropped); err != nil {
+					return err
+				}
+			}
+		}
+	}
+	return nil
+}
+
+// dropCleanup prints the plan for one destination and, when asked,
+// carries it out.
+func dropCleanup(ctx context.Context, cmd *cobra.Command, a *app, name string, nt inventory.Target, parts []string) error {
+	dest := nt.Destination
+	plan, err := a.ops.PreviewDropParts(ctx, name, dest, parts)
+	if err != nil {
+		cmd.Printf("%s no longer sends %s to %s; could not check the old backups there: %v\n", name, strings.Join(parts, ", "), dest, err)
+		return nil
+	}
+	cmd.Printf("%s no longer sends %s to %s.\n", name, strings.Join(parts, ", "), dest)
+	if plan.Blocked != "" {
+		cmd.Printf("  %s\n", plan.Blocked)
+		return nil
+	}
+	cmd.Printf("  %d older backup(s) there still hold it; removing them frees about %s.\n", len(plan.Snapshots), humanSize(plan.FreedBytes))
+	cmd.Printf("  %s\n", plan.Warning)
+	if !targetCleanup {
+		cmd.Printf("  To remove them, run: ballast service targets %s --add %s=%s --remove-old-snapshots\n", name, dest, strings.Join(nt.Parts, ","))
+		return nil
+	}
+	ids := make([]string, 0, len(plan.Snapshots))
+	for _, s := range plan.Snapshots {
+		ids = append(ids, s.ID)
+	}
+	if _, err := a.ops.DropParts(ctx, name, dest, parts, ids); err != nil {
+		return err
+	}
+	cmd.Printf("  Removed %d old backup(s) from %s and reclaimed the space.\n", len(ids), dest)
+	return nil
+}
+
+// humanSize renders a byte count in plain units.
+func humanSize(n uint64) string {
+	const unit = 1024
+	if n < unit {
+		return fmt.Sprintf("%d B", n)
+	}
+	div, exp := uint64(unit), 0
+	for v := n / unit; v >= unit; v /= unit {
+		div *= unit
+		exp++
+	}
+	return fmt.Sprintf("%.1f %ciB", float64(n)/float64(div), "KMGTPE"[exp])
+}
+
 func init() {
 	serviceTargetsCmd.Flags().StringArrayVar(&targetAdd, "add", nil, "send to one more destination: NAME or NAME=part,part (repeatable)")
 	serviceTargetsCmd.Flags().StringVar(&targetPrimary, "primary", "", "make this destination the main one (it must already be one of the service's destinations)")
+	serviceTargetsCmd.Flags().BoolVar(&targetCleanup, "remove-old-snapshots", false, "when --add takes parts away from a destination, also remove the old backups there that hold them")
 	serviceTargetsCmd.Flags().StringArrayVar(&targetRemove, "remove", nil, "stop sending to this destination (repeatable)")
 }
