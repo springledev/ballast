@@ -337,3 +337,39 @@ func TestLastFiredRejectsCorruptTimestamp(t *testing.T) {
 		t.Error("LastFired must reject an unparseable timestamp")
 	}
 }
+
+func TestScheduleBaselineCountsManualRuns(t *testing.T) {
+	s := openTestDB(t)
+	db := s.DB()
+	if err := SetSchedule(db, "immich", "0 3 * * *"); err != nil {
+		t.Fatal(err)
+	}
+	sched, _ := ParseCron("0 3 * * *")
+	now := time.Date(2026, 3, 5, 12, 0, 0, 0, time.UTC)
+
+	// Never backed up at all: the only always-due case.
+	if b, _ := ScheduleBaseline(db, "immich"); !b.IsZero() || !sched.IsDue(now, b) {
+		t.Fatalf("baseline = %v, want zero and due", b)
+	}
+	ins := func(state string, fin time.Time) {
+		t.Helper()
+		db.Exec(`INSERT OR IGNORE INTO jobs (service, created_at) VALUES ('immich', ?)`, fin.Format(time.RFC3339Nano))
+		if _, err := db.Exec(`INSERT INTO runs (job_id, state, started_at, finished_at)
+			SELECT id, ?, ?, ? FROM jobs WHERE service = 'immich'`, state, fin.Format(time.RFC3339Nano), fin.Format(time.RFC3339Nano)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	ins("FAILED", now.Add(-time.Hour))
+	if b, _ := ScheduleBaseline(db, "immich"); !b.IsZero() {
+		t.Errorf("baseline = %v after only a failed run, want zero", b)
+	}
+	manual := now.Add(-2 * time.Hour)
+	ins("SUCCESS", manual)
+	b, err := ScheduleBaseline(db, "immich")
+	if err != nil || !b.Equal(manual) {
+		t.Fatalf("baseline = %v, %v; want %v", b, err, manual)
+	}
+	if sched.IsDue(now, b) {
+		t.Error("schedule due right after a manual backup, want not due until 03:00 tomorrow")
+	}
+}

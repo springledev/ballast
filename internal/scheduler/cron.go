@@ -120,7 +120,7 @@ const nextSearchLimit = 400
 // IsDue reports whether the schedule fired at least once in the
 // window (lastRun, now], to minute precision: the minute lastRun falls
 // in is excluded, since that firing is the one lastRun served. A zero
-// lastRun (the schedule has never fired) is always due.
+// lastRun (the service has never been backed up at all) is always due.
 //
 // The schedule is evaluated in now's location, whatever location
 // lastRun carries (the DB stores UTC): "0 3 * * *" means 03:00 on the

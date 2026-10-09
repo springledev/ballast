@@ -101,6 +101,37 @@ func LastFired(db *sql.DB, service string) (time.Time, error) {
 	return t, nil
 }
 
+// ScheduleBaseline returns the time a schedule counts from: the later
+// of the scheduler's last firing and the last finished backup of any
+// kind (scheduled, manual or triggered) that ended green or amber. A
+// service that was backed up by hand an hour ago is therefore not due
+// the moment a schedule is created. The zero Time means the service
+// has never been backed up at all, which is the only always-due case.
+func ScheduleBaseline(db *sql.DB, service string) (time.Time, error) {
+	fired, err := LastFired(db, service)
+	if err != nil {
+		return time.Time{}, err
+	}
+	var fin sql.NullString
+	err = db.QueryRow(`SELECT r.finished_at FROM runs r JOIN jobs j ON j.id = r.job_id
+		WHERE j.service = ? AND r.state IN ('SUCCESS','SUCCESS_UNVERIFIED') AND r.finished_at IS NOT NULL
+		ORDER BY r.id DESC LIMIT 1`, service).Scan(&fin)
+	if errors.Is(err, sql.ErrNoRows) || (err == nil && !fin.Valid) {
+		return fired, nil
+	}
+	if err != nil {
+		return time.Time{}, fmt.Errorf("looking up last finished backup for %s: %w", service, err)
+	}
+	t, err := time.Parse(time.RFC3339Nano, fin.String)
+	if err != nil {
+		return time.Time{}, fmt.Errorf("parsing last finished backup time for %s: %w", service, err)
+	}
+	if t.After(fired) {
+		return t, nil
+	}
+	return fired, nil
+}
+
 // MarkFired records that the scheduler acted on a firing of service's
 // schedule at at. A zero at clears the record, as if the schedule had
 // never fired. It errors if no schedule is configured for service.

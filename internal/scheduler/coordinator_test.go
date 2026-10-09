@@ -989,3 +989,21 @@ func TestRunDueRejectsUnverifiedRuns(t *testing.T) {
 		})
 	}
 }
+
+func TestRunDueSkipsNewScheduleAfterManualBackup(t *testing.T) {
+	f := newFixture(t)
+	f.schedule(t, "immich", "0 3 * * *")
+	db := f.c.DB
+	ts := nightly.Add(8 * time.Hour).Format(time.RFC3339Nano)
+	db.Exec(`INSERT INTO jobs (service, created_at) VALUES ('immich', ?)`, ts)
+	if _, err := db.Exec(`INSERT INTO runs (job_id, state, started_at, finished_at)
+		SELECT id, 'SUCCESS', ?, ? FROM jobs WHERE service='immich'`, ts, ts); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.c.RunDue(context.Background(), nightly.Add(9*time.Hour)); err != nil {
+		t.Fatalf("RunDue: %v", err)
+	}
+	if len(f.runner.ran) != 0 {
+		t.Errorf("ran = %v, want nothing: backed up an hour ago by hand", f.runner.ran)
+	}
+}

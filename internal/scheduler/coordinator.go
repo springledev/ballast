@@ -236,7 +236,11 @@ func (c *Coordinator) sweepOne(ctx context.Context, j ScheduledJob, now time.Tim
 		if err != nil {
 			return err
 		}
-		if !sched.IsDue(now, last) {
+		baseline, err := ScheduleBaseline(c.DB, j.Service)
+		if err != nil {
+			return err
+		}
+		if !sched.IsDue(now, baseline) {
 			return nil
 		}
 		if ctx.Err() != nil {
@@ -263,7 +267,7 @@ func (c *Coordinator) sweepOne(ctx context.Context, j ScheduledJob, now time.Tim
 	case errors.Is(err, ErrAlreadyRunning):
 		// Only worth a line when this sweep would have run it;
 		// otherwise a long backup would log every minute.
-		if last, lerr := LastFired(c.DB, j.Service); lerr != nil || sched.IsDue(now, last) {
+		if last, lerr := ScheduleBaseline(c.DB, j.Service); lerr != nil || sched.IsDue(now, last) {
 			c.logf(j.Service, "previous run is still in progress; skipped this sweep")
 		}
 		return sweepOK
@@ -280,7 +284,7 @@ func (c *Coordinator) sweepOne(ctx context.Context, j ScheduledJob, now time.Tim
 // service at now: its schedule is due, or its latest run is unfinished
 // (possibly interrupted, which only the lock holder can tell).
 func (c *Coordinator) sweepNeedsClaim(service string, sched Schedule, now time.Time) (bool, error) {
-	last, err := LastFired(c.DB, service)
+	last, err := ScheduleBaseline(c.DB, service)
 	if err != nil {
 		return false, err
 	}

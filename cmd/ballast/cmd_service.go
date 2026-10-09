@@ -198,7 +198,12 @@ var serviceListCmd = &cobra.Command{
 				if dest, ok := byName[s.Destination]; ok {
 					cmd.Printf("  %s\n", retentionLine(s, dest))
 				}
-				for _, t := range s.EffectiveTargets()[1:] {
+				targets := s.EffectiveTargets()
+				if len(targets) == 0 {
+					cmd.Println("  (runs on Proxmox, no restic destination)")
+					continue
+				}
+				for _, t := range targets[1:] {
 					cmd.Printf("  also sends to %s\n", targetLine(t))
 				}
 			}

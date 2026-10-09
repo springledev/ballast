@@ -197,3 +197,26 @@ func TestServiceAddInvalidParamFormat(t *testing.T) {
 		t.Error("service add with a malformed --param: want an error")
 	}
 }
+
+// TestServiceListGuestJobWithoutDestination checks that a Proxmox
+// guest job with no restic destination is listed (it used to panic).
+func TestServiceListGuestJobWithoutDestination(t *testing.T) {
+	withStubRestic(t)
+	cliEnv(t, &spyRunner{})
+	srv := fakeProxmoxServer(t, "PVEAPIToken=ballast@pve!backup=s3cr3t")
+	if out, err := execCLI(t, "proxmox", "connect", "--host", srv.URL,
+		"--token-id", "ballast@pve!backup", "--token-secret", "s3cr3t", "--insecure"); err != nil {
+		t.Fatalf("proxmox connect: %v (output %q)", err, out)
+	}
+	if out, err := execCLI(t, "proxmox", "job", "add", "--name", "pve-vm100", "--node", "pve",
+		"--vmid", "100", "--storage", "backup-nas"); err != nil {
+		t.Fatalf("proxmox job add: %v (output %q)", err, out)
+	}
+	out, err := execCLI(t, "service", "list")
+	if err != nil {
+		t.Fatalf("service list: %v", err)
+	}
+	if !strings.Contains(out, "pve-vm100") || !strings.Contains(out, "runs on Proxmox, no restic destination") {
+		t.Errorf("list output = %q, want the guest job with its explanation", out)
+	}
+}

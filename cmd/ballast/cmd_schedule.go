@@ -20,6 +20,7 @@ var scheduleSetCmd = &cobra.Command{
 				return err
 			}
 			cmd.Printf("%s: scheduled %q\n", args[0], args[1])
+			cmd.Println("A new schedule never starts a backup by surprise. It first runs at its next slot, unless this has never been backed up at all, which runs on the next check. To back up right now, run `ballast backup`.")
 			return nil
 		})
 	},

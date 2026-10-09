@@ -266,6 +266,7 @@ Example:
 					return err
 				}
 				cmd.Printf("%s: scheduled %q\n", jobName, jobSchedule)
+			cmd.Println("A new schedule never starts a backup by surprise. It first runs at its next slot, unless this has never been backed up at all, which runs on the next check. To back up right now, run `ballast backup`.")
 			}
 			if chk, err := a.ops.CheckProxmoxStorage(cmd.Context(), jobName, jobNode, jobStorage, jobVMID); err == nil && chk.Warning != "" {
 				cmd.Println("Note: " + chk.Warning)
