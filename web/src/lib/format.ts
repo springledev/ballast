@@ -53,3 +53,27 @@ export function formatDurationMs(ms: number): string {
   if (s < 60) return `${s.toFixed(1)} s`;
   return `${Math.floor(s / 60)}m ${Math.round(s % 60)}s`;
 }
+
+/** A byte count in binary units, such as "36.9 GiB". */
+function formatGiB(n: number): string {
+  const units = ["B", "KiB", "MiB", "GiB", "TiB"];
+  let v = n;
+  let i = 0;
+  while (v >= 1024 && i < units.length - 1) {
+    v /= 1024;
+    i++;
+  }
+  return i === 0 ? `${n} B` : `${v.toFixed(1)} ${units[i]}`;
+}
+
+/**
+ * Describes an upload: percentage and bytes first, time left second
+ * (the estimate swings when other jobs share the connection).
+ */
+export function describeUpload(u: { percent: number; bytes_done: number; total_bytes: number; seconds_remaining?: number }): string {
+  const text = `${Math.round(u.percent)}% — ${formatGiB(u.bytes_done)} of ${formatGiB(u.total_bytes)}`;
+  if (!u.seconds_remaining) return text;
+  const mins = Math.max(1, Math.round(u.seconds_remaining / 60));
+  const left = mins >= 90 ? `${Math.round(mins / 60)} hours` : `${mins} minute${mins === 1 ? "" : "s"}`;
+  return `${text} (about ${left} left)`;
+}

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	bundledcatalog "github.com/springledev/ballast/catalog"
+	"github.com/springledev/ballast/internal/progress"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -1218,6 +1219,19 @@ func TestOpsStatusLightsAndFreshness(t *testing.T) {
 	for _, s := range []engine.State{engine.PREPARING, engine.DUMPING, engine.UPLOADING, engine.VERIFYING} {
 		if err := m.Transition(s, "step"); err != nil {
 			t.Fatalf("Transition %s: %v", s, err)
+		}
+		if s == engine.UPLOADING {
+			h.ops.Progress = &progress.Tracker{}
+			dest := st[0].Targets[0].Destination
+			h.ops.Progress.Set("svc", progress.Upload{Destination: dest, Percent: 44, BytesDone: 36, TotalBytes: 84})
+			ust, err := h.ops.Status(context.Background(), "svc", false)
+			if err != nil {
+				t.Fatalf("Status: %v", err)
+			}
+			if u := ust[0].Targets[0].Upload; u == nil || u.BytesDone != 36 || u.TotalBytes != 84 {
+				t.Errorf("upload = %+v, want 36 of 84", u)
+			}
+			h.ops.Progress.Clear("svc", dest)
 		}
 	}
 	st, err = h.ops.Status(context.Background(), "svc", false)

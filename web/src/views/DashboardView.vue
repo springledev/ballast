@@ -6,7 +6,7 @@ import TrafficLight from "@/components/TrafficLight.vue";
 import { api } from "@/api/client";
 import type { HealthItem, ServiceStatus } from "@/api/types";
 import { anyServiceVerified, checklistComplete, firstRunChecklist } from "@/lib/checklist";
-import { formatAgeSeconds, formatDateTime, formatRelative } from "@/lib/format";
+import { describeUpload, formatAgeSeconds, formatDateTime, formatRelative } from "@/lib/format";
 import { emptyProgress, parseProgress, scriptSteps, type ScriptProgress } from "@/lib/replaceScript";
 import { describeSchedule } from "@/lib/schedule";
 import { describeTier, summarize, worstLight } from "@/lib/status";
@@ -240,6 +240,12 @@ onUnmounted(() => clearInterval(timer));
           <p v-for="t in s.tiers" :key="t.tier" class="status-line">
             <template v-if="s.tiers.length > 1"><strong>{{ t.tier }} copy:</strong> </template>{{ describeTier(t) }}
           </p>
+          <div v-for="t in s.targets ?? []" :key="`up-${t.destination}`">
+            <div v-if="t.upload && t.upload.total_bytes > 0" class="upload">
+              <progress :value="t.upload.percent" max="100" :aria-label="`Upload to ${t.destination}`"></progress>
+              <span class="item-sub">Uploading to {{ t.destination }}: {{ describeUpload(t.upload) }}</span>
+            </div>
+          </div>
           <template v-if="(s.targets?.length ?? 0) > 1">
             <p v-for="t in s.targets" :key="`tg-${t.destination}`" class="status-line">
               <TrafficLight :light="t.light" /> <strong>{{ t.destination }}<template v-if="t.secondary"> (second copy)</template>:</strong>

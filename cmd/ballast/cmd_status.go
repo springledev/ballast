@@ -53,6 +53,11 @@ func printStatusPlain(cmd *cobra.Command, services []api.ServiceStatus) {
 		if tier.Light == "running" && tier.Phase != "" {
 			cmd.Printf("  now: %s (running for %s)\n", tier.Phase, (time.Duration(tier.ElapsedSeconds) * time.Second).String())
 		}
+		for _, t := range s.Targets {
+			if t.Upload != nil && t.Upload.TotalBytes > 0 {
+				cmd.Printf("  uploading to %s: %.0f%% (%s of %s)\n", t.Destination, t.Upload.Percent, humanSize(t.Upload.BytesDone), humanSize(t.Upload.TotalBytes))
+			}
+		}
 		if tier.Waiting != "" {
 			cmd.Printf("  %s\n", tier.Waiting)
 		}

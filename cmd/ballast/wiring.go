@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/springledev/ballast/internal/progress"
 	"io"
 	"io/fs"
 	"os"
@@ -126,7 +127,9 @@ func openApp(cfg config.Config, logw io.Writer) (*app, error) {
 	r := &execrunner.Runner{Redact: secrets}
 	adapter := &notify.EngineAdapter{DB: st.DB(), Notifier: notifier}
 
+	uploads := &progress.Tracker{}
 	pl := &pipeline.Pipeline{
+		Progress:   uploads,
 		DB:         st.DB(),
 		Catalog:    reg,
 		Runner:     r,
@@ -181,7 +184,7 @@ func openApp(cfg config.Config, logw io.Writer) (*app, error) {
 	dockerHosts.CredDirs = credDirs
 	proxmoxResolver := proxmox.Resolver{CredDirs: credDirs, Redact: secrets}
 	pl.Proxmox = proxmoxResolver
-	ops := &api.Ops{DB: st.DB(), Catalog: reg, CatalogDirs: cfg.CatalogDirs, Coord: coord, Repo: repoFor, RepoHealth: health, DestinationLocks: scheduler.FileLocker{Dir: filepath.Join(cfg.DataDir, "locks", "destinations")}, Runner: r, DockerHosts: dockerHosts, Proxmox: proxmoxResolver, CredentialsDir: cfg.WritableCredentialsDir, CredentialSearchDirs: credDirs, Redact: secrets, WorkRoot: pl.WorkRoot, SelfBackupFiles: api.SelfBackupSources{ConfigFile: filepath.Join(cfg.ConfigDir, "ballast.yaml"), CatalogDirs: cfg.CatalogDirs}}
+	ops := &api.Ops{Progress: uploads, DB: st.DB(), Catalog: reg, CatalogDirs: cfg.CatalogDirs, Coord: coord, Repo: repoFor, RepoHealth: health, DestinationLocks: scheduler.FileLocker{Dir: filepath.Join(cfg.DataDir, "locks", "destinations")}, Runner: r, DockerHosts: dockerHosts, Proxmox: proxmoxResolver, CredentialsDir: cfg.WritableCredentialsDir, CredentialSearchDirs: credDirs, Redact: secrets, WorkRoot: pl.WorkRoot, SelfBackupFiles: api.SelfBackupSources{ConfigFile: filepath.Join(cfg.ConfigDir, "ballast.yaml"), CatalogDirs: cfg.CatalogDirs}}
 
 	a := &app{health: health, cfg: cfg, store: st, ops: ops, coord: coord, notifier: notifier, apiToken: apiToken, secrets: secrets, logw: logw}
 	if cfg.WritableCredentialsDir != cfg.CredentialsDir {

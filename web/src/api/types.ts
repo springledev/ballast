@@ -63,6 +63,17 @@ export interface TargetStatus {
   secondary?: boolean;
   /** The copy failed because the Proton Drive login ended. */
   sign_in_needed?: boolean;
+  /** Latest upload progress while this destination is being written to; absent otherwise. */
+  upload?: UploadProgress;
+}
+
+/** Latest upload progress of one destination (numbers only; not kept across a daemon restart). */
+export interface UploadProgress {
+  destination: string;
+  percent: number;
+  bytes_done: number;
+  total_bytes: number;
+  seconds_remaining?: number;
 }
 
 /** Progress of a Proton Drive sign-in. */

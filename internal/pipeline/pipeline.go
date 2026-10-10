@@ -12,6 +12,7 @@ import (
 	"database/sql"
 	"fmt"
 	"github.com/springledev/ballast/internal/backend"
+	"github.com/springledev/ballast/internal/progress"
 	"github.com/springledev/keel/dockerhost"
 	"io"
 	"os"
@@ -39,6 +40,9 @@ import (
 // It is the only real implementer of scheduler.Runner; tests and the
 // scheduler's own unit tests use a stub instead.
 type Pipeline struct {
+	// Progress, when set, receives the latest upload progress of each
+	// destination so status can show a progress bar. May be nil.
+	Progress *progress.Tracker
 	// DB is the Ballast database (inventory, engine runs).
 	DB *sql.DB
 	// Catalog is the loaded catalog registry (bundled + user entries).

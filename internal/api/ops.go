@@ -13,6 +13,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"github.com/springledev/ballast/internal/progress"
 	"github.com/springledev/keel/dockerhost"
 	"os"
 	"path/filepath"
@@ -53,6 +54,10 @@ type Ops struct {
 	// terminal rather than as a service; Doctor and Health then warn that
 	// schedules stop when the terminal closes.
 	InTerminal bool
+
+	// Progress holds the latest upload progress of running backups; nil
+	// means status shows none.
+	Progress *progress.Tracker
 
 	DB      *sql.DB
 	Catalog *catalog.Registry
@@ -336,6 +341,10 @@ type TargetStatus struct {
 	// SignInNeeded is true when the copy failed because the Proton
 	// Drive login ended; the UI offers "Sign in again".
 	SignInNeeded bool `json:"sign_in_needed,omitempty"`
+	// Upload is the latest upload progress while this destination is
+	// being written to; nil otherwise (and after a daemon restart, until
+	// the next report).
+	Upload *progress.Upload `json:"upload,omitempty"`
 }
 
 // VerificationRecord is the API/CLI-facing shape of an
@@ -527,6 +536,9 @@ func (o *Ops) targetStatuses(s inventory.Service, last engine.LatestRun, tier Ti
 		switch r, ok := recorded[t.Destination]; {
 		case last.InProgress && last.RunID != 0:
 			ts.Light = "running"
+			if u, ok := o.Progress.Get(s.Name, t.Destination); ok {
+				ts.Upload = &u
+			}
 		case ok:
 			ts.Light = lightFor(r.State, false)
 			ts.LastState, ts.SnapshotID = string(r.State), r.SnapshotID

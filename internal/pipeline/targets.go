@@ -3,6 +3,7 @@ package pipeline
 import (
 	"context"
 	"fmt"
+	"github.com/springledev/ballast/internal/progress"
 	"sort"
 	"strings"
 	"sync"
@@ -129,12 +130,17 @@ func (p *Pipeline) uploadTarget(ctx context.Context, service string, rt *runTarg
 	}
 	defer release()
 	var last time.Time
+	defer p.Progress.Clear(service, rt.dest.Name)
 	br, err := rt.repo.Backup(ctx, restic.BackupOptions{
 		Paths:    append(append([]string(nil), rt.paths...), artifactPaths(rt.artifacts)...),
 		Excludes: res.Excludes,
 		Tags:     []string{"ballast", serviceTag(service)},
 		Progress: func(bp restic.BackupProgress) {
-			if time.Since(last) < progressEvery || bp.TotalBytes == 0 {
+			if bp.TotalBytes == 0 {
+				return
+			}
+			p.Progress.Set(service, progress.Upload{Destination: rt.dest.Name, Percent: bp.PercentDone * 100, BytesDone: bp.BytesDone, TotalBytes: bp.TotalBytes, SecondsRemaining: bp.SecondsRemaining})
+			if time.Since(last) < progressEvery {
 				return
 			}
 			last = time.Now()

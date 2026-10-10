@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"encoding/json"
+	"github.com/springledev/ballast/internal/progress"
 	"os"
 	"path/filepath"
 	"strings"
@@ -117,6 +118,34 @@ func TestPrintStatusPlainPhase(t *testing.T) {
 			cmd.SetOut(&buf)
 			printStatusPlain(cmd, []api.ServiceStatus{{Service: "x", Tiers: []api.TierStatus{tt.tier}}})
 			if got := strings.Contains(buf.String(), "now:"); got != (tt.want != "") {
+				t.Fatalf("output = %q", buf.String())
+			}
+			if tt.want != "" && !strings.Contains(buf.String(), tt.want) {
+				t.Errorf("output = %q, want %q", buf.String(), tt.want)
+			}
+		})
+	}
+}
+
+// TestPrintStatusPlainUpload: a destination being uploaded to shows
+// percentage and bytes; one without progress shows nothing.
+func TestPrintStatusPlainUpload(t *testing.T) {
+	up := &progress.Upload{Destination: "b2", Percent: 43.9, BytesDone: 36 << 30, TotalBytes: 84 << 30}
+	tests := []struct {
+		name string
+		u    *progress.Upload
+		want string
+	}{
+		{"with progress", up, "uploading to b2: 44% (36.0 GiB of 84.0 GiB)"},
+		{"without", nil, ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var buf bytes.Buffer
+			cmd := &cobra.Command{}
+			cmd.SetOut(&buf)
+			printStatusPlain(cmd, []api.ServiceStatus{{Service: "x", Tiers: []api.TierStatus{{Light: "running"}}, Targets: []api.TargetStatus{{Destination: "b2", Upload: tt.u}}}})
+			if got := strings.Contains(buf.String(), "uploading to"); got != (tt.want != "") {
 				t.Fatalf("output = %q", buf.String())
 			}
 			if tt.want != "" && !strings.Contains(buf.String(), tt.want) {
