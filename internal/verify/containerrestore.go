@@ -123,7 +123,7 @@ func (c *ContainerRestore) Check(ctx context.Context, req Request) (res Result) 
 	}()
 
 	if err := c.startContainer(ctx, name, image, dialect, req.Env); err != nil {
-		res.Detail = "service " + service + ": could not start throwaway container " + name + ": " + err.Error()
+		res.Detail = "service " + service + ": the restore drill could not start the test container " + name + " (the backup itself was made): " + err.Error()
 		res.Duration = time.Since(start)
 		return res
 	}
@@ -140,14 +140,14 @@ func (c *ContainerRestore) Check(ctx context.Context, req Request) (res Result) 
 		output = append(output, benign...)
 		if len(leftover) > 0 {
 			output = append(output, leftover...)
-			res.Detail = fmt.Sprintf("service %s: artifact %q (%s) failed to restore cleanly; stderr lines not on the catalog's benign whitelist: %s",
+			res.Detail = fmt.Sprintf("service %s: artifact %q (%s) failed to restore cleanly in the restore drill (the backup itself was made); stderr lines not on the catalog's benign whitelist: %s",
 				service, a.Name, a.Path, strings.Join(leftover, "; "))
 			res.Output = strings.Join(output, "\n")
 			res.Duration = time.Since(start)
 			return res
 		}
 		if err != nil {
-			res.Detail = fmt.Sprintf("service %s: artifact %q (%s): %v", service, a.Name, a.Path, err)
+			res.Detail = fmt.Sprintf("service %s: the restore drill failed while loading artifact %q (%s) into the test database (the backup itself was made): %v", service, a.Name, a.Path, err)
 			res.Output = strings.Join(output, "\n")
 			res.Duration = time.Since(start)
 			return res
@@ -205,7 +205,12 @@ func dialectFor(image string) restoreDialect {
 			// MariaDB 11 images ship only mariadb-admin / mariadb;
 			// older and MySQL images ship only mysqladmin / mysql.
 			// Probe for the mariadb name first, fall back to mysql.
-			readyArgs: []string{"sh", "-c", `if command -v mariadb-admin >/dev/null 2>&1; then exec mariadb-admin -s ping; else exec mysqladmin -s ping; fi`},
+			// The probe goes over TCP on purpose: the image's
+			// temporary first-boot server listens on its socket
+			// only, so a socket probe can pass just before that
+			// server shuts down and the restore then dies with
+			// "Lost connection".
+			readyArgs: []string{"sh", "-c", `if command -v mariadb-admin >/dev/null 2>&1; then exec mariadb-admin -s --protocol=tcp -h127.0.0.1 -u root ping; else exec mysqladmin -s --protocol=tcp -h127.0.0.1 -u root ping; fi`},
 			client:    []string{"sh", "-c", `if command -v mariadb >/dev/null 2>&1; then exec mariadb -u root; else exec mysql -u root; fi`},
 		}
 	}
@@ -215,8 +220,10 @@ func dialectFor(image string) restoreDialect {
 		// keeps it unreachable from anywhere else) and no secret
 		// travels in argv, matching the mysql dialect's
 		// MYSQL_ALLOW_EMPTY_PASSWORD=yes below.
-		extraRun:  []string{"-e", "POSTGRES_HOST_AUTH_METHOD=trust"},
-		readyArgs: []string{"pg_isready", "-q", "-U", "postgres"},
+		extraRun: []string{"-e", "POSTGRES_HOST_AUTH_METHOD=trust"},
+		// TCP, not the socket: the temporary first-boot server
+		// has listen_addresses='' and answers on its socket only.
+		readyArgs: []string{"pg_isready", "-q", "-h", "127.0.0.1", "-U", "postgres"},
 		// ON_ERROR_STOP=0 is explicit: psql must continue past errors
 		// so stderr carries ALL of them for the whitelist filter;
 		// stopping at the first one would hide the rest.

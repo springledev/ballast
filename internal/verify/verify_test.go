@@ -26,6 +26,9 @@ import (
 //	STUB_CAPTURE         restore client's stdin is written here
 //	STUB_RESTORE_STDERR  restore client writes this to stderr
 //	STUB_RESTORE_EXIT    restore client's exit status
+//	STUB_INIT_SERVER=dir fake image init server: socket probes always pass,
+//	                     TCP probes (-h 127.0.0.1) fail twice then pass, and the
+//	                     restore client fails unless a TCP probe has passed
 //	STUB_FAIL_RM         rm exits 1
 const dockerStub = `#!/bin/sh
 printf '%s\n' "$*" >> "$STUB_LOG"
@@ -50,12 +53,28 @@ case "$cmd" in
   exec)
     case "$*" in
       *pg_isready*|*mysqladmin*)
+        if [ -n "$STUB_INIT_SERVER" ]; then
+          case "$*" in
+            *127.0.0.1*)
+              n=$(cat "$STUB_INIT_SERVER/n" 2>/dev/null || echo 0)
+              n=$((n+1)); echo $n > "$STUB_INIT_SERVER/n"
+              if [ $n -le 2 ]; then exit 1; fi
+              : > "$STUB_INIT_SERVER/tcp-up"
+              exit 0 ;;
+            *) exit 0 ;;
+          esac
+        fi
         if [ "$STUB_READY" = "no" ]; then
           exit 1
         fi
         exit 0
         ;;
       *psql*|*mysql*)
+        if [ -n "$STUB_INIT_SERVER" ] && [ ! -e "$STUB_INIT_SERVER/tcp-up" ]; then
+          cat > /dev/null
+          echo "ERROR 2013 (HY000): Lost connection to server during query" >&2
+          exit 1
+        fi
         if [ -n "$STUB_CAPTURE" ]; then
           cat > "$STUB_CAPTURE"
         else

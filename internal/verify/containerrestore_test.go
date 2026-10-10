@@ -55,11 +55,11 @@ func TestContainerRestorePass(t *testing.T) {
 	name := containerName(t, log)
 	want := []string{
 		"run --detach --network none --name " + name + " -e POSTGRES_HOST_AUTH_METHOD=trust postgres:16",
-		"exec " + name + " pg_isready -q -U postgres",
+		"exec " + name + " pg_isready -q -h 127.0.0.1 -U postgres",
 		// waitReady re-confirms a first successful probe after a short
 		// settle delay (a real postgres/mysql image briefly runs a
 		// temporary init server before the real one starts).
-		"exec " + name + " pg_isready -q -U postgres",
+		"exec " + name + " pg_isready -q -h 127.0.0.1 -U postgres",
 		"exec -i " + name + " psql -v ON_ERROR_STOP=0 -q -U postgres",
 		"rm --force " + name,
 	}
@@ -90,7 +90,7 @@ func TestContainerRestorePass(t *testing.T) {
 // The MySQL-family dialect probes for the mariadb-named tools first
 // (MariaDB 11 images ship only those) and falls back to mysql-named ones.
 const (
-	mysqlReadyProbe  = "sh -c if command -v mariadb-admin >/dev/null 2>&1; then exec mariadb-admin -s ping; else exec mysqladmin -s ping; fi"
+	mysqlReadyProbe  = "sh -c if command -v mariadb-admin >/dev/null 2>&1; then exec mariadb-admin -s --protocol=tcp -h127.0.0.1 -u root ping; else exec mysqladmin -s --protocol=tcp -h127.0.0.1 -u root ping; fi"
 	mysqlClientProbe = "sh -c if command -v mariadb >/dev/null 2>&1; then exec mariadb -u root; else exec mysql -u root; fi"
 )
 
@@ -503,9 +503,9 @@ func TestDialectFor(t *testing.T) {
 		{"postgres:16", "psql", "pg_isready"},
 		{"ghcr.io/immich-app/postgres:14-vectorchord0.4.3-pgvectors0.2.0", "psql", "pg_isready"},
 		{"postgres:17-alpine", "psql", "pg_isready"},
-		{"mysql:8", "mysql -u root", "mysqladmin -s ping"},
-		{"mariadb:11", "mariadb -u root", "mariadb-admin -s ping"},
-		{"lscr.io/linuxserver/mariadb:latest", "mysql -u root", "mysqladmin -s ping"},
+		{"mysql:8", "mysql -u root", "mysqladmin -s --protocol=tcp -h127.0.0.1"},
+		{"mariadb:11", "mariadb -u root", "mariadb-admin -s --protocol=tcp -h127.0.0.1"},
+		{"lscr.io/linuxserver/mariadb:latest", "mysql -u root", "mysqladmin -s --protocol=tcp -h127.0.0.1"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.image, func(t *testing.T) {
@@ -680,6 +680,59 @@ func TestSQLArtifacts(t *testing.T) {
 	for _, g := range got {
 		if g.Name == "d" {
 			t.Errorf("sqlArtifacts() wrongly picked the tar artifact")
+		}
+	}
+}
+
+// TestContainerRestoreWaitsForTCPNotInitSocket: the image's temporary
+// first-boot server answers on its socket only, then goes away. The
+// drill must wait for the TCP-reachable real server (H15) before it
+// starts restoring, for both database families, and a failure names
+// the restore-drill phase.
+func TestContainerRestoreWaitsForTCPNotInitSocket(t *testing.T) {
+	for _, image := range []string{"mariadb:11", "mysql:8", "postgres:16"} {
+		t.Run(image, func(t *testing.T) {
+			opts, logPath, withEnv := stubSetup(t)
+			withEnv("STUB_INIT_SERVER=" + t.TempDir())
+			artifact := sqlArtifact(t, "database", "SELECT 1;\n")
+			res := runCheck(t, opts, image, nil, Request{Artifacts: []strategy.Artifact{artifact}})
+			if !res.Passed {
+				t.Fatalf("Check() failed on a good dump: %q", res.Detail)
+			}
+			for _, l := range readStubLog(t, logPath) {
+				if strings.Contains(l, "ping") || strings.Contains(l, "pg_isready") {
+					if !strings.Contains(l, "127.0.0.1") {
+						t.Errorf("readiness probe %q is not over TCP", l)
+					}
+				}
+			}
+		})
+	}
+}
+
+// TestContainerRestoreFailureNamesPhase: failures say the restore
+// drill failed, not that the backup did.
+func TestContainerRestoreFailureNamesPhase(t *testing.T) {
+	opts, _, withEnv := stubSetup(t)
+	withEnv("STUB_RESTORE_STDERR=ERROR: boom")
+	artifact := sqlArtifact(t, "database", "SELECT 1;\n")
+	res := runCheck(t, opts, "postgres:16", nil, Request{Artifacts: []strategy.Artifact{artifact}})
+	if res.Passed || !strings.Contains(res.Detail, "restore drill") {
+		t.Errorf("detail = %q, want it to name the restore drill phase", res.Detail)
+	}
+}
+
+// TestContainerRestoreRepeatedRunsStayGreen: the same good dump against
+// an image with a temporary init server passes on every run, so the
+// light cannot flip between red and green on an unchanged backup (H15).
+func TestContainerRestoreRepeatedRunsStayGreen(t *testing.T) {
+	for i := 0; i < 5; i++ {
+		opts, _, withEnv := stubSetup(t)
+		withEnv("STUB_INIT_SERVER=" + t.TempDir())
+		artifact := sqlArtifact(t, "database", "SELECT 1;\n")
+		res := runCheck(t, opts, "mariadb:11", nil, Request{Artifacts: []strategy.Artifact{artifact}})
+		if !res.Passed {
+			t.Fatalf("run %d failed: %q", i, res.Detail)
 		}
 	}
 }
