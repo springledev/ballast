@@ -98,3 +98,30 @@ func TestPrintStatusPlainWaiting(t *testing.T) {
 		})
 	}
 }
+
+// TestPrintStatusPlainPhase: a running backup shows its phase and how
+// long it has been running; a finished one shows neither.
+func TestPrintStatusPlainPhase(t *testing.T) {
+	tests := []struct {
+		name string
+		tier api.TierStatus
+		want string
+	}{
+		{name: "running", tier: api.TierStatus{Tier: "restic", Light: "running", Phase: "uploading to the destination", ElapsedSeconds: 125}, want: "now: uploading to the destination (running for 2m5s)"},
+		{name: "finished", tier: api.TierStatus{Tier: "restic", Light: "green"}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var buf bytes.Buffer
+			cmd := &cobra.Command{}
+			cmd.SetOut(&buf)
+			printStatusPlain(cmd, []api.ServiceStatus{{Service: "x", Tiers: []api.TierStatus{tt.tier}}})
+			if got := strings.Contains(buf.String(), "now:"); got != (tt.want != "") {
+				t.Fatalf("output = %q", buf.String())
+			}
+			if tt.want != "" && !strings.Contains(buf.String(), tt.want) {
+				t.Errorf("output = %q, want %q", buf.String(), tt.want)
+			}
+		})
+	}
+}

@@ -72,7 +72,7 @@ func backupViaDaemon(cmd *cobra.Command, c *daemonClient, service string) error 
 	if res.Interrupted {
 		fmt.Fprintf(cmd.ErrOrStderr(), "ballast: warning: an earlier backup of %s was found unfinished and has been marked failed\n", service)
 	}
-	cmd.Printf("%s: backup started by the Ballast daemon. It is verified when it finishes; check progress with `ballast status`.\n", service)
+	cmd.Printf("%s: backup started by the Ballast daemon. The daemon runs it in the background and verifies it when it finishes; follow it with `ballast status` (shows the current step and how long it has run).\n", service)
 	return nil
 }
 

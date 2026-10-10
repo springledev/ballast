@@ -300,6 +300,12 @@ type TierStatus struct {
 	// "waiting for repository lock on b2 (held by immich)"; empty when
 	// it is not waiting or not running.
 	Waiting string `json:"waiting,omitempty"`
+	// Phase is the plain-English step a running backup is on (such as
+	// "checking the backup can be restored"); empty when not running.
+	Phase string `json:"phase,omitempty"`
+	// ElapsedSeconds is how long the running backup has been going;
+	// zero when not running.
+	ElapsedSeconds int64 `json:"elapsed_seconds,omitempty"`
 	// LastVerifiedAt is when this tier's last verified (SUCCESS, never
 	// SUCCESS_UNVERIFIED) backup finished — i.e. the last restore-checked
 	// copy — or nil if there never was one.
@@ -441,6 +447,12 @@ func (o *Ops) statusOne(s inventory.Service, sched scheduler.ScheduledJob, withV
 		tier.SnapshotID = run.SnapshotID
 		tier.Light = lightFor(run.State, last.InProgress)
 		tier.Waiting = last.Waiting
+		if last.InProgress {
+			tier.Phase = PhaseLabel(run.State)
+			if el := time.Since(run.StartedAt); el > 0 {
+				tier.ElapsedSeconds = int64(el.Seconds())
+			}
+		}
 
 		if withVerify {
 			recs, err := engine.VerificationResults(o.DB, run.ID)
@@ -534,6 +546,24 @@ func (o *Ops) targetStatuses(s inventory.Service, last engine.LatestRun, tier Ti
 // §5.3): green only for a verified SUCCESS, amber for
 // SUCCESS_UNVERIFIED, red for anything else terminal, "running" while
 // still in progress.
+// PhaseLabel describes a run state in plain English for status output.
+func PhaseLabel(state engine.State) string {
+	switch state {
+	case engine.PENDING:
+		return "starting"
+	case engine.PREPARING:
+		return "getting ready"
+	case engine.DUMPING:
+		return "making the backup copy"
+	case engine.UPLOADING:
+		return "uploading to the destination"
+	case engine.VERIFYING:
+		return "checking the backup can be restored"
+	default:
+		return strings.ToLower(string(state))
+	}
+}
+
 func lightFor(state engine.State, inProgress bool) string {
 	if inProgress {
 		return "running"

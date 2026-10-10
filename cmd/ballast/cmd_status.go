@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"time"
 
 	"github.com/springledev/ballast/internal/api"
 	"github.com/spf13/cobra"
@@ -49,6 +50,9 @@ func printStatusPlain(cmd *cobra.Command, services []api.ServiceStatus) {
 	for _, s := range services {
 		tier := s.Tiers[0]
 		cmd.Printf("%s: %s\n", s.Service, lightLabel(tier.Light))
+		if tier.Light == "running" && tier.Phase != "" {
+			cmd.Printf("  now: %s (running for %s)\n", tier.Phase, (time.Duration(tier.ElapsedSeconds) * time.Second).String())
+		}
 		if tier.Waiting != "" {
 			cmd.Printf("  %s\n", tier.Waiting)
 		}

@@ -1220,6 +1220,13 @@ func TestOpsStatusLightsAndFreshness(t *testing.T) {
 			t.Fatalf("Transition %s: %v", s, err)
 		}
 	}
+	st, err = h.ops.Status(context.Background(), "svc", false)
+	if err != nil {
+		t.Fatalf("Status: %v", err)
+	}
+	if got := st[0].Tiers[0]; got.Light != "running" || got.Phase != PhaseLabel(engine.VERIFYING) {
+		t.Errorf("verifying tier = %s, phase %q; want running, %q", got.Light, got.Phase, PhaseLabel(engine.VERIFYING))
+	}
 	if err := m.RecordVerification(engine.VerificationRecord{Method: "archive-integrity", Passed: true}); err != nil {
 		t.Fatalf("RecordVerification: %v", err)
 	}
@@ -1236,6 +1243,9 @@ func TestOpsStatusLightsAndFreshness(t *testing.T) {
 	}
 	if st[0].FreshnessAgeSeconds == nil {
 		t.Error("freshness = nil, want set after a SUCCESS")
+	}
+	if st[0].Tiers[0].Phase != "" || st[0].Tiers[0].ElapsedSeconds != 0 {
+		t.Errorf("finished tier phase = %q elapsed %d, want empty", st[0].Tiers[0].Phase, st[0].Tiers[0].ElapsedSeconds)
 	}
 	if st[0].Tiers[0].Waiting != "" {
 		t.Errorf("finished tier waiting = %q, want empty", st[0].Tiers[0].Waiting)
