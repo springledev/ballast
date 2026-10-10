@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import type { ServiceStatus, TierStatus } from "@/api/types";
-import { describeCheck, describeTier, summarize, worstLight } from "./status";
+import { describeCheck, describeTier, shortStatus, summarize, worstLight } from "./status";
 
 function svc(...lights: TierStatus["light"][]): ServiceStatus {
   return {
@@ -79,5 +79,31 @@ describe("describeCheck", () => {
   it("describes known checks and falls back to the raw name", () => {
     expect(describeCheck("restic-read-back")).toBe("Read files back out of the stored backup");
     expect(describeCheck("exec-script")).toBe("exec-script");
+  });
+});
+
+describe("shortStatus", () => {
+  it.each<[string, ServiceStatus, string]>([
+    ["never backed up", svc("none"), "No backup yet"],
+    ["running without progress", svc("running"), "Backing up now"],
+    [
+      "running with an upload",
+      {
+        ...svc("running"),
+        targets: [
+          { destination: "b2", light: "running", upload: { destination: "b2", percent: 43.9, bytes_done: 1, total_bytes: 2 } },
+        ],
+      },
+      "Uploading, 43%",
+    ],
+    ["failed without a time", svc("red"), "Failed"],
+  ])("%s", (_name, s, want) => {
+    expect(shortStatus(s)).toBe(want);
+  });
+
+  it("adds when the last backup finished", () => {
+    const s = svc("green");
+    s.tiers[0].last_finished_at = new Date(Date.now() - 2 * 3600e3).toISOString();
+    expect(shortStatus(s)).toMatch(/^Safe, /);
   });
 });

@@ -57,7 +57,7 @@ onMounted(async () => {
           <summary>Details</summary>
           <div class="advanced-body">
             <div class="table-scroll">
-              <table>
+              <table class="stack">
                 <thead>
                   <tr>
                     <th>Method</th>
@@ -69,10 +69,10 @@ onMounted(async () => {
                 <tbody>
                   <template v-for="(v, i) in s.verification" :key="i">
                     <tr>
-                      <td><code>{{ v.method }}</code></td>
-                      <td>{{ v.passed ? "passed" : "failed" }}</td>
-                      <td>{{ formatDurationMs(v.duration_ms) }}</td>
-                      <td>{{ formatDateTime(v.recorded_at) }}</td>
+                      <td data-label="Method"><code>{{ v.method }}</code></td>
+                      <td data-label="Result">{{ v.passed ? "passed" : "failed" }}</td>
+                      <td data-label="Took">{{ formatDurationMs(v.duration_ms) }}</td>
+                      <td data-label="When">{{ formatDateTime(v.recorded_at) }}</td>
                     </tr>
                     <tr v-if="v.detail || v.output">
                       <td colspan="4"><pre class="raw">{{ [v.detail, v.output].filter(Boolean).join("\n") }}</pre></td>

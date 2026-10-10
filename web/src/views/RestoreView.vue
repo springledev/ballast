@@ -4,6 +4,7 @@ import { computed, onMounted, reactive, ref, watch } from "vue";
 import { api } from "@/api/client";
 import type { RestoreProjectReport, Service, Snapshot } from "@/api/types";
 import { formatDateTime, formatRelative } from "@/lib/format";
+import { groupEntries, needsTools } from "@/lib/listView";
 
 const services = ref<Service[]>([]);
 const selectedService = ref("");
@@ -16,6 +17,15 @@ const restoring = ref(false);
 const form = reactive({ snapshot: "", paths: "", to: "" });
 
 // Newest first, so the default choice is the most recent backup.
+// A long list of services is split by kind so the picker stays usable.
+const serviceGroups = computed(() =>
+  groupEntries(
+    [...services.value].sort((a, b) => a.name.localeCompare(b.name)),
+    (s) => ({ name: s.name, type: s.catalog_entry, destination: s.destination }),
+    needsTools(services.value.length) ? "type" : "none",
+  ),
+);
+
 const sorted = computed(() => [...snapshots.value].sort((a, b) => b.time.localeCompare(a.time)));
 
 // --- full-stack restore (a project's compose config + volumes + DB dumps together, spec §14 step 23) ---
@@ -107,11 +117,13 @@ async function restore() {
 </script>
 
 <template>
-  <h2>Restore files</h2>
-  <p class="lede">
-    Get files back from a backup. Ballast never overwrites your live data: it restores into a separate folder, and you
-    copy back what you need once you've looked.
-  </p>
+  <header class="page-head">
+    <h2>Restore files</h2>
+    <p class="lede">
+      Get files back from a backup. Ballast never overwrites your live data: it restores into a separate folder, and you
+      copy back what you need once you've looked.
+    </p>
+  </header>
 
   <p v-if="error" class="notice notice--error" role="alert">{{ error }}</p>
   <div v-if="success" class="notice notice--ok" role="status">
@@ -123,7 +135,14 @@ async function restore() {
       <label for="restore-service">What do you want to restore?</label>
       <select id="restore-service" v-model="selectedService">
         <option value="" disabled>Choose…</option>
-        <option v-for="s in services" :key="s.name" :value="s.name">{{ s.name }}</option>
+        <template v-for="g in serviceGroups" :key="g.key">
+          <optgroup v-if="g.label" :label="g.label">
+            <option v-for="s in g.items" :key="s.name" :value="s.name">{{ s.name }}</option>
+          </optgroup>
+          <template v-else>
+            <option v-for="s in g.items" :key="s.name" :value="s.name">{{ s.name }}</option>
+          </template>
+        </template>
       </select>
     </div>
 
@@ -155,7 +174,7 @@ async function restore() {
               <textarea id="restore-paths" v-model="form.paths" rows="3" placeholder="Leave blank to restore everything"></textarea>
             </div>
             <div class="table-scroll">
-              <table>
+              <table class="stack">
                 <thead>
                   <tr>
                     <th>Snapshot</th>
@@ -166,10 +185,10 @@ async function restore() {
                 </thead>
                 <tbody>
                   <tr v-for="snap in sorted" :key="snap.id">
-                    <td><code>{{ snap.short_id }}</code></td>
-                    <td>{{ formatDateTime(snap.time) }}</td>
-                    <td>{{ snap.hostname }}</td>
-                    <td>{{ (snap.paths ?? []).join(", ") }}</td>
+                    <td data-label="Snapshot"><code>{{ snap.short_id }}</code></td>
+                    <td data-label="Taken">{{ formatDateTime(snap.time) }}</td>
+                    <td data-label="Host">{{ snap.hostname }}</td>
+                    <td data-label="Paths">{{ (snap.paths ?? []).join(", ") }}</td>
                   </tr>
                 </tbody>
               </table>

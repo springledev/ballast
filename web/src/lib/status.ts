@@ -85,3 +85,22 @@ export const checkLabels: Record<string, string> = {
 export function describeCheck(method: string): string {
   return checkLabels[method] ?? method;
 }
+
+/**
+ * A few words for one line of a compact list, e.g. "Safe, 2 hours ago"
+ * or "Uploading, 44%". The full sentence is on the card view.
+ */
+export function shortStatus(s: ServiceStatus): string {
+  const light = worstLight(s);
+  if (light === "running") {
+    const up = (s.targets ?? []).find((t) => t.upload && t.upload.total_bytes > 0)?.upload;
+    return up ? `Uploading, ${Math.floor(up.percent)}%` : "Backing up now";
+  }
+  if (light === "none") return lightLabel.none;
+  const finished = s.tiers
+    .map((t) => t.last_finished_at)
+    .filter((t): t is string => !!t)
+    .sort()
+    .pop();
+  return finished ? `${lightLabel[light]}, ${formatRelative(finished)}` : lightLabel[light];
+}

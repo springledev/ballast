@@ -231,7 +231,7 @@ load();
       </p>
       <p v-else-if="!guests.length">No VMs or LXC containers found on this host.</p>
       <div v-else class="table-scroll">
-        <table>
+        <table class="stack">
           <thead>
             <tr>
               <th>Name</th>
@@ -243,11 +243,11 @@ load();
           </thead>
           <tbody>
             <tr v-for="g in guests" :key="`${g.node}-${g.vmid}`">
-              <td>{{ g.name }}</td>
-              <td>{{ g.type === "lxc" ? "LXC container" : "VM" }}</td>
-              <td>{{ g.vmid }}</td>
-              <td>{{ g.node }}</td>
-              <td>{{ g.status }}</td>
+              <td data-label="Name">{{ g.name }}</td>
+              <td data-label="Type">{{ g.type === "lxc" ? "LXC container" : "VM" }}</td>
+              <td data-label="VMID">{{ g.vmid }}</td>
+              <td data-label="Node">{{ g.node }}</td>
+              <td data-label="Status">{{ g.status }}</td>
             </tr>
           </tbody>
         </table>

@@ -5,8 +5,19 @@ import { api } from "@/api/client";
 import type { CatalogSummary, Destination, DockerComposeProject, ExcludePreview, ServicePreview, DockerHost, DockerVolume, ProxmoxGuest, Retention, Service, ServiceTarget, Snapshot } from "@/api/types";
 import { formatBytes, formatDateTime, formatRelative } from "@/lib/format";
 import { describeServiceRetention } from "@/lib/retention";
+import ListTools from "@/components/ListTools.vue";
+import { emptyQuery, filterEntries, groupEntries, needsTools, type ListEntry, type ListQuery } from "@/lib/listView";
 
 const services = ref<Service[]>([]);
+
+// Search and grouping, shown only once the list is long.
+const query = ref<ListQuery>(emptyQuery());
+const listEntry = (s: Service): ListEntry => ({ name: s.name, type: s.catalog_entry, destination: s.destination });
+const showTools = computed(() => needsTools(services.value.length));
+const shownServices = computed(() => (showTools.value ? filterEntries(services.value, listEntry, query.value) : services.value));
+const serviceGroups = computed(() =>
+  groupEntries(shownServices.value, listEntry, showTools.value ? query.value.group : "none", (t) => entryName(t)),
+);
 const catalog = ref<CatalogSummary[]>([]);
 const destinations = ref<Destination[]>([]);
 const dockerHosts = ref<DockerHost[]>([]);
@@ -513,8 +524,10 @@ onMounted(load);
 </script>
 
 <template>
-  <h2>Backups</h2>
-  <p class="lede">Each entry is one app or folder Ballast backs up. The command line calls these "services".</p>
+  <header class="page-head">
+    <h2>Backups</h2>
+    <p class="lede">Each entry is one app or folder Ballast backs up. The command line calls these "services".</p>
+  </header>
 
   <p v-if="error" class="notice notice--error" role="alert">{{ error }}</p>
   <p v-if="saved" class="notice notice--ok" role="status">{{ saved }}</p>
@@ -529,8 +542,22 @@ onMounted(load);
       </div>
     </div>
 
-    <ul v-if="services.length" class="list">
-      <li v-for="s in services" :key="s.name">
+    <ListTools
+      v-if="showTools"
+      v-model="query"
+      :groups="['none', 'type', 'destination']"
+      :shown="shownServices.length"
+      :total="services.length"
+      label="backups"
+    />
+    <p v-if="showTools && !shownServices.length" class="empty">
+      Nothing matches. <button class="btn btn-quiet" type="button" @click="query = emptyQuery()">Show everything</button>
+    </p>
+
+    <section v-for="g in services.length ? serviceGroups : []" :key="g.key" class="group" :aria-label="g.label || undefined">
+    <h3 v-if="g.label" class="group-head">{{ g.label }} <span class="muted">{{ g.items.length }}</span></h3>
+    <ul v-if="g.items.length" class="list">
+      <li v-for="s in g.items" :key="s.name">
         <div class="item-head">
           <div>
             <div class="item-title">{{ s.name }}</div>
@@ -705,6 +732,7 @@ onMounted(load);
         </details>
       </li>
     </ul>
+    </section>
 
     <button v-if="services.length && !showForm" class="btn" type="button" @click="openAdd">Add another</button>
 

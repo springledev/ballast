@@ -224,11 +224,13 @@ load();
 </script>
 
 <template>
-  <h2>Destinations</h2>
-  <p class="lede">
-    Places Ballast keeps your backups. Everything stored is encrypted. A folder on another disk or a mounted NAS
-    share is a good start. The command line calls these "destinations".
-  </p>
+  <header class="page-head">
+    <h2>Destinations</h2>
+    <p class="lede">
+      Places Ballast keeps your backups. Everything stored is encrypted. A folder on another disk or a mounted NAS
+      share is a good start. The command line calls these "destinations".
+    </p>
+  </header>
 
   <p v-if="error" class="notice notice--error" role="alert">{{ error }}</p>
   <div v-if="created" class="notice notice--ok" role="status">
