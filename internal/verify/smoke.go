@@ -128,12 +128,37 @@ func (s *RestartSmoke) Check(ctx context.Context, req Request) Result {
 func (s *RestartSmoke) passDetail() string {
 	switch {
 	case s.http != nil:
-		return fmt.Sprintf("Container %s is running and answered an HTTP request on port %d with status %d.", s.container, s.http.Port, s.expectStatus())
+		return fmt.Sprintf("Container %s is running and answered an HTTP request on port %d (a status of %s is healthy).", s.container, s.http.Port, s.expectedText())
 	case s.tcp != nil:
 		return fmt.Sprintf("Container %s is running and accepts connections on port %d.", s.container, s.tcp.Port)
 	default:
 		return fmt.Sprintf("Container %s is running after the backup.", s.container)
 	}
+}
+
+// acceptable reports whether got is an accepted HTTP status.
+func (s *RestartSmoke) acceptable(got int) bool {
+	if s.http != nil && len(s.http.ExpectStatuses) > 0 {
+		for _, want := range s.http.ExpectStatuses {
+			if got == want {
+				return true
+			}
+		}
+		return false
+	}
+	return got == s.expectStatus()
+}
+
+// expectedText describes the accepted statuses in plain English.
+func (s *RestartSmoke) expectedText() string {
+	if s.http != nil && len(s.http.ExpectStatuses) > 0 {
+		parts := make([]string, len(s.http.ExpectStatuses))
+		for i, v := range s.http.ExpectStatuses {
+			parts[i] = strconv.Itoa(v)
+		}
+		return strings.Join(parts, " or ")
+	}
+	return strconv.Itoa(s.expectStatus())
 }
 
 // expectStatus is the HTTP status the probe must return.
@@ -200,8 +225,12 @@ func (s *RestartSmoke) probeHTTP(ctx context.Context, env []string) (bool, bool,
 		return false, false, why, out
 	}
 	got, _ := strconv.Atoi(matches[len(matches)-1][1])
-	if got != s.expectStatus() {
-		return false, false, fmt.Sprintf("HTTP request to %s returned status %d, expected %d", path, got, s.expectStatus()), out
+	if !s.acceptable(got) {
+		why := fmt.Sprintf("HTTP request to %s returned status %d, expected %s", path, got, s.expectedText())
+		if got == 401 {
+			why += ": the server answered 401, so it is probably password-protected; set the expected status to 401 if that is intended"
+		}
+		return false, false, why, out
 	}
 	return true, false, "", out
 }

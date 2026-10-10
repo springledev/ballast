@@ -14,8 +14,8 @@
 #
 # Verification: the archive is fully read back (tar index test),
 # restic re-reads a sample of the snapshot, and a restart smoke test
-# waits for the container to come back and answer on /_up (CouchDB's
-# unauthenticated health endpoint on its internal port 5984).
+# waits for the container to come back and answer on /_up on its internal port 5984
+# (200, or 401 when the server is password-protected).
 apiVersion: ballast.dev/v1
 service: couchdb
 version: 1
@@ -48,5 +48,7 @@ verify:
     http:
       port: 5984
       path: /_up
+      # A CouchDB that requires a login answers 401 here; it is still up.
+      expectStatuses: [200, 401]
 notifications:
   failureVerbosity: full

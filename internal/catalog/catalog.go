@@ -269,11 +269,15 @@ type Smoke struct {
 }
 
 // SmokeHTTP is an HTTP probe against the container's own localhost.
-// ExpectStatus defaults to 200; Path defaults to "/".
+// ExpectStatus defaults to 200; ExpectStatuses, when set, lists every
+// status that counts as healthy (e.g. 200 and 401 for a server that may
+// sit behind a login) and takes precedence. Path defaults to "/".
 type SmokeHTTP struct {
 	Port         int    `yaml:"port" json:"port"`
 	Path         string `yaml:"path,omitempty" json:"path,omitempty"`
 	ExpectStatus int    `yaml:"expectStatus,omitempty" json:"expectStatus,omitempty"`
+	// ExpectStatuses lists several acceptable statuses.
+	ExpectStatuses []int `yaml:"expectStatuses,omitempty" json:"expectStatuses,omitempty"`
 }
 
 // SmokeTCP is a TCP connect probe against the container's own

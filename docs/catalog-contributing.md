@@ -83,6 +83,7 @@ verify:                      # required
       port: 80                 # required: port inside the container
       path: /                  # optional, default /
       expectStatus: 200        # optional, default 200
+      expectStatuses: [200, 401] # optional list; any of these is healthy (overrides expectStatus)
     # or: tcp:
     #   port: 5432
 

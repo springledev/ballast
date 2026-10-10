@@ -301,3 +301,16 @@ func TestStep45Entries(t *testing.T) {
 		}
 	}
 }
+
+// TestCouchDBAcceptsLoginWall pins that the built-in CouchDB entry treats
+// both 200 and 401 from /_up as healthy, so a password-protected server
+// does not turn the restart check red.
+func TestCouchDBAcceptsLoginWall(t *testing.T) {
+	entry, err := ballastcatalog.LoadFile("couchdb.yaml")
+	if err != nil {
+		t.Fatalf("LoadFile: %v", err)
+	}
+	if got := entry.Verify.Smoke.HTTP.ExpectStatuses; !slices.Equal(got, []int{200, 401}) {
+		t.Errorf("couchdb ExpectStatuses = %v, want [200 401]", got)
+	}
+}

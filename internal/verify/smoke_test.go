@@ -198,6 +198,23 @@ func TestRestartSmokeChecks(t *testing.T) {
 			wantOK:     true,
 		},
 		{
+			name:       "expectStatuses accepts 401",
+			inspectSeq: "running|",
+			http:       &catalog.SmokeHTTP{Port: 80, Path: "/_up", ExpectStatuses: []int{200, 401}},
+			wgetStderr: "HTTP/1.1 401 Unauthorized\n",
+			setWget:    true,
+			wantOK:     true,
+		},
+		{
+			name:       "401 not expected explains password protection",
+			inspectSeq: "running|",
+			http:       &catalog.SmokeHTTP{Port: 80, Path: "/_up"},
+			wgetStderr: "HTTP/1.1 401 Unauthorized\n",
+			setWget:    true,
+			wantOK:     false,
+			wantWhy:    "probably password-protected",
+		},
+		{
 			name:       "no HTTP answer fails",
 			inspectSeq: "running|",
 			http:       &catalog.SmokeHTTP{Port: 80, Path: "/"},
