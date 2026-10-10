@@ -38,6 +38,13 @@ func resolveWithDummyValues(t *testing.T, path string) *ballastcatalog.Entry {
 		switch table {
 		case "Params":
 			ctx.Params[name] = "test-" + name
+			// Prefer the entry's own default where it has one: some
+			// strategies reject arbitrary text (paths, pick-from-a-list).
+			for _, p := range entry.Parameters {
+				if p.Name == name && p.Default != "" {
+					ctx.Params[name] = p.Default
+				}
+			}
 		case "Discovery":
 			ctx.Discovery[name] = "test-" + name
 		default:
