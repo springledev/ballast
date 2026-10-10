@@ -373,6 +373,9 @@ type GuestJobEdit struct {
 	CopyTo *string `json:"copy_to,omitempty"`
 	// CopyPath is the folder on this machine where the Proxmox storage appears.
 	CopyPath *string `json:"copy_path,omitempty"`
+	// ReadBackSampleMiB limits the copy's read-back to the first this
+	// many MiB of the dump (0 reads it all back).
+	ReadBackSampleMiB *int `json:"read_back_sample_mib,omitempty"`
 }
 
 // EditGuestJob changes a Proxmox guest backup job in place. The job keeps
@@ -400,6 +403,12 @@ func (o *Ops) EditGuestJob(ctx context.Context, name string, e GuestJobEdit) (in
 	}
 	if e.CopyPath != nil {
 		g.CopyPath = *e.CopyPath
+	}
+	if e.ReadBackSampleMiB != nil {
+		if *e.ReadBackSampleMiB < 0 {
+			return inventory.Service{}, fmt.Errorf("service %s: %w: the read-back sample cannot be negative", name, ErrValidation)
+		}
+		g.ReadBackSampleMiB = *e.ReadBackSampleMiB
 	}
 	s.Guest = &g
 	if e.CopyTo != nil {

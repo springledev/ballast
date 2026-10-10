@@ -104,7 +104,8 @@ func (c *ContainerRestore) Check(ctx context.Context, req Request) (res Result) 
 	// from the image we restore into. Comparison is best-effort: an
 	// inspect failure or an empty SourceContainer only adds a
 	// warning, never fails the check itself.
-	if warning := c.imageDriftWarning(ctx, req.SourceContainer, req.Env); warning != "" {
+	image, warning := c.restoreImage(ctx, req.SourceContainer, req.Env)
+	if warning != "" {
 		res.Warning = warning
 	}
 
@@ -121,7 +122,7 @@ func (c *ContainerRestore) Check(ctx context.Context, req Request) (res Result) 
 		}
 	}()
 
-	if err := c.startContainer(ctx, name, dialect, req.Env); err != nil {
+	if err := c.startContainer(ctx, name, image, dialect, req.Env); err != nil {
 		res.Detail = "service " + service + ": could not start throwaway container " + name + ": " + err.Error()
 		res.Duration = time.Since(start)
 		return res
@@ -223,23 +224,26 @@ func dialectFor(image string) restoreDialect {
 	}
 }
 
-// imageDriftWarning compares the live source container's image with
-// the verify image, when a source container is known. Any difference
-// is a warning, and inspect failure only downgrades to a warning —
-// the restore itself still runs.
-func (c *ContainerRestore) imageDriftWarning(ctx context.Context, source string, env []string) string {
+// restoreImage picks the image the throwaway container runs. When the
+// live source container is known, that is its exact image (the ID it
+// really runs), so the test restore is the real one and no drift is
+// possible. Only when the live image cannot be read does it fall back
+// to the configured image, with a warning saying the test may be less
+// exact.
+func (c *ContainerRestore) restoreImage(ctx context.Context, source string, env []string) (string, string) {
 	if source == "" {
-		return ""
+		return c.image, ""
 	}
 	out, err := c.opts.Runner.Run(ctx, nil, nil, c.opts.Docker.Command(env, "inspect", "--format", "{{.Image}}", source))
-	if err != nil {
-		return "could not compare " + source + "'s image with the test-restore image " + c.image + ": " + err.Error()
-	}
 	running := strings.TrimSpace(string(out.Stdout))
-	if running != c.image {
-		return "live container " + source + " runs image " + running + " but the test-restore uses " + c.image + " — the restore may not prove compatibility"
+	if err != nil || running == "" {
+		reason := "it returned nothing"
+		if err != nil {
+			reason = err.Error()
+		}
+		return c.image, "could not read the image " + source + " is running (" + reason + "), so the test restore uses " + c.image + " instead, which may not prove compatibility"
 	}
-	return ""
+	return running, ""
 }
 
 // startContainer creates the throwaway container with no network,
@@ -248,17 +252,17 @@ func (c *ContainerRestore) imageDriftWarning(ctx context.Context, source string,
 // server starts with the image's own arguments — see the
 // package-level "spec deviation" note on ContainerRestore for why
 // neither is overridden.
-func (c *ContainerRestore) startContainer(ctx context.Context, name string, d restoreDialect, env []string) error {
+func (c *ContainerRestore) startContainer(ctx context.Context, name, image string, d restoreDialect, env []string) error {
 	// --network none: the throwaway runs an empty-password /
 	// trust-local server, so it must not be reachable from other
 	// containers during the check window. Every interaction happens
 	// through docker exec, which works without a network.
 	args := []string{"run", "--detach", "--network", "none", "--name", name}
 	args = append(args, d.extraRun...)
-	args = append(args, c.image)
+	args = append(args, image)
 	_, err := c.opts.Runner.Run(ctx, nil, nil, c.opts.Docker.Command(env, args...))
 	if err != nil {
-		return fmt.Errorf("starting %s: %w", c.image, err)
+		return fmt.Errorf("starting %s: %w", image, err)
 	}
 	return nil
 }

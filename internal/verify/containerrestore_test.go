@@ -173,11 +173,11 @@ func TestContainerRestoreEmptyRequestService(t *testing.T) {
 	}
 }
 
-// TestContainerRestoreImageDriftWarning enforces the spec §7.2 MUST:
-// a live container whose image differs from the test-restore image
-// produces a warning, not a silent pass.
+// TestContainerRestoreImageDriftWarning: a live container whose image
+// differs from the configured one is restored into its exact image
+// (spec §20.1 H14), so there is nothing to warn about.
 func TestContainerRestoreImageDriftWarning(t *testing.T) {
-	opts, _, withEnv := stubSetup(t)
+	opts, logPath, withEnv := stubSetup(t)
 	withEnv("STUB_SOURCE_IMAGE=postgres:15")
 	artifact := sqlArtifact(t, "database", "SELECT 1;\n")
 
@@ -188,10 +188,20 @@ func TestContainerRestoreImageDriftWarning(t *testing.T) {
 	if !res.Passed {
 		t.Fatalf("Check() failed: %q", res.Detail)
 	}
-	if !strings.Contains(res.Warning, "immich_postgres") ||
-		!strings.Contains(res.Warning, "postgres:15") ||
-		!strings.Contains(res.Warning, "postgres:16") {
-		t.Errorf("Check() warning = %q, want it to name the container and both images", res.Warning)
+	if res.Warning != "" {
+		t.Errorf("Check() warning = %q, want none: the drill runs the live container's own image", res.Warning)
+	}
+	var ran bool
+	for _, line := range readStubLog(t, logPath) {
+		if strings.HasPrefix(line, "run ") {
+			ran = true
+			if !strings.HasSuffix(line, " postgres:15") || strings.Contains(line, "postgres:16") {
+				t.Errorf("throwaway container line = %q, want it to run the live image postgres:15", line)
+			}
+		}
+	}
+	if !ran {
+		t.Error("no docker run seen")
 	}
 }
 
@@ -228,7 +238,7 @@ func TestContainerRestoreInspectFailureWarning(t *testing.T) {
 	if !res.Passed {
 		t.Fatalf("Check() failed: %q", res.Detail)
 	}
-	if !strings.Contains(res.Warning, "could not compare") {
+	if !strings.Contains(res.Warning, "could not read the image") {
 		t.Errorf("Check() warning = %q, want the comparison failure mentioned", res.Warning)
 	}
 }
@@ -638,7 +648,7 @@ func TestContainerRestoreUnreadableArtifact(t *testing.T) {
 // plus cleanup failure) are both recorded, not overwritten.
 func TestContainerRestoreWarningsJoin(t *testing.T) {
 	opts, _, withEnv := stubSetup(t)
-	withEnv("STUB_SOURCE_IMAGE=postgres:15", "STUB_FAIL_RM=1")
+	withEnv("STUB_FAIL_INSPECT=1", "STUB_FAIL_RM=1")
 	artifact := sqlArtifact(t, "database", "SELECT 1;\n")
 
 	res := runCheck(t, opts, "postgres:16", nil, Request{
@@ -648,7 +658,7 @@ func TestContainerRestoreWarningsJoin(t *testing.T) {
 	if !res.Passed {
 		t.Fatalf("Check() failed: %q", res.Detail)
 	}
-	if !strings.Contains(res.Warning, "runs image postgres:15") ||
+	if !strings.Contains(res.Warning, "could not read the image") ||
 		!strings.Contains(res.Warning, "could not be removed") {
 		t.Errorf("Check() warning = %q, want both the drift and the cleanup failure", res.Warning)
 	}

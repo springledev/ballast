@@ -225,7 +225,7 @@ var proxmoxRemoveCmd = &cobra.Command{
 
 var (
 	jobName, jobNode, jobStorage, jobMode, jobSchedule, jobCopyTo, jobCopyPath string
-	jobVMID, jobKeepLast                                                       int
+	jobVMID, jobKeepLast, jobReadBackMiB                                       int
 )
 
 var proxmoxJobAddCmd = &cobra.Command{
@@ -255,7 +255,7 @@ Example:
 				Name: jobName, Kind: inventory.KindProxmoxGuest,
 				ProxmoxNode: jobNode, ProxmoxVMID: jobVMID,
 				Destination: jobCopyTo,
-				Guest:       &inventory.GuestJob{Storage: jobStorage, Mode: jobMode, KeepLast: jobKeepLast, CopyPath: jobCopyPath},
+				Guest:       &inventory.GuestJob{Storage: jobStorage, Mode: jobMode, KeepLast: jobKeepLast, CopyPath: jobCopyPath, ReadBackSampleMiB: jobReadBackMiB},
 			}
 			if err := a.ops.PutService(cmd.Context(), s); err != nil {
 				return err
@@ -382,8 +382,11 @@ Examples:
 		if fl.Changed("copy-path") {
 			e.CopyPath = &jobCopyPath
 		}
+		if fl.Changed("read-back-sample-mib") {
+			e.ReadBackSampleMiB = &jobReadBackMiB
+		}
 		if e == (api.GuestJobEdit{}) {
-			return fmt.Errorf("nothing to change: give --schedule, --keep-last, --copy-to or --copy-path")
+			return fmt.Errorf("nothing to change: give --schedule, --keep-last, --copy-to, --copy-path or --read-back-sample-mib")
 		}
 		cfg, err := loadConfig()
 		if err != nil {
@@ -431,12 +434,14 @@ func registerProxmoxCommands(root *cobra.Command) {
 	f.StringVar(&jobSchedule, "schedule", "", "cron schedule, e.g. \"0 3 * * 0\"")
 	f.StringVar(&jobCopyTo, "copy-to", "", "also copy each dump to this backup destination")
 	f.StringVar(&jobCopyPath, "copy-path", "", "folder on this machine where the Proxmox storage appears (needed with --copy-to)")
+	f.IntVar(&jobReadBackMiB, "read-back-sample-mib", 0, "check a copy by downloading back only the first N MiB of the dump instead of all of it (0 downloads it all; faster for big dumps, but the rest is not read back)")
 	for _, n := range []string{"name", "node", "vmid", "storage"} {
 		_ = proxmoxJobAddCmd.MarkFlagRequired(n)
 	}
 	jobCmd := &cobra.Command{Use: "job", Short: "Scheduled Proxmox guest backups"}
 	ef := proxmoxJobEditCmd.Flags()
 	ef.StringVar(&jobSchedule, "schedule", "", "new cron schedule")
+	ef.IntVar(&jobReadBackMiB, "read-back-sample-mib", 0, "check a copy by downloading back only the first N MiB of the dump instead of all of it (0 downloads it all; faster for big dumps, but the rest is not read back)")
 	ef.IntVar(&jobKeepLast, "keep-last", 0, "keep this many of the dumps Ballast made (0 keeps them all)")
 	ef.StringVar(&jobCopyTo, "copy-to", "", "copy each dump to this backup destination (empty stops copying)")
 	ef.StringVar(&jobCopyPath, "copy-path", "", "folder on this machine where the Proxmox storage appears")

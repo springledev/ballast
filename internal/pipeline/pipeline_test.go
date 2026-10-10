@@ -42,6 +42,7 @@ case "$cmd" in
     printf '{"message_type":"summary","snapshot_id":"1111111111111111111111111111111111111111111111111111111111111111","files_new":1,"total_files_processed":1}\n'
     ;;
   snapshots)
+    if [ -n "$RESTIC_STUB_NO_SNAPSHOTS" ]; then printf '[]'; exit 0; fi
     printf '[{"time":"2024-01-01T00:00:00Z","id":"1111111111111111111111111111111111111111111111111111111111111111","short_id":"11111111","hostname":"test","tags":["ballast"],"paths":["/stub/data"]}]\n'
     ;;
   ls)

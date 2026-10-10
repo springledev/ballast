@@ -15,6 +15,7 @@ import (
 	"github.com/springledev/ballast/internal/engine"
 	"github.com/springledev/ballast/internal/inventory"
 	"github.com/springledev/ballast/internal/proxmox"
+	"github.com/springledev/keel/runner"
 )
 
 // fakePVE is a small stateful Proxmox API: vzdump adds a dump, the
@@ -195,6 +196,62 @@ func TestRunGuestJobCopiesDumpToDestination(t *testing.T) {
 	targets, _ := engine.RunTargets(h.db, runs[0].ID)
 	if len(targets) != 1 || targets[0].State != engine.SUCCESS {
 		t.Errorf("targets = %+v", targets)
+	}
+}
+
+// H13: a bounded read-back sample still passes through VERIFYING to
+// SUCCESS and the copy check is logged as its own step.
+func TestRunGuestJobSampledCopyReadBackReachesSuccess(t *testing.T) {
+	h := newHarness(t)
+	f := newFakePVE()
+	var logBuf strings.Builder
+	p := h.guestPipeline(t, f)
+	p.Log = &logBuf
+	copyDir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(copyDir, "dump"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(copyDir, "dump", "vzdump-lxc-100-101.tar.zst"), make([]byte, 4096), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	putGuest(t, h, inventory.GuestJob{Storage: "backup", CopyPath: copyDir, ReadBackSampleMiB: 1}, "local")
+	state, err := p.Run(context.Background(), "pve-ct100")
+	if state != engine.SUCCESS {
+		t.Fatalf("state = %s (%v), want SUCCESS", state, err)
+	}
+	if !strings.Contains(logBuf.String(), "verifying copy: downloading it back from local (first 1.0 MiB of each file)") {
+		t.Errorf("log does not announce the copy read-back:\n%s", logBuf.String())
+	}
+	runs, _ := engine.RecentRuns(h.db, "pve-ct100", 1)
+	if tr := transitionsOf(t, h.db, runs[0].ID); !containsInOrder(tr, string(engine.VERIFYING), string(engine.SUCCESS)) {
+		t.Errorf("transitions %v do not pass VERIFYING before SUCCESS", tr)
+	}
+}
+
+// H12: a copy target whose snapshot is not in the destination must be
+// red, with the copy's own result shown, never green or amber.
+func TestRunGuestJobMissingCopySnapshotIsRed(t *testing.T) {
+	h := newHarness(t)
+	f := newFakePVE()
+	h.runnerEnv = append(h.runnerEnv, "RESTIC_STUB_NO_SNAPSHOTS=1")
+	p := h.guestPipeline(t, f)
+	p.Runner = &runner.Runner{BaseEnv: h.runnerEnv}
+	copyDir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(copyDir, "dump"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(copyDir, "dump", "vzdump-lxc-100-101.tar.zst"), make([]byte, 4096), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	putGuest(t, h, inventory.GuestJob{Storage: "backup", CopyPath: copyDir}, "local")
+	state, err := p.Run(context.Background(), "pve-ct100")
+	if state != engine.FAILED || err == nil || !strings.Contains(err.Error(), "does not exist") {
+		t.Fatalf("state = %s, err = %v; want FAILED saying the copy does not exist", state, err)
+	}
+	runs, _ := engine.RecentRuns(h.db, "pve-ct100", 1)
+	targets, _ := engine.RunTargets(h.db, runs[0].ID)
+	if len(targets) != 1 || targets[0].State != engine.FAILED {
+		t.Errorf("targets = %+v, want the copy shown as FAILED", targets)
 	}
 }
 

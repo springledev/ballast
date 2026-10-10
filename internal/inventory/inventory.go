@@ -411,6 +411,11 @@ type GuestJob struct {
 	// files appear (for example an NFS mount of it). It is needed only
 	// when the service also copies each dump to a restic destination.
 	CopyPath string `json:"copy_path,omitempty"`
+	// ReadBackSampleMiB, when above zero, makes the check of a copy read
+	// back only the first this-many MiB of the dump instead of
+	// downloading all of it again. Faster and cheaper for large dumps,
+	// but the rest of the file is not read back. Zero reads it all.
+	ReadBackSampleMiB int `json:"read_back_sample_mib,omitempty"`
 }
 
 // KindProxmoxConfig is the Service.Kind of the built-in Proxmox config

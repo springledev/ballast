@@ -970,6 +970,15 @@ type ReadBackSample struct {
 // (spec §7) adds archive integrity and throwaway-container restores
 // on top of these primitives.
 func (r *Repository) ReadBack(ctx context.Context, snapshotID string) (*ReadBackResult, error) {
+	return r.ReadBackSampled(ctx, snapshotID, 0)
+}
+
+// ReadBackSampled is ReadBack, except that when maxSampleBytes is above
+// zero only the first maxSampleBytes of each sample file are read back
+// before the download is stopped. That proves the snapshot can be read
+// without downloading all of a very large single-file snapshot, at the
+// price of not reading the rest of the file. Zero reads files in full.
+func (r *Repository) ReadBackSampled(ctx context.Context, snapshotID string, maxSampleBytes int64) (*ReadBackResult, error) {
 	entries, err := r.LS(ctx, snapshotID, "")
 	if err != nil {
 		return nil, err
@@ -998,12 +1007,48 @@ func (r *Repository) ReadBack(ctx context.Context, snapshotID string) (*ReadBack
 			continue
 		}
 		var buf countingWriter
-		if err := r.Dump(ctx, snap.ID, file, &buf); err != nil {
+		if maxSampleBytes > 0 {
+			dctx, stop := context.WithCancel(ctx)
+			lw := &limitWriter{w: &buf, max: maxSampleBytes, stop: stop}
+			err := r.Dump(dctx, snap.ID, file, lw)
+			stop()
+			if err != nil && !lw.hit {
+				return nil, fmt.Errorf("read-back of %s: %w", file, err)
+			}
+		} else if err := r.Dump(ctx, snap.ID, file, &buf); err != nil {
 			return nil, fmt.Errorf("read-back of %s: %w", file, err)
 		}
 		samples = append(samples, ReadBackSample{Path: file, Bytes: buf.n})
 	}
 	return &ReadBackResult{Snapshot: snap, Samples: samples}, nil
+}
+
+// limitWriter passes on at most max bytes, then calls stop to end the
+// download that feeds it.
+type limitWriter struct {
+	w    io.Writer
+	max  int64
+	n    int64
+	hit  bool
+	stop func()
+}
+
+func (l *limitWriter) Write(p []byte) (int, error) {
+	if l.n >= l.max {
+		l.hit = true
+		l.stop()
+		return len(p), nil
+	}
+	room := l.max - l.n
+	if int64(len(p)) > room {
+		l.w.Write(p[:room])
+		l.n = l.max
+		l.hit = true
+		l.stop()
+		return len(p), nil
+	}
+	l.n += int64(len(p))
+	return l.w.Write(p)
 }
 
 // countingWriter counts bytes written to it.
@@ -1029,6 +1074,11 @@ func firstFileUnder(entries []FileEntry, prefix string) string {
 	return ""
 }
 
+// ErrSnapshotMissing means the repository was reachable but does not
+// hold the snapshot asked for. It is a real failure, not an
+// "unverifiable" one: the copy does not exist.
+var ErrSnapshotMissing = errors.New("the backup is not in the repository")
+
 // selectSnapshot finds snapshot id ("latest" = newest by Time) in the
 // listing. restic's own "latest" is accepted verbatim by Dump/LS, but
 // ReadBack needs the concrete snapshot to attribute path-sets.
@@ -1043,7 +1093,7 @@ func selectSnapshot(snaps []Snapshot, id string) (Snapshot, error) {
 			}
 		}
 		if !found {
-			return Snapshot{}, fmt.Errorf("restic: repository has no snapshots to read back")
+			return Snapshot{}, fmt.Errorf("restic: repository has no snapshots to read back: %w", ErrSnapshotMissing)
 		}
 		return best, nil
 	}
@@ -1052,7 +1102,7 @@ func selectSnapshot(snaps []Snapshot, id string) (Snapshot, error) {
 			return s, nil
 		}
 	}
-	return Snapshot{}, fmt.Errorf("restic: snapshot %q not found in the repository", id)
+	return Snapshot{}, fmt.Errorf("restic: snapshot %q not found in the repository: %w", id, ErrSnapshotMissing)
 }
 
 // progressWriter keeps everything restic prints and reports each

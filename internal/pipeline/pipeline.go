@@ -10,6 +10,7 @@ package pipeline
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"github.com/springledev/ballast/internal/backend"
 	"github.com/springledev/ballast/internal/progress"
@@ -455,10 +456,35 @@ func (p *Pipeline) targetChecks(ctx context.Context, service string, rt *runTarg
 	var rb *restic.ReadBackResult
 	release, rbErr := p.holdShared(ctx, service, rt)
 	if rbErr == nil {
-		rb, rbErr = rt.repo.ReadBack(ctx, rt.snapshotID)
+		note := "verifying copy: downloading it back from " + rt.dest.Name
+		if rt.readBackLimit > 0 {
+			note += fmt.Sprintf(" (first %s of each file)", humanBytes(uint64(rt.readBackLimit)))
+		}
+		p.logf("%s: %s", service, note)
+		if rt.run != nil {
+			if err := rt.run.SetWaiting(note); err != nil {
+				p.logf("%s: %v", service, err)
+			}
+		}
+		rb, rbErr = rt.repo.ReadBackSampled(ctx, rt.snapshotID, rt.readBackLimit)
+		if rt.run != nil {
+			if err := rt.run.SetWaiting(""); err != nil {
+				p.logf("%s: %v", service, err)
+			}
+		}
 		release()
 	}
 	switch {
+	case errors.Is(rbErr, restic.ErrSnapshotMissing):
+		// The upload said it worked but the destination holds no such
+		// backup: that is a failed copy, never green and never amber.
+		readBack = verifyCheck{
+			rec: engine.VerificationRecord{
+				Method: readBackMethod,
+				Passed: false,
+				Detail: p.redact(fmt.Sprintf("the backup was not found at %s after uploading, so this copy does not exist: %v", rt.dest.Name, rbErr)),
+			},
+		}
 	case rbErr != nil:
 		readBack = verifyCheck{
 			rec: engine.VerificationRecord{

@@ -1271,3 +1271,31 @@ func TestRawDataSize(t *testing.T) {
 		t.Error("unparseable stats output should fail")
 	}
 }
+
+func TestLimitWriter(t *testing.T) {
+	tests := []struct {
+		name    string
+		max     int64
+		writes  []int
+		want    int64
+		wantHit bool
+	}{
+		{"under the limit", 10, []int{3, 3}, 6, false},
+		{"crossing the limit stops it", 10, []int{6, 6, 6}, 10, true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var buf countingWriter
+			stopped := false
+			lw := &limitWriter{w: &buf, max: tt.max, stop: func() { stopped = true }}
+			for _, n := range tt.writes {
+				if _, err := lw.Write(make([]byte, n)); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if buf.n != tt.want || lw.hit != tt.wantHit || stopped != tt.wantHit {
+				t.Errorf("wrote %d hit=%v stopped=%v, want %d hit=%v", buf.n, lw.hit, stopped, tt.want, tt.wantHit)
+			}
+		})
+	}
+}

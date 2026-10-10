@@ -27,7 +27,10 @@ type runTarget struct {
 	artifacts []strategy.Artifact
 
 	snapshotID string
-	checks     []verifyCheck
+	// readBackLimit, when above zero, reads back only this many bytes
+	// of each sample file (a bounded sample of a huge single file).
+	readBackLimit int64
+	checks        []verifyCheck
 	// err is why the target failed before it could be verified
 	// (destination unreadable, upload failed, parts select nothing).
 	err    error

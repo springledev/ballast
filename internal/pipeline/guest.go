@@ -35,6 +35,11 @@ func (p *Pipeline) runGuest(ctx context.Context, svc inventory.Service) (engine.
 		}
 		targets = append(targets, &runTarget{target: t, dest: dest})
 	}
+	if svc.Guest != nil && svc.Guest.ReadBackSampleMiB > 0 {
+		for _, rt := range targets {
+			rt.readBackLimit = int64(svc.Guest.ReadBackSampleMiB) << 20
+		}
+	}
 	if svc.Guest == nil {
 		return "", fmt.Errorf("service %s: this Proxmox guest job has no settings saved", service)
 	}
