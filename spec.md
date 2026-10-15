@@ -742,6 +742,34 @@
 
  65. CouchDB behind a login (H16, §20.1): the built-in entry accepts 200 or 401 (or a catalog parameter for the expected status) and the failure message says a 401 probably means a password-protected server.
 
+ **v0.6 extension (steps 66–78, §21: findings from running v0.5 in production) — design rationale and the evidence for each finding in `PLAN-v0.6.md`; this list is the normative order.**
+
+ 66. Alert decision log (J6, §21.1): one log line for every alert decision — sent (`sent verification_failure for utility-tracker to ballast`), held back (`alerted 23h ago, cool-down 24h`) or failed (with the reason) — and the last few decisions per service kept in the status DB (time, type, outcome, reason; never a topic, URL or token) and shown in the service detail view and `ballast status --json`. First, so step 67 can be seen working. Test: a held, a sent and a failed delivery each log and store one decision, and no secret reaches either.
+
+ 67. Alert reminders per scheduled run (J5, §21.1): a job that keeps failing gets one reminder per scheduled failure, not "one per 24 hours plus luck". The effective cool-down never exceeds 90% of the service's schedule gap (24h when unscheduled), so a daily job failing at 05:00:15 and then 05:00:10 still reminds. Failing test first with a fake clock; the decision log from step 66 shows why each alert was sent or held.
+
+ 68. CLI output hygiene (J1, J2, J3, §21.2): results go to stdout, notices and errors to stderr (`SetOut` once, plus a test that runs every list/show command with the two streams captured separately); `ballast status <service>` takes the service positionally (`--service` stays as an alias) and every command that takes no positional arguments rejects extras with a message that says what to use instead; the "using credential directory" notice appears only with `--verbose`, in `doctor`, or when the directory is not the default.
+
+ 69. Repository health in the CLI (J7, §21.3): `destination list` and `ballast status` show each destination's health light and when it was last checked and last OK; new read-only `ballast destination health [--json]` reads the same data as `GET /api/v1/destinations/health`; a destination never checked says so instead of showing nothing.
+
+ 70. Restore from a chosen destination (J11, §21.3): `--from <destination>` on `ballast restore` and `ballast restore-project`, the same choice in the API and a picker in the web UI; it must be one of the service's configured targets, and the snapshot is resolved inside that repository under the same service-tag guard. The default stays the main destination. Test with two local destinations holding different snapshots, and a destination that is not the service's target refused.
+
+ 71. Scheduled self-backup with retention (J8, J14, §21.4): `ballast self-backup` gets a schedule (default daily after the nightly batch, to every destination, opt-out), its own light and freshness alert on the dashboard like any service, and retention — `forget --prune` scoped to the `ballast-self` tag, same default policy as a service, only after a verified self-backup. Creating the schedule never runs it by surprise (v0.5 D2). Test: a scheduled run reaches verified, prune keeps only the policy's snapshots, and a failing self-backup alerts without touching any service's light.
+
+ 72. Self-backup includes the scripts custom entries run (J12, §21.4): every local script that an `exec` strategy or an `exec-script` verifier points to is saved under `scripts/` in the self-backup and listed in its output; `doctor` warns when a referenced script is missing or covered by no backup. Credential files stay excluded (rule 2) and the docs say not to put secrets inside scripts. Test with a custom entry that names a script.
+
+ 73. Version stamping and release tags (J9, §21.5): the Makefile's default `VERSION` becomes `git describe --tags --always --dirty`; the version is shown by `ballast version`, in `doctor`, in the API and in the web UI footer; `docs/upgrading.md` (step 74) names the tagging step (`v0.5.0`, tagging is the maintainer's action, not code). Test: a build with no tag still reports the commit, never `dev`.
+
+ 74. Upgrade guide and idle check (J10, §21.5): `ballast wait-idle [--timeout]` exits 0 when no run is in progress and non-zero on timeout, and `ballast status --running` prints and exits with whether anything is running; `docs/upgrading.md` gives the manual procedure (wait idle, copy `ballast.db`, keep the old binary, swap, restart, `doctor`) and how to roll back; every migration states whether it can be rolled back, and `doctor` shows the schema version. `ballast install --upgrade` stays out until the guide has been used in earnest.
+
+ 75. System-install CLI (J4, §21.6): `ballast install` also puts `ballast` on `PATH` (`/usr/local/bin/ballast`); when `/etc/ballast` exists and the caller is root, or the daemon is reachable, the CLI uses the system config and data paths without environment variables; a non-root user is told to run with `sudo` rather than getting an empty or mismatched view; commands go through the daemon's API where it is running. Confirm the inferred cause with a failing test first.
+
+ 76. Status exit codes for scripts (J13, §21.2): `ballast status --check` exits 0 when every light is green, 1 for amber or stale, 2 for red and 3 when status cannot be read, and prints one summary line; plain `ballast status` keeps exiting 0. For watchdogs and cron mail without parsing text. Depends on step 68.
+
+ 77. Heartbeat to an external monitor (J15, §21.7): optional credential file `ballast-heartbeat-url`; while the daemon's scheduler loop is alive it requests that URL on an interval (default 5 minutes) so a dead daemon, a stuck loop or a powered-off machine is noticed by something that is not Ballast. The URL is a secret (rule 2: root-only file, stripped from errors and logs); a failed ping is logged and never affects a backup; `doctor` reports whether a heartbeat is configured and when it last succeeded. Test with a stub server and a stopped loop.
+
+ 78. Support bundle (J16, §21.7): `ballast support-bundle [--output file]` writes one archive for bug reports and for asking someone else for help — version, `doctor --json`, status, recent alert decisions, schema version, restic/docker versions and catalog entry names — with every secret absent (the existing redaction harness in `cmd/ballast/redaction_test.go` is extended with seeded secrets across the new files). Nothing is sent anywhere.
+
 
 
  ## 15. Acceptance checklist (v0.1 "done")
@@ -1229,3 +1257,97 @@
  - [ ] The web UI is usable at 375, 768 and 1280 px (screenshots before and after)
 
  - [ ] Secrets never in DB, logs or API responses — re-asserted for the progress payload and the remote-files allow-list
+
+
+
+ ## 21. v0.6 extension: findings from running v0.5 in production (normative)
+
+
+
+ **Goal:** fix what the first week of v0.5 on the reference homelab (deployed 2026-10-10) turned up: alerts that may not repeat and cannot be audited, CLI output that cannot be scripted, repository health and off-site restores the CLI cannot reach, a self-backup that must be run by hand and leaves out its scripts, and an unwritten upgrade procedure. Each requirement was hit in practice or traced to code; the evidence, confidence tags (observed / inferred / expected) and wording of each finding (J1–J16) are in `PLAN-v0.6.md`. No mobile *backup* code (rule 6); the `exec` strategy and `ballast trigger --token` interfaces are untouched.
+
+
+
+ ### 21.1 Alerts
+
+ - A job that keeps failing gets one reminder per scheduled failure. The alert cool-down never exceeds 90% of the service's schedule gap (24 hours when the service has no schedule), so a daily job failing at 05:00:15 and again at 05:00:10 still reminds.
+
+ - Every alert decision is logged in one line (sent, held back with the reason, or failed with the reason) and the last few decisions per service are kept and shown in the service detail view. A decision record holds the time, type, outcome and reason, never a topic, URL or token (rule 2).
+
+
+
+ ### 21.2 Scripting the CLI
+
+ - Command results go to stdout. Notices, warnings and errors go to stderr. Each list and show command is tested with the two streams captured separately.
+
+ - `ballast status <service>` takes the service positionally (`--service` stays as an alias). A command that takes no positional arguments rejects extras and says what to use instead; it never drops them silently.
+
+ - The "using credential directory" notice is shown only with `--verbose`, in `doctor`, or when the directory is not the default.
+
+ - `ballast status --check` exits 0 when every light is green, 1 for amber or stale, 2 for red and 3 when status cannot be read, and prints one summary line. Plain `ballast status` keeps exiting 0.
+
+
+
+ ### 21.3 Visibility and restore
+
+ - `destination list` and `ballast status` show each destination's repository health light and when it was last checked and last OK; a never-checked destination says so. `ballast destination health [--json]` is read-only and uses the data behind `GET /api/v1/destinations/health`.
+
+ - `ballast restore` and `ballast restore-project` accept `--from <destination>` (API parameter and web UI picker too). The destination must be one of the service's configured targets, the snapshot is resolved inside that repository with the same service-tag guard, and the default remains the main destination. This is how an off-site copy is proven restorable without changing the service's main destination.
+
+
+
+ ### 21.4 Self-protection
+
+ - Self-backup (§14 step 28) can be scheduled (default: daily after the nightly batch, to every destination, opt-out), has its own light and freshness alert, and applies retention scoped to the `ballast-self` tag only after a verified self-backup. Creating its schedule never runs it by surprise (§20.1). Its failure never masks another service's result (rule 3).
+
+ - Self-backup also saves every local script that an `exec` strategy or an `exec-script` verifier points to, under `scripts/`, and lists them. `doctor` warns when a referenced script is missing or covered by no backup. Credential files stay excluded (rule 2); scripts must not contain secrets and the docs say so.
+
+
+
+ ### 21.5 Releases and upgrades
+
+ - A build reports its version from `git describe --tags --always --dirty`, never `dev` for a source build. The version is shown by `ballast version`, `doctor`, the API and the web UI footer. Tagging a release is the maintainer's action and is described in `docs/upgrading.md`.
+
+ - `ballast wait-idle [--timeout]` exits 0 when nothing is running and non-zero on timeout; `ballast status --running` prints and exits with whether anything is running. `docs/upgrading.md` gives the manual upgrade and rollback procedure. Every migration states whether it can be rolled back and `doctor` shows the schema version. An interrupted run is amber, not lost (rule 1), but an upgrade should still wait for idle.
+
+
+
+ ### 21.6 System install
+
+ - `ballast install` also puts `ballast` on `PATH`. When `/etc/ballast` exists and the caller is root, or the daemon is reachable, the CLI uses the system config and data paths with no environment variables. A non-root caller is told to use `sudo`. Commands go through the daemon's API where it is running.
+
+
+
+ ### 21.7 Monitoring Ballast itself
+
+ - An optional credential file `ballast-heartbeat-url` makes the daemon request that URL on an interval (default 5 minutes) while its scheduler loop is alive, so something other than Ballast notices a dead daemon or a powered-off machine. The URL is a secret (root-only file, stripped from errors and logs). A failed ping is logged and never changes a backup's outcome. `doctor` reports whether a heartbeat is configured and when it last succeeded.
+
+ - `ballast support-bundle [--output file]` writes one archive for bug reports: version, `doctor --json`, status, recent alert decisions, schema version, restic and docker versions and catalog entry names. Every secret is absent, asserted by the redaction harness with seeded secrets. Nothing is sent anywhere.
+
+
+
+ ### 21.8 Out of scope (v0.6)
+
+ Phone backup (§12); `ballast install --upgrade` (until the manual guide has been used); rclone providers; multi-user auth/RBAC, OIDC, TLS/ACME; a push stream for progress; changing what plain `ballast status` exits with.
+
+
+
+ ### 21.9 Acceptance checklist (v0.6 "done")
+
+ - [ ] A daily job failing at 05:00:15 then 05:00:10 reminds both days (fake-clock test), and every sent, held and failed alert has one log line and one stored decision
+
+ - [ ] Every list/show command writes results to stdout and notices to stderr; `status <service>` shows only that service; `for s in $(ballast schedule list 2>/dev/null | cut -f1)` works
+
+ - [ ] `ballast status --check` returns 0/1/2/3 for green, amber, red and unreadable status
+
+ - [ ] `destination list`, `status` and `destination health` show the last repository check; a restore from the off-site destination works with `--from` and a non-target destination is refused
+
+ - [ ] A scheduled self-backup reaches verified on every destination, old self-backups are pruned, and its scripts come back from a restore
+
+ - [ ] A source build reports a real version in the CLI, `doctor`, API and UI; `ballast wait-idle` blocks during a run and `docs/upgrading.md` has been followed once on the reference homelab
+
+ - [ ] The CLI works as root without environment variables after `ballast install`
+
+ - [ ] A stopped daemon stops the heartbeat; the support bundle contains no seeded secret
+
+ - [ ] Secrets never in DB, logs or API responses — re-asserted for alert decisions, the heartbeat URL and the support bundle
