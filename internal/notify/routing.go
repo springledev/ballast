@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"github.com/springledev/ballast/internal/scheduler"
 	"strings"
 	"time"
 )
@@ -132,11 +133,37 @@ func (g *AlertGate) now() time.Time {
 	return time.Now().UTC()
 }
 
-func (g *AlertGate) cooldown() time.Duration {
+func (g *AlertGate) cooldown(service string) time.Duration {
+	cd := DefaultAlertCooldown
 	if g.Cooldown > 0 {
-		return g.Cooldown
+		cd = g.Cooldown
 	}
-	return DefaultAlertCooldown
+	// A still-failing scheduled job gets one reminder per scheduled
+	// failure: never wait longer than 90% of the gap between runs, or a
+	// run that finishes a few seconds earlier than yesterday's is held.
+	if gap := g.scheduleGap(service); gap > 0 {
+		if limit := gap * 9 / 10; limit < cd {
+			cd = limit
+		}
+	}
+	return cd
+}
+
+// scheduleGap returns the time between service's scheduled runs, or 0
+// when it has no enabled, readable schedule.
+func (g *AlertGate) scheduleGap(service string) time.Duration {
+	var expr string
+	var enabled int
+	err := g.DB.QueryRow(`SELECT cron_expr, enabled FROM schedules WHERE service = ?`, service).Scan(&expr, &enabled)
+	if err != nil || enabled == 0 {
+		return 0
+	}
+	sch, err := scheduler.ParseCron(expr)
+	if err != nil {
+		return 0
+	}
+	gap, _ := sch.Gap(g.now())
+	return gap
 }
 
 // ShouldAlert reports whether a failure alert for service should be
@@ -162,10 +189,11 @@ func (g *AlertGate) Decide(service string) (bool, string, error) {
 		return true, "", nil
 	}
 	ago := g.now().Sub(t)
-	if ago >= g.cooldown() {
+	cd := g.cooldown(service)
+	if ago >= cd {
 		return true, "", nil
 	}
-	return false, fmt.Sprintf("alerted %s ago, cool-down %s", shortDuration(ago), shortDuration(g.cooldown())), nil
+	return false, fmt.Sprintf("alerted %s ago, cool-down %s", shortDuration(ago), shortDuration(cd)), nil
 }
 
 // shortDuration renders d as whole hours, or minutes under an hour.

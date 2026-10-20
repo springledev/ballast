@@ -160,6 +160,21 @@ func (s Schedule) IsDue(now, lastRun time.Time) bool {
 	return !s.fixedTime && s.firesInRepeatedMinutes(last, now)
 }
 
+// Gap returns the time between the first two firings after from, so
+// callers can size things (such as alert reminders) to the schedule.
+// It reports false when the schedule does not fire twice.
+func (s Schedule) Gap(from time.Time) (time.Duration, bool) {
+	first, ok := s.nextWall(wallClock(from))
+	if !ok {
+		return 0, false
+	}
+	second, ok := s.nextWall(first)
+	if !ok {
+		return 0, false
+	}
+	return second.Sub(first), true
+}
+
 // maxWallReached returns the latest wall-clock minute shown at or
 // before t. That is t's own wall clock, except inside an hour repeated
 // by clocks falling back, where the wall clock already went further
