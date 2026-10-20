@@ -15,18 +15,23 @@ var (
 	statusJSON    bool
 	statusVerify  bool
 	statusRunning bool
+	statusCheck   bool
 )
 
 // statusCmd is `ballast status [--service X] [--json] [--verify]`
-// (spec §9).
+// (spec §9), plus `--check` for scripts (spec §21.2).
 var statusCmd = &cobra.Command{
 	Use:   "status [service]",
 	Args:  cobra.MaximumNArgs(1),
 	Short: "Show backup status for one or all configured services",
 	RunE: func(cmd *cobra.Command, args []string) error {
-		cfg, err := loadConfig()
-		if err != nil {
-			return err
+		if statusCheck {
+			if statusRunning {
+				return fmt.Errorf("`ballast status --check` cannot be combined with --running: --check gives one exit code for every service and --running gives another. Use one of them")
+			}
+			if statusJSON {
+				return fmt.Errorf("`ballast status --check` cannot be combined with --json, because its summary line is plain text. Use one of them")
+			}
 		}
 		service := statusService
 		if len(args) == 1 {
@@ -34,6 +39,13 @@ var statusCmd = &cobra.Command{
 				return fmt.Errorf("`ballast status` got two different services (%q and --service %q); give just one", args[0], service)
 			}
 			service = args[0]
+		}
+		if statusCheck {
+			return runStatusCheck(cmd, service)
+		}
+		cfg, err := loadConfig()
+		if err != nil {
+			return err
 		}
 		return withApp(cfg, cmd.ErrOrStderr(), func(a *app) error {
 			if statusRunning {
@@ -53,6 +65,89 @@ var statusCmd = &cobra.Command{
 			return nil
 		})
 	},
+}
+
+// runStatusCheck answers `status --check` (spec §21.2). A status that
+// cannot be read at all is exit 3, with the reason on stderr; otherwise
+// the exit code and one summary line come from checkStatus.
+func runStatusCheck(cmd *cobra.Command, service string) error {
+	var st []api.ServiceStatus
+	cfg, err := loadConfig()
+	if err == nil {
+		err = withApp(cfg, cmd.ErrOrStderr(), func(a *app) error {
+			var serr error
+			st, serr = a.ops.Status(cmd.Context(), service, false)
+			return serr
+		})
+	}
+	if err != nil {
+		fmt.Fprintf(cmd.ErrOrStderr(), "Status cannot be read: %v\n", err)
+		return &exitError{code: 3}
+	}
+	code, summary := checkStatus(st)
+	cmd.Println(summary)
+	if code == 0 {
+		return nil
+	}
+	return &exitError{code: code}
+}
+
+// checkStatus maps the services' lights to the exit code of
+// `status --check` and a one-line summary (spec §21.2). The worst light
+// wins: 2 when any service is red; otherwise 1 when any is amber, stale,
+// running or has no backups yet, since none of those is confirmed green;
+// otherwise 0. No services at all is 1 for the same reason.
+func checkStatus(services []api.ServiceStatus) (int, string) {
+	if len(services) == 0 {
+		return 1, "No services are configured, so there is no backup to confirm."
+	}
+	var red, amber, running, none, green []string
+	for _, s := range services {
+		light, stale := "", false
+		if len(s.Tiers) > 0 {
+			light, stale = s.Tiers[0].Light, s.Tiers[0].Stale
+		}
+		name := s.Service
+		if stale {
+			name += " [stale]"
+		}
+		switch {
+		case light == "red":
+			red = append(red, name)
+		case light == "amber" || (light == "green" && stale):
+			amber = append(amber, name)
+		case light == "green":
+			green = append(green, name)
+		case light == "running":
+			running = append(running, name)
+		default:
+			none = append(none, name)
+		}
+	}
+	code := 0
+	switch {
+	case len(red) > 0:
+		code = 2
+	case len(amber) > 0 || len(running) > 0 || len(none) > 0:
+		code = 1
+	}
+	var parts []string
+	if len(red) > 0 {
+		parts = append(parts, fmt.Sprintf("%d red (%s)", len(red), strings.Join(red, ", ")))
+	}
+	if len(amber) > 0 {
+		parts = append(parts, fmt.Sprintf("%d amber (%s)", len(amber), strings.Join(amber, ", ")))
+	}
+	if len(running) > 0 {
+		parts = append(parts, fmt.Sprintf("%d running (%s)", len(running), strings.Join(running, ", ")))
+	}
+	if len(none) > 0 {
+		parts = append(parts, fmt.Sprintf("%d no backups yet (%s)", len(none), strings.Join(none, ", ")))
+	}
+	if len(green) > 0 {
+		parts = append(parts, fmt.Sprintf("%d green", len(green)))
+	}
+	return code, "Status: " + strings.Join(parts, ", ") + "."
 }
 
 // printStatusPlain renders status in plain English (spec §10
@@ -141,6 +236,7 @@ func lightLabel(light string) string {
 
 func init() {
 	statusCmd.Flags().BoolVar(&statusRunning, "running", false, "only say whether a backup is running; exits 1 if one is, 0 if not")
+	statusCmd.Flags().BoolVar(&statusCheck, "check", false, "for scripts: exit 0 when every service is green, 1 for amber, stale, running or no backups yet, 2 for red, 3 when the status cannot be read")
 	statusCmd.Flags().StringVar(&statusService, "service", "", "show only this service")
 	statusCmd.Flags().BoolVar(&statusJSON, "json", false, "print machine-readable JSON")
 	statusCmd.Flags().BoolVar(&statusVerify, "verify", false, "include per-check verification detail")

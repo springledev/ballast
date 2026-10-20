@@ -264,3 +264,145 @@ func TestDoctorCommandShowsSchemaVersion(t *testing.T) {
 		t.Errorf("doctor output = %q, want the schema version", out)
 	}
 }
+
+// TestCheckStatusExitCode: `status --check` maps the lights to exit
+// codes (spec §21.2): 0 all green, 1 amber, stale, running or no
+// backups yet, 2 red (red wins over amber), and one summary line.
+func TestCheckStatusExitCode(t *testing.T) {
+	svc := func(name, light string, stale bool) api.ServiceStatus {
+		return api.ServiceStatus{Service: name, Tiers: []api.TierStatus{{Tier: "restic", Light: light, Stale: stale}}}
+	}
+	tests := []struct {
+		name     string
+		services []api.ServiceStatus
+		wantCode int
+		wantText string
+	}{
+		{"all green", []api.ServiceStatus{svc("immich", "green", false), svc("vault", "green", false)}, 0, "2 green"},
+		{"ballast-self green counts too", []api.ServiceStatus{svc("ballast-self", "green", false), svc("vault", "green", false)}, 0, "2 green"},
+		{"amber", []api.ServiceStatus{svc("immich", "green", false), svc("vault", "amber", false)}, 1, "1 amber (vault)"},
+		{"green but stale", []api.ServiceStatus{svc("vault", "green", true)}, 1, "1 amber (vault [stale])"},
+		{"running", []api.ServiceStatus{svc("vault", "running", false)}, 1, "1 running (vault)"},
+		{"no backups yet", []api.ServiceStatus{svc("vault", "none", false)}, 1, "1 no backups yet (vault)"},
+		{"red", []api.ServiceStatus{svc("immich", "red", false)}, 2, "1 red (immich)"},
+		{"red beats amber", []api.ServiceStatus{svc("immich", "red", false), svc("vault", "amber", false)}, 2, "1 red (immich), 1 amber (vault)"},
+		{"nothing configured", nil, 1, "No services are configured"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			code, summary := checkStatus(tt.services)
+			if code != tt.wantCode {
+				t.Errorf("code = %d, want %d (summary %q)", code, tt.wantCode, summary)
+			}
+			if !strings.Contains(summary, tt.wantText) {
+				t.Errorf("summary = %q, want it to contain %q", summary, tt.wantText)
+			}
+			if strings.Contains(summary, "\n") {
+				t.Errorf("summary = %q, want one line", summary)
+			}
+		})
+	}
+}
+
+// TestStatusCheckFlagConflicts: --check cannot be combined with
+// --running (two answers in one exit code) or --json (the summary line
+// would break the JSON). Both are refused with a plain message.
+func TestStatusCheckFlagConflicts(t *testing.T) {
+	cliEnv(t, &spyRunner{})
+	for _, args := range [][]string{{"status", "--check", "--running"}, {"status", "--check", "--json"}} {
+		_, err := execCLI(t, args...)
+		var ee *exitError
+		if err == nil || errors.As(err, &ee) || !strings.Contains(err.Error(), "--check") {
+			t.Errorf("%v: err = %v, want a plain message naming --check", args, err)
+		}
+	}
+}
+
+// TestStatusCheckNothingConfigured: with no services the check exits 1
+// (nothing is confirmed) and says so.
+func TestStatusCheckNothingConfigured(t *testing.T) {
+	cliEnv(t, &spyRunner{})
+	out, err := execCLI(t, "status", "--check")
+	var ee *exitError
+	if !errors.As(err, &ee) || ee.code != 1 {
+		t.Fatalf("err = %v, want exitError code 1", err)
+	}
+	if !strings.Contains(out, "No services are configured") {
+		t.Errorf("out = %q, want the summary line", out)
+	}
+}
+
+// TestStatusCheckRunningIsNotGreen: a backup in progress is reported as
+// running and exits 1, the same as any light that is not green.
+func TestStatusCheckRunningIsNotGreen(t *testing.T) {
+	data := cliEnv(t, &spyRunner{})
+	seedTwoServices(t)
+	withDB(t, data, func(s *store.Store) {
+		if _, err := engine.StartRun(s.DB(), "vault"); err != nil {
+			t.Fatalf("StartRun: %v", err)
+		}
+	})
+	out, err := execCLI(t, "status", "--check")
+	var ee *exitError
+	if !errors.As(err, &ee) || ee.code != 1 {
+		t.Fatalf("err = %v, want exitError code 1 (out %q)", err, out)
+	}
+	if !strings.Contains(out, "1 running (vault)") {
+		t.Errorf("out = %q, want vault shown as running", out)
+	}
+}
+
+// TestStatusCheckUnreadable: when the status cannot be read at all, the
+// check says so on stderr and exits 3.
+func TestStatusCheckUnreadable(t *testing.T) {
+	cliEnv(t, &spyRunner{})
+	// A regular file where the data directory should be: the database
+	// cannot be opened.
+	blocker := filepath.Join(t.TempDir(), "blocker")
+	if err := os.WriteFile(blocker, []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("BALLAST_DATA_DIR", filepath.Join(blocker, "data"))
+	out, err := execCLI(t, "status", "--check")
+	var ee *exitError
+	if !errors.As(err, &ee) || ee.code != 3 {
+		t.Fatalf("err = %v, want exitError code 3", err)
+	}
+	if !strings.Contains(out, "Status cannot be read") {
+		t.Errorf("out = %q, want the cannot-be-read line", out)
+	}
+}
+
+// TestStatusCheckGreenAfterVerifiedBackup: a real verified backup makes
+// the check exit 0.
+func TestStatusCheckGreenAfterVerifiedBackup(t *testing.T) {
+	withStubRestic(t)
+	data := filepath.Join(t.TempDir(), "data")
+	conf := filepath.Join(t.TempDir(), "config")
+	t.Setenv("BALLAST_DATA_DIR", data)
+	t.Setenv("BALLAST_CONFIG_DIR", conf)
+	t.Setenv("CREDENTIALS_DIRECTORY", "")
+	credDir := filepath.Join(conf, "credentials")
+	if err := os.MkdirAll(credDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(credDir, "ballast-restic-password.local"), []byte("pw\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := execCLI(t, "destination", "add", "local", "--location", "/srv/backups"); err != nil {
+		t.Fatalf("destination add: %v", err)
+	}
+	if _, err := execCLI(t, "service", "add", "docs", "--catalog", "folder", "--destination", "local", "--param", "path="+t.TempDir()); err != nil {
+		t.Fatalf("service add: %v", err)
+	}
+	if out, err := execCLI(t, "backup", "docs"); err != nil {
+		t.Fatalf("backup: %v (output %q)", err, out)
+	}
+	out, err := execCLI(t, "status", "--check")
+	if err != nil {
+		t.Fatalf("status --check: %v (out %q)", err, out)
+	}
+	if !strings.Contains(out, "1 green") {
+		t.Errorf("out = %q, want \"1 green\"", out)
+	}
+}
