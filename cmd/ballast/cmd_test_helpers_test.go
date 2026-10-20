@@ -59,7 +59,8 @@ func resetCLIFlags() {
 	triggerToken, triggerTokenFile = "", ""
 	daemonURL = ""
 
-	statusService, statusJSON, statusVerify = "", false, false
+	statusService, statusJSON, statusVerify, statusRunning = "", false, false, false
+	waitIdleTimeout = waitIdleDefault
 	verbose, forceCredentialNotice = false, false
 	if f := rootCmd.PersistentFlags().Lookup("verbose"); f != nil {
 		f.Changed = false

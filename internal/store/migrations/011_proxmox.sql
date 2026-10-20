@@ -1,4 +1,5 @@
 -- Migration 011: Proxmox connection + per-service guest attachment
+-- Rolling back: safe to drop the new table(s); nothing else depends on them. The added service columns can stay.
 -- (spec §14 step 24, §17.3).
 --
 -- Unlike Docker hosts, Ballast talks to at most one Proxmox host

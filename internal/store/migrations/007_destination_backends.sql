@@ -1,4 +1,5 @@
 -- Migration 007: backend-typed destinations (spec §14 step 17, §17.1).
+-- Rolling back: cannot be undone in place; it rewrote existing destinations into typed ones. Restore the pre-upgrade ballast.db copy instead.
 --
 -- A destination now has a backend type (local, b2, s3, r2, sftp,
 -- custom) and its non-secret settings (settings_json: bucket,

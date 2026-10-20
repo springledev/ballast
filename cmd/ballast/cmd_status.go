@@ -3,6 +3,7 @@ package main
 import (
 	"encoding/json"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/springledev/ballast/internal/api"
@@ -13,6 +14,7 @@ var (
 	statusService string
 	statusJSON    bool
 	statusVerify  bool
+	statusRunning bool
 )
 
 // statusCmd is `ballast status [--service X] [--json] [--verify]`
@@ -34,6 +36,9 @@ var statusCmd = &cobra.Command{
 			service = args[0]
 		}
 		return withApp(cfg, cmd.ErrOrStderr(), func(a *app) error {
+			if statusRunning {
+				return reportRunning(cmd, a)
+			}
 			st, err := a.ops.Status(cmd.Context(), service, statusVerify)
 			if err != nil {
 				return err
@@ -135,7 +140,23 @@ func lightLabel(light string) string {
 }
 
 func init() {
+	statusCmd.Flags().BoolVar(&statusRunning, "running", false, "only say whether a backup is running; exits 1 if one is, 0 if not")
 	statusCmd.Flags().StringVar(&statusService, "service", "", "show only this service")
 	statusCmd.Flags().BoolVar(&statusJSON, "json", false, "print machine-readable JSON")
 	statusCmd.Flags().BoolVar(&statusVerify, "verify", false, "include per-check verification detail")
+}
+
+// reportRunning prints whether any backup is running and returns an
+// exitError(1) when one is, so a script can branch on the exit code.
+func reportRunning(cmd *cobra.Command, a *app) error {
+	names, err := a.ops.RunningServices(cmd.Context())
+	if err != nil {
+		return err
+	}
+	if len(names) == 0 {
+		cmd.Println("Nothing is running.")
+		return nil
+	}
+	cmd.Printf("A backup is running right now: %s\n", strings.Join(names, ", "))
+	return &exitError{code: 1}
 }

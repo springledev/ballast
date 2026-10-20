@@ -1,4 +1,5 @@
 -- Migration 013: email/webhook channels, event routing and alert
+-- Rolling back: safe to drop the new table(s); nothing else depends on them. The added columns can stay.
 -- de-duplication (spec §18.1, §14 step 31).
 --
 -- settings_json holds a channel's non-secret settings (an email

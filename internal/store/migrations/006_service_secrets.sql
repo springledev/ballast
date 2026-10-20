@@ -1,4 +1,5 @@
 -- Migration 006: catalog secret references (spec §14 step 15).
+-- Rolling back: safe to leave in place; an older Ballast ignores the added column(s), which have a default.
 --
 -- secrets_json maps a catalog {{ .Secrets.NAME }} name to the *name*
 -- of the root-only credential file holding its plaintext value (spec

@@ -414,6 +414,27 @@ type ServiceStatus struct {
 	AlertDecisions []notify.AlertDecision `json:"alert_decisions,omitempty"`
 }
 
+// RunningServices returns the names of the services that have a backup
+// in progress right now (spec §21.5), empty when Ballast is idle. A run
+// left unfinished by a crash counts until the next run of that service
+// ends it.
+func (o *Ops) RunningServices(ctx context.Context) ([]string, error) {
+	st, err := o.Status(ctx, "", false)
+	if err != nil {
+		return nil, fmt.Errorf("checking for running backups: %w", err)
+	}
+	var names []string
+	for _, s := range st {
+		for _, t := range s.Tiers {
+			if t.Light == "running" {
+				names = append(names, s.Service)
+				break
+			}
+		}
+	}
+	return names, nil
+}
+
 // Status returns the status of the named service, or every configured
 // service when service is "". withVerify adds each service's last
 // run's verification records (spec §7: "shown in GUI and

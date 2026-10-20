@@ -3,11 +3,15 @@ package main
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
+	"github.com/springledev/ballast/internal/engine"
 	"github.com/springledev/ballast/internal/progress"
+	"github.com/springledev/ballast/internal/store"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/springledev/ballast/internal/api"
 	"github.com/spf13/cobra"
@@ -152,5 +156,111 @@ func TestPrintStatusPlainUpload(t *testing.T) {
 				t.Errorf("output = %q, want %q", buf.String(), tt.want)
 			}
 		})
+	}
+}
+
+// TestStatusRunningFlag: `status --running` prints whether anything is
+// running and exits non-zero only when something is (spec §21.5).
+func TestStatusRunningFlag(t *testing.T) {
+	data := cliEnv(t, &spyRunner{})
+	seedTwoServices(t)
+
+	out, err := execCLI(t, "status", "--running")
+	if err != nil || !strings.Contains(out, "Nothing is running") {
+		t.Fatalf("idle: err=%v out=%q, want exit 0 and \"Nothing is running\"", err, out)
+	}
+
+	withDB(t, data, func(s *store.Store) {
+		if _, err := engine.StartRun(s.DB(), "vault"); err != nil {
+			t.Fatalf("StartRun: %v", err)
+		}
+	})
+	out, err = execCLI(t, "status", "--running")
+	if err == nil {
+		t.Fatalf("running: want a non-zero exit, got nil (out %q)", out)
+	}
+	var ee *exitError
+	if !errors.As(err, &ee) || ee.code != 1 {
+		t.Errorf("err = %v, want exitError code 1", err)
+	}
+	if !strings.Contains(out, "vault") || strings.Contains(out, "immich") {
+		t.Errorf("out = %q, want it to name only vault", out)
+	}
+}
+
+// TestWaitIdleCommand: wait-idle returns at once when idle and fails
+// with a plain message when a run is still going at the timeout.
+func TestWaitIdleCommand(t *testing.T) {
+	data := cliEnv(t, &spyRunner{})
+	seedTwoServices(t)
+
+	if out, err := execCLI(t, "wait-idle", "--timeout", "5s"); err != nil || !strings.Contains(out, "Nothing is running") {
+		t.Fatalf("idle: err=%v out=%q", err, out)
+	}
+
+	withDB(t, data, func(s *store.Store) {
+		if _, err := engine.StartRun(s.DB(), "vault"); err != nil {
+			t.Fatalf("StartRun: %v", err)
+		}
+	})
+	prev := waitIdleInterval
+	waitIdleInterval = 10 * time.Millisecond
+	t.Cleanup(func() { waitIdleInterval = prev })
+	_, err := execCLI(t, "wait-idle", "--timeout", "50ms")
+	if err == nil || !strings.Contains(err.Error(), "still running") || !strings.Contains(err.Error(), "vault") {
+		t.Fatalf("busy: err = %v, want a timeout naming vault", err)
+	}
+}
+
+// TestWaitIdleSeesRunReachVerifyingThenSuccess drives a real run through
+// the state machine: it counts as running through VERIFYING, and
+// wait-idle, already waiting, returns 0 once the run reaches SUCCESS.
+func TestWaitIdleSeesRunReachVerifyingThenSuccess(t *testing.T) {
+	data := cliEnv(t, &spyRunner{})
+	seedTwoServices(t)
+	prev := waitIdleInterval
+	waitIdleInterval = 20 * time.Millisecond
+	t.Cleanup(func() { waitIdleInterval = prev })
+
+	var m *engine.Machine
+	withDB(t, data, func(s *store.Store) {
+		var err error
+		if m, err = engine.StartRun(s.DB(), "vault"); err != nil {
+			t.Fatalf("StartRun: %v", err)
+		}
+		for _, st := range []engine.State{engine.PREPARING, engine.DUMPING, engine.UPLOADING, engine.VERIFYING} {
+			if err := m.Transition(st, "step"); err != nil {
+				t.Fatalf("Transition %s: %v", st, err)
+			}
+		}
+		// Still VERIFYING: not idle.
+		if _, err := execCLI(t, "status", "--running"); err == nil {
+			t.Error("status --running in VERIFYING: want non-zero exit")
+		}
+		go func() {
+			time.Sleep(150 * time.Millisecond)
+			_ = m.RecordVerification(engine.VerificationRecord{Method: "archive-integrity", Passed: true})
+			_ = m.Transition(engine.SUCCESS, "verified")
+		}()
+		out, err := execCLI(t, "wait-idle", "--timeout", "10s")
+		if err != nil || !strings.Contains(out, "Nothing is running") {
+			t.Fatalf("wait-idle after SUCCESS: err=%v out=%q", err, out)
+		}
+	})
+	if out, err := execCLI(t, "status", "--running"); err != nil {
+		t.Errorf("status --running after SUCCESS: err=%v out=%q", err, out)
+	}
+}
+
+// TestDoctorCommandShowsSchemaVersion: the plain doctor output names the
+// database version.
+func TestDoctorCommandShowsSchemaVersion(t *testing.T) {
+	cliEnv(t, &spyRunner{})
+	out, err := execCLI(t, "doctor")
+	if err != nil {
+		t.Fatalf("doctor: %v", err)
+	}
+	if !strings.Contains(out, "database is at version") {
+		t.Errorf("doctor output = %q, want the schema version", out)
 	}
 }

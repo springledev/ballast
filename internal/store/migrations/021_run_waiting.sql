@@ -1,4 +1,5 @@
 -- Migration 021: what a running job is waiting for (spec §14 step 52,
+-- Rolling back: safe to leave in place; an older Ballast ignores the added column(s), which have a default.
 -- §20.1), e.g. "waiting for repository lock on b2 (held by immich)", so
 -- a stalled run says why in `ballast status` and the web UI. NULL when
 -- the run is not waiting.

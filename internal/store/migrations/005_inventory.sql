@@ -1,4 +1,5 @@
 -- Migration 005: configured services and destinations (spec §14 step
+-- Rolling back: not applicable; destinations and services live here. Restore the pre-upgrade ballast.db copy instead.
 -- 11), plus first-class verification records and the run's snapshot
 -- ID.
 --

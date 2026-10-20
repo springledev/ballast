@@ -1,4 +1,5 @@
 -- Migration 014: compose folders to look in per Docker host (spec §18.4,
+-- Rolling back: safe to drop the new table(s); nothing else depends on them.
 -- §14 step 34).
 --
 -- Running stacks are found from container labels and need no entry here.

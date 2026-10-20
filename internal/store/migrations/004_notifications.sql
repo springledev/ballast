@@ -1,4 +1,5 @@
 -- Migration 004: notification settings (spec §11, §14 step 10).
+-- Rolling back: safe to drop the new table(s); nothing else depends on them. (Notification settings and freshness state would be lost.)
 --
 -- Per-service notification configuration: freshness max-age for alerting.
 -- Channel-specific secrets (ntfy_topic, webhook_url) are read from

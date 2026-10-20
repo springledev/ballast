@@ -494,6 +494,7 @@ func init() {
 	triggerCmd.Flags().StringVar(&triggerToken, "token", "", "external trigger token for the service (visible in the process list; prefer --token-file)")
 	triggerCmd.Flags().StringVar(&triggerTokenFile, "token-file", "", "path to a file (mode 0600) holding the trigger token")
 	rootCmd.AddCommand(serveCmd, versionCmd, runDueCmd, triggerCmd)
+	rootCmd.AddCommand(waitIdleCmd)
 	registerServiceCommands(rootCmd)
 	registerDestinationCommands(rootCmd)
 	registerHostCommands(rootCmd)
@@ -530,6 +531,14 @@ func configureStreams(root *cobra.Command) {
 // verbose is the global --verbose flag.
 var verbose bool
 
+// exitError makes the program exit with a given code without printing
+// an "Error:" line, for commands whose answer is their exit code (such
+// as `ballast status --running`) and have already said it on stdout.
+type exitError struct{ code int }
+
+// Error implements error.
+func (e *exitError) Error() string { return fmt.Sprintf("exit status %d", e.code) }
+
 // noArgs is the Args check for a command that takes no positional
 // arguments. Unlike cobra.NoArgs it says what to do instead.
 func noArgs(cmd *cobra.Command, args []string) error {
@@ -549,6 +558,10 @@ func main() {
 	err := rootCmd.ExecuteContext(ctx)
 	stop()
 	if err != nil {
+		var ee *exitError
+		if errors.As(err, &ee) {
+			os.Exit(ee.code)
+		}
 		fmt.Fprintln(os.Stderr, "Error:", err)
 		os.Exit(1)
 	}

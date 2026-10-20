@@ -32,6 +32,7 @@ Ballast is a self-hosted backup tool for Docker-based homelabs. It backs up your
 - [Proxmox](docs/proxmox.md) — Back up guests and the services inside them
 - [Replacing a backup script](docs/replace-a-script.md) — Move over from a shell script without a gap
 - [Upgrading](docs/migrating.md) — Moving from v0.1
+- [Upgrading](docs/upgrading.md) — Replace the program safely and go back if needed
 
 ## Supported Services
 

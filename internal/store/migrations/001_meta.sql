@@ -1,4 +1,5 @@
 -- Migration 001: bootstrap schema.
+-- Rolling back: not applicable; this is the base every later migration builds on.
 --
 -- Kept deliberately minimal: core job/run tables land with the
 -- job state machine step (spec §14 step 2, tracked as PLAN step 4)

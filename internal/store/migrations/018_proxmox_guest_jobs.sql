@@ -1,4 +1,5 @@
 -- Migration 018: Proxmox guest jobs (spec §14 step 46, §19.6).
+-- Rolling back: cannot be undone in place; the services table was rebuilt. Restore the pre-upgrade ballast.db copy instead.
 --
 -- A Proxmox guest backup is a service of kind 'proxmox-guest': it runs
 -- through the same engine as every other service. Such a service has

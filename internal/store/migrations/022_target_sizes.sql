@@ -1,4 +1,5 @@
 -- Migration 022: how much data the last backup of a service sent to a
+-- Rolling back: safe to drop the new table(s); nothing else depends on them.
 -- destination (spec §14 step 56, §20.3), so doctor and the preview can
 -- project how full each destination disk will get.
 CREATE TABLE IF NOT EXISTS target_sizes (

@@ -1,4 +1,5 @@
 -- Migration 017: destination targets (spec §14 step 44, §19.4).
+-- Rolling back: safe to leave in place; services.destination still holds each service's first destination, so an older Ballast keeps working with its first target only. Extra targets are ignored.
 --
 -- A service sends its backups to one or more destinations, each a
 -- "target" with its own choice of parts and optional retention override.

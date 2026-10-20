@@ -1,4 +1,5 @@
 -- Migration 019: repository health (spec §14 step 48, §19.7).
+-- Rolling back: safe to drop the new table(s); nothing else depends on them.
 --
 -- One row per destination that has a health setting or a result. A
 -- destination with no row uses the defaults (weekly, 5% of data read

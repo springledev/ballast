@@ -1,4 +1,5 @@
 -- Migration 008: Docker hosts (spec §14 step 18, §17.2).
+-- Rolling back: cannot be undone in place; every service was attached to the built-in local host. Restore the pre-upgrade ballast.db copy instead.
 --
 -- A Docker host is a daemon Ballast talks to: the local socket, a
 -- remote daemon over SSH, or a remote daemon over TCP+TLS. Every

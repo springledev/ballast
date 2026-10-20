@@ -1,4 +1,5 @@
 -- Migration 009: per-service retention (spec §14 step 19).
+-- Rolling back: safe to leave in place; an older Ballast ignores the added column(s), which have a default.
 --
 -- A service may override its destination's keep_daily/keep_weekly/
 -- keep_monthly policy. retention_json is '' when the service follows

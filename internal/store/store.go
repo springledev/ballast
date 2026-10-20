@@ -152,8 +152,14 @@ func RollbackOnError(tx *sql.Tx, err error) error {
 // SchemaVersion returns the highest applied migration version (-1 when
 // none), for diagnostics and API surface.
 func (s *Store) SchemaVersion() (int64, error) {
+	return SchemaVersionOf(s.db)
+}
+
+// SchemaVersionOf is SchemaVersion for a bare database handle, so code
+// that only holds a *sql.DB (such as the API's doctor check) can ask.
+func SchemaVersionOf(db *sql.DB) (int64, error) {
 	var v sql.NullInt64
-	if err := s.db.QueryRow(`SELECT MAX(version) FROM schema_migrations`).Scan(&v); err != nil {
+	if err := db.QueryRow(`SELECT MAX(version) FROM schema_migrations`).Scan(&v); err != nil {
 		return 0, fmt.Errorf("querying schema version: %w", err)
 	}
 	return v.Int64, nil

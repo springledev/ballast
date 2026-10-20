@@ -1,4 +1,5 @@
 -- Migration 010: service projects, for the full-stack restore wizard
+-- Rolling back: safe to leave in place; an older Ballast ignores the added column(s), which have a default.
 -- (spec §14 step 23).
 --
 -- A project groups several services that make up one Docker Compose

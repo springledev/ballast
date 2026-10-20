@@ -1,4 +1,5 @@
 -- Migration 012: reusable notification channels (spec §18.1, §14 step 30).
+-- Rolling back: safe to drop the new table(s); nothing else depends on them. (Channels would be lost; the notification credential files stay.)
 --
 -- A channel is one delivery target (an ntfy server + topic) that many
 -- services can share. Like every other secret (spec rule 2), the

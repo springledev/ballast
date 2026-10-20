@@ -10,6 +10,7 @@ import (
 
 	"github.com/springledev/ballast/internal/buildinfo"
 	"github.com/springledev/ballast/internal/inventory"
+	"github.com/springledev/ballast/internal/store"
 )
 
 // DoctorStatus is the outcome of one doctor check.
@@ -73,6 +74,14 @@ func (o *Ops) Doctor(ctx context.Context) (DoctorReport, error) {
 	}
 
 	add("ballast", "version", DoctorOK, "Ballast "+o.version()+" is running.")
+
+	if o.DB != nil {
+		if v, err := store.SchemaVersionOf(o.DB); err != nil {
+			add("ballast", "schema", DoctorWarn, "Could not read the database version: "+err.Error())
+		} else {
+			add("ballast", "schema", DoctorOK, fmt.Sprintf("The database is at version %d. Each upgrade moves it forward and it cannot be moved back, so keep a copy of ballast.db before upgrading (docs/upgrading.md).", v))
+		}
+	}
 
 	pre := o.CheckPreflight(ctx)
 	switch {

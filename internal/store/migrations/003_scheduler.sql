@@ -1,4 +1,5 @@
 -- Migration 003: scheduler and external-trigger tables (spec §9, §14
+-- Rolling back: not applicable; dropping these loses every schedule and trigger token. Restore the pre-upgrade ballast.db copy instead.
 -- step 9).
 --
 -- `schedules` holds the per-service cron expression the built-in

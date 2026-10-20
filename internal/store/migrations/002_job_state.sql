@@ -1,4 +1,5 @@
 -- Migration 002: job state machine tables (spec §4.1, §14 step 2).
+-- Rolling back: not applicable; run history lives here, so dropping it loses every past run. Restore the pre-upgrade ballast.db copy instead.
 --
 -- Every backup run is persisted as a `run` belonging to a `job` (one
 -- job per service). Each legal transition is recorded in

@@ -1,4 +1,5 @@
 -- Migration 016: "keep the newest N" retention (spec §19.3, §14 step 43).
+-- Rolling back: safe to leave in place; an older Ballast ignores the added column(s), which have a default.
 --
 -- keep_last = 0 means the rule is off, so existing destinations keep
 -- their daily/weekly/monthly policy unchanged.
