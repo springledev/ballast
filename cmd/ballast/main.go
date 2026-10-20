@@ -182,12 +182,22 @@ func runScheduleLoop(ctx context.Context, a *app) {
 	var wg sync.WaitGroup
 	defer wg.Wait()
 	for {
-		timer := time.NewTimer(time.Until(nextMinuteBoundary(time.Now())))
+		ticks, stop := scheduleTicker()
 		select {
 		case <-ctx.Done():
-			timer.Stop()
+			stop()
 			return
-		case now := <-timer.C:
+		case now := <-ticks:
+			if a.heartbeat != nil {
+				// Pinged from the loop's own tick, so a loop that has
+				// stopped stops the heartbeat. A failed ping is logged
+				// inside Beat and never touches the sweep (spec §21.7).
+				wg.Add(1)
+				go func() {
+					defer wg.Done()
+					a.heartbeat.Beat(ctx, now)
+				}()
+			}
 			wg.Add(1)
 			go func() {
 				defer wg.Done()
@@ -197,6 +207,14 @@ func runScheduleLoop(ctx context.Context, a *app) {
 			}()
 		}
 	}
+}
+
+// scheduleTicker returns a channel that delivers the next wall-clock
+// minute boundary and a function that cancels it. A variable so tests
+// can drive the scheduler loop without waiting for real minutes.
+var scheduleTicker = func() (<-chan time.Time, func()) {
+	timer := time.NewTimer(time.Until(nextMinuteBoundary(time.Now())))
+	return timer.C, func() { timer.Stop() }
 }
 
 // sweepDue is the one job-engine entry point behind both triggers:

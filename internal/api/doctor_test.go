@@ -1,7 +1,11 @@
 package api
 
 import (
+	"encoding/json"
+	"time"
+
 	"context"
+	"github.com/springledev/ballast/internal/heartbeat"
 	"os"
 	"path/filepath"
 	"strings"
@@ -96,5 +100,57 @@ func TestDiskCheckUsesNearestExistingParent(t *testing.T) {
 	}
 	if detail == "" {
 		t.Fatal("empty detail")
+	}
+}
+
+func TestDoctorHeartbeatLine(t *testing.T) {
+	const secretURL = "https://hc.example/ping/SECRET-HB-TOKEN-do-not-leak"
+	recent := time.Now().UTC().Add(-time.Minute).Format(time.RFC3339)
+	old := time.Now().UTC().Add(-2 * time.Hour).Format(time.RFC3339)
+	tests := []struct {
+		name       string
+		configured bool
+		lastOK     string
+		want       DoctorStatus
+		wantText   string
+	}{
+		{"not configured", false, "", DoctorOK, "No heartbeat monitor"},
+		{"never reached", true, "", DoctorWarn, "not been reached"},
+		{"stale", true, old, DoctorWarn, old},
+		{"recent", true, recent, DoctorOK, recent},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			h := newHarness(t)
+			cred := t.TempDir()
+			h.ops.CredentialSearchDirs = []string{cred}
+			if tt.configured {
+				if err := os.WriteFile(filepath.Join(cred, heartbeat.CredentialName), []byte(secretURL), 0o600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if tt.lastOK != "" {
+				if _, err := h.ops.DB.Exec(`INSERT INTO meta (key, value) VALUES (?, ?)`, heartbeat.MetaKeyLastOK, tt.lastOK); err != nil {
+					t.Fatal(err)
+				}
+			}
+			var found *DoctorCheck
+			rep, _ := h.ops.Doctor(context.Background())
+			for i, c := range rep.Checks {
+				if c.Area == "heartbeat" {
+					found = &rep.Checks[i]
+				}
+			}
+			if found == nil {
+				t.Fatal("no heartbeat line in doctor")
+			}
+			if found.Status != tt.want || !strings.Contains(found.Detail, tt.wantText) {
+				t.Errorf("got %s %q, want %s containing %q", found.Status, found.Detail, tt.want, tt.wantText)
+			}
+			b, _ := json.Marshal(rep)
+			if strings.Contains(string(b), "SECRET-HB-TOKEN") {
+				t.Error("doctor output leaks the heartbeat URL")
+			}
+		})
 	}
 }

@@ -7,8 +7,10 @@ import (
 	"os"
 	"path/filepath"
 	"syscall"
+	"time"
 
 	"github.com/springledev/ballast/internal/buildinfo"
+	"github.com/springledev/ballast/internal/heartbeat"
 	"github.com/springledev/ballast/internal/inventory"
 	"github.com/springledev/ballast/internal/store"
 )
@@ -145,6 +147,8 @@ func (o *Ops) Doctor(ctx context.Context) (DoctorReport, error) {
 		add(c.Area, c.Name, c.Status, c.Detail)
 	}
 
+	o.heartbeatDoctor(add)
+
 	o.diskProjectionDoctor(ctx, add)
 
 	if o.WorkRoot != "" {
@@ -239,4 +243,35 @@ func (o *Ops) version() string {
 		return buildinfo.Dev
 	}
 	return o.Version
+}
+
+// heartbeatDoctor reports whether an external heartbeat monitor is
+// configured and when it last answered. It shows a time only, never the
+// monitor address, which is a secret.
+func (o *Ops) heartbeatDoctor(add func(area, name string, st DoctorStatus, detail string)) {
+	configured := false
+	for _, dir := range o.CredentialSearchDirs {
+		if _, err := os.Lstat(filepath.Join(dir, heartbeat.CredentialName)); err == nil {
+			configured = true
+			break
+		}
+	}
+	if !configured {
+		add("heartbeat", "monitor", DoctorOK, "No heartbeat monitor is set up. This is optional: it lets an outside service alert you if Ballast or this machine stops (put its address in the "+heartbeat.CredentialName+" credential file).")
+		return
+	}
+	if o.DB == nil {
+		return
+	}
+	last, ok, err := heartbeat.LastOK(o.DB)
+	switch {
+	case err != nil:
+		add("heartbeat", "monitor", DoctorWarn, err.Error())
+	case !ok:
+		add("heartbeat", "monitor", DoctorWarn, "A heartbeat monitor is set up but has not been reached yet. It is pinged while Ballast is running (`ballast serve`).")
+	case time.Since(last) > 3*heartbeat.DefaultInterval:
+		add("heartbeat", "monitor", DoctorWarn, "A heartbeat monitor is set up but the last successful ping was at "+last.UTC().Format(time.RFC3339)+". Check that Ballast is running and the monitor is reachable.")
+	default:
+		add("heartbeat", "monitor", DoctorOK, "A heartbeat monitor is set up; the last successful ping was at "+last.UTC().Format(time.RFC3339)+".")
+	}
 }

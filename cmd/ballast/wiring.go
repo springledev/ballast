@@ -16,6 +16,7 @@ import (
 	"github.com/springledev/ballast/internal/catalog"
 	"github.com/springledev/ballast/internal/config"
 	"github.com/springledev/ballast/internal/engine"
+	"github.com/springledev/ballast/internal/heartbeat"
 	"github.com/springledev/ballast/internal/inventory"
 	"github.com/springledev/ballast/internal/notify"
 	"github.com/springledev/ballast/internal/pipeline"
@@ -59,6 +60,9 @@ type app struct {
 	secrets  *secret.Set
 	logw     io.Writer
 	health   *repohealth.Checker
+	// heartbeat pings the external monitor from the scheduler loop; nil
+	// in tests that do not need it.
+	heartbeat *heartbeat.Pinger
 }
 
 // Close closes the underlying database.
@@ -124,6 +128,13 @@ func openApp(cfg config.Config, logw io.Writer) (*app, error) {
 	}
 
 	secrets.Add(apiToken)
+	// The heartbeat URL is a secret too: redact it everywhere. A bad
+	// file is only a warning, like a bad notification file.
+	if hb, herr := loadOptionalCredential(credDirs, heartbeat.CredentialName); herr != nil {
+		notifyProblems = append(notifyProblems, fmt.Errorf("the heartbeat address (%s) cannot be used: %w", heartbeat.CredentialName, herr))
+	} else {
+		secrets.Add(hb)
+	}
 	if err := loadRepositoryPasswords(st, credDirs, secrets); err != nil {
 		st.Close()
 		return nil, err
@@ -201,7 +212,16 @@ func openApp(cfg config.Config, logw io.Writer) (*app, error) {
 		return pipeline.HoldRepository(ctx, label, location, nil)
 	}, RetainTagged: pipeline.RetainTagged, Progress: uploads, DB: st.DB(), Catalog: reg, CatalogDirs: cfg.CatalogDirs, Coord: coord, Repo: repoFor, RepoHealth: health, DestinationLocks: scheduler.FileLocker{Dir: filepath.Join(cfg.DataDir, "locks", "destinations")}, Runner: r, DockerHosts: dockerHosts, Proxmox: proxmoxResolver, CredentialsDir: cfg.WritableCredentialsDir, CredentialSearchDirs: credDirs, Redact: secrets, WorkRoot: pl.WorkRoot, SelfBackupFiles: api.SelfBackupSources{ConfigFile: filepath.Join(cfg.ConfigDir, "ballast.yaml"), CatalogDirs: cfg.CatalogDirs}}
 
-	a := &app{health: health, cfg: cfg, store: st, ops: ops, coord: coord, notifier: notifier, apiToken: apiToken, secrets: secrets, logw: logw}
+	pinger := &heartbeat.Pinger{
+		Credential: func() (string, error) {
+			v, err := loadOptionalCredential(credDirs, heartbeat.CredentialName)
+			secrets.Add(v)
+			return v, err
+		},
+		Meta: st,
+	}
+	a := &app{heartbeat: pinger, health: health, cfg: cfg, store: st, ops: ops, coord: coord, notifier: notifier, apiToken: apiToken, secrets: secrets, logw: logw}
+	pinger.Log = a.logf
 	// The notice is useful once, noisy every time: show it only when
 	// asked (--verbose, doctor) or when the directory is not the
 	// default (spec §21.2).
