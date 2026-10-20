@@ -2,6 +2,7 @@ package main
 
 import (
 	"bufio"
+	"encoding/json"
 	"fmt"
 	"os"
 	"strings"
@@ -10,6 +11,7 @@ import (
 	"github.com/springledev/ballast/internal/api"
 	"github.com/springledev/ballast/internal/backend"
 	"github.com/springledev/ballast/internal/inventory"
+	"github.com/springledev/ballast/internal/repohealth"
 	"github.com/spf13/cobra"
 	"golang.org/x/term"
 )
@@ -179,12 +181,86 @@ var destinationListCmd = &cobra.Command{
 				cmd.Println("No destinations configured yet. Run `ballast destination add` to add one.")
 				return nil
 			}
+			health := map[string]repohealth.Status{}
+			if hl, err := a.ops.ListRepoHealth(cmd.Context()); err == nil {
+				for _, h := range hl {
+					health[h.Destination] = h
+				}
+			}
 			for _, d := range list {
-				cmd.Printf("%s\t%s\t%s\tkeep=%dd/%dw/%dm\n", d.Name, d.Type, d.Location, d.KeepDaily, d.KeepWeekly, d.KeepMonthly)
+				cmd.Printf("%s\t%s\t%s\tkeep=%dd/%dw/%dm\t%s\n", d.Name, d.Type, d.Location, d.KeepDaily, d.KeepWeekly, d.KeepMonthly, healthSummaryFor(health, d.Name))
 			}
 			return nil
 		})
 	},
+}
+
+var destHealthJSON bool
+
+// destinationHealthCmd is `ballast destination health [--json]`
+// (spec §21.3): read-only, the same data as GET /api/v1/destinations/health.
+var destinationHealthCmd = &cobra.Command{
+	Use:   "health",
+	Args:  noArgs,
+	Short: "Show each destination's repository health (read-only)",
+	Long: `Show the result of the latest repository check for every destination:
+its light, when it was last checked and when it last passed. Nothing is
+checked by this command; use "ballast destination check <name>" for that.`,
+	RunE: func(cmd *cobra.Command, args []string) error {
+		cfg, err := loadConfig()
+		if err != nil {
+			return err
+		}
+		asJSON := destHealthJSON
+		destHealthJSON = false
+		return withApp(cfg, cmd.ErrOrStderr(), func(a *app) error {
+			list, err := a.ops.ListRepoHealth(cmd.Context())
+			if err != nil {
+				return err
+			}
+			if asJSON {
+				enc := json.NewEncoder(cmd.OutOrStdout())
+				enc.SetIndent("", "  ")
+				return enc.Encode(list)
+			}
+			if len(list) == 0 {
+				cmd.Println("No destinations with a backup repository to check yet.")
+				return nil
+			}
+			for _, st := range list {
+				cmd.Printf("%s\t%s\n", st.Destination, healthSummary(st))
+			}
+			return nil
+		})
+	},
+}
+
+// healthSummary is the one-line plain-English repository health used by
+// `destination list`, `destination health` and `status`.
+func healthSummary(st repohealth.Status) string {
+	const layout = "2006-01-02 15:04"
+	light := st.Light
+	if light == "" {
+		light = repohealth.LightFor(st.State)
+	}
+	if st.LastChecked.IsZero() {
+		return light + " (never checked)"
+	}
+	ok := "never passed"
+	if !st.LastOK.IsZero() {
+		ok = "last OK " + st.LastOK.Local().Format(layout)
+	}
+	return fmt.Sprintf("%s (last checked %s, %s)", light, st.LastChecked.Local().Format(layout), ok)
+}
+
+// healthSummaryFor looks a destination up in a health map; one with no
+// entry has no restic repository to check (a Proton Drive copy).
+func healthSummaryFor(m map[string]repohealth.Status, name string) string {
+	st, ok := m[name]
+	if !ok {
+		return "no repository checks"
+	}
+	return healthSummary(st)
 }
 
 // destinationSignInCmd is `ballast destination sign-in <name>`: the
@@ -396,7 +472,9 @@ func registerDestinationCommands(root *cobra.Command) {
 	destinationCheckCmd.Flags().StringVar(&healthSubset, "read-data", healthKeep, "change the schedule: share of data to read back (default 5%; 1/10 or 500M also work; empty = structure only)")
 	destinationCheckCmd.Flags().BoolVar(&healthOff, "off", false, "turn scheduled checks off for this destination")
 
+	destinationHealthCmd.Flags().BoolVar(&destHealthJSON, "json", false, "print machine-readable JSON")
+
 	destinationCmd := &cobra.Command{Use: "destination", Short: "Manage backup destinations"}
-	destinationCmd.AddCommand(destinationAddCmd, destinationListCmd, destinationTestCmd, destinationInitCmd, destinationSignInCmd, destinationCheckCmd, destinationRemoveCmd)
+	destinationCmd.AddCommand(destinationAddCmd, destinationListCmd, destinationTestCmd, destinationInitCmd, destinationSignInCmd, destinationCheckCmd, destinationHealthCmd, destinationRemoveCmd)
 	root.AddCommand(destinationCmd)
 }

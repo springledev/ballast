@@ -44,6 +44,7 @@ var statusCmd = &cobra.Command{
 				return enc.Encode(st)
 			}
 			printStatusPlain(cmd, st)
+			printStatusDestinations(cmd, a, st, service != "")
 			return nil
 		})
 	},
@@ -82,6 +83,38 @@ func printStatusPlain(cmd *cobra.Command, services []api.ServiceStatus) {
 				cmd.Printf("  - %s: %s — %s\n", v.Method, mark, v.Detail)
 			}
 		}
+	}
+}
+
+// printStatusDestinations lists the repository health of the
+// destinations behind the shown services (all of them when no single
+// service was asked for). Health that cannot be read is skipped: it
+// must never hide the backup status above it.
+func printStatusDestinations(cmd *cobra.Command, a *app, shown []api.ServiceStatus, filtered bool) {
+	list, err := a.ops.ListRepoHealth(cmd.Context())
+	if err != nil || len(list) == 0 {
+		return
+	}
+	want := map[string]bool{}
+	for _, s := range shown {
+		want[s.Destination] = true
+		for _, t := range s.Targets {
+			want[t.Destination] = true
+		}
+	}
+	var lines []string
+	for _, st := range list {
+		if filtered && !want[st.Destination] {
+			continue
+		}
+		lines = append(lines, fmt.Sprintf("  %s: repository %s", st.Destination, healthSummary(st)))
+	}
+	if len(lines) == 0 {
+		return
+	}
+	cmd.Println("Destinations:")
+	for _, l := range lines {
+		cmd.Println(l)
 	}
 }
 
