@@ -14,7 +14,16 @@ const error = ref("");
 const success = ref("");
 const restoring = ref(false);
 
-const form = reactive({ snapshot: "", paths: "", to: "" });
+const form = reactive({ from: "", snapshot: "", paths: "", to: "" });
+
+// Where the chosen service keeps backups: its main destination first.
+// Only offered when there is more than one place to restore from.
+const serviceDestinations = computed(() => {
+  const s = services.value.find((x) => x.name === selectedService.value);
+  if (!s) return [];
+  const names = (s.targets ?? []).map((t) => t.destination);
+  return names.length ? names : s.destination ? [s.destination] : [];
+});
 
 // Newest first, so the default choice is the most recent backup.
 // A long list of services is split by kind so the picker stays usable.
@@ -31,7 +40,8 @@ const sorted = computed(() => [...snapshots.value].sort((a, b) => b.time.localeC
 // --- full-stack restore (a project's compose config + volumes + DB dumps together, spec §14 step 23) ---
 
 const projects = ref<string[]>([]);
-const projectForm = reactive({ project: "", asOf: "", to: "" });
+const projectForm = reactive({ project: "", from: "", asOf: "", to: "" });
+const allDestinations = ref<string[]>([]);
 const projectError = ref("");
 const projectReport = ref<RestoreProjectReport | null>(null);
 const projectRestoring = ref(false);
@@ -48,7 +58,7 @@ async function restoreProject() {
     // The API takes a full RFC3339 timestamp; a plain date input is
     // extended to midnight UTC so "as of this date" reads naturally.
     const asOf = projectForm.asOf ? `${projectForm.asOf}T00:00:00Z` : undefined;
-    projectReport.value = await api.restoreProject(projectForm.project, { as_of: asOf, to: projectForm.to });
+    projectReport.value = await api.restoreProject(projectForm.project, { from: projectForm.from || undefined, as_of: asOf, to: projectForm.to });
   } catch (e) {
     projectError.value = (e as Error).message;
   } finally {
@@ -64,6 +74,11 @@ onMounted(async () => {
     error.value = (e as Error).message;
   }
   try {
+    allDestinations.value = (await api.listDestinations()).map((d) => d.name);
+  } catch {
+    // Best-effort: the stack restore just won't offer a destination choice.
+  }
+  try {
     projects.value = await api.listProjects();
     if (projects.value.length === 1) projectForm.project = projects.value[0];
   } catch {
@@ -71,23 +86,30 @@ onMounted(async () => {
   }
 });
 
-watch(selectedService, async (name) => {
+watch(selectedService, (name) => {
+  form.from = "";
+  success.value = "";
+  if (name) form.to = form.to || `/tmp/ballast-restore/${name}`;
+  loadSnapshots();
+});
+watch(() => form.from, () => loadSnapshots());
+
+async function loadSnapshots() {
+  const name = selectedService.value;
   snapshots.value = [];
   form.snapshot = "";
-  success.value = "";
   if (!name) return;
   loadingSnapshots.value = true;
   error.value = "";
   try {
-    snapshots.value = await api.snapshots(name);
+    snapshots.value = await api.snapshots(name, form.from || undefined);
     form.snapshot = sorted.value[0]?.id ?? "";
-    form.to = form.to || `/tmp/ballast-restore/${name}`;
   } catch (e) {
     error.value = (e as Error).message;
   } finally {
     loadingSnapshots.value = false;
   }
-});
+}
 
 async function restore() {
   error.value = "";
@@ -103,6 +125,7 @@ async function restore() {
       .map((p) => p.trim())
       .filter(Boolean);
     await api.restore(selectedService.value, {
+      from: form.from || undefined,
       snapshot: form.snapshot || undefined,
       paths: paths.length ? paths : undefined,
       to: form.to,
@@ -144,6 +167,15 @@ async function restore() {
           </template>
         </template>
       </select>
+    </div>
+
+    <div v-if="selectedService && serviceDestinations.length > 1" class="field">
+      <label for="restore-from">Restore from which copy?</label>
+      <select id="restore-from" v-model="form.from">
+        <option value="">{{ serviceDestinations[0] }} (main copy)</option>
+        <option v-for="d in serviceDestinations.slice(1)" :key="d" :value="d">{{ d }}</option>
+      </select>
+      <p class="hint">Restoring from the off-site copy is a good way to prove it works.</p>
     </div>
 
     <template v-if="selectedService">
@@ -221,6 +253,14 @@ async function restore() {
           <option value="" disabled>Choose…</option>
           <option v-for="p in projects" :key="p" :value="p">{{ p }}</option>
         </select>
+      </div>
+      <div v-if="allDestinations.length > 1" class="field">
+        <label for="restore-project-from">Restore from which destination?</label>
+        <select id="restore-project-from" v-model="projectForm.from">
+          <option value="">Each service's main destination</option>
+          <option v-for="d in allDestinations" :key="d" :value="d">{{ d }}</option>
+        </select>
+        <p class="hint">A service that doesn't back up to the one you pick is skipped and reported.</p>
       </div>
       <div class="field">
         <label for="restore-project-to">Put the config and dump files in</label>

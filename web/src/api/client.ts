@@ -163,10 +163,11 @@ export const api = {
   startBackup(name: string): Promise<{ started: boolean; previous_run_interrupted: boolean }> {
     return request("POST", `${base}/services/${encodeURIComponent(name)}/backup`);
   },
-  snapshots(name: string): Promise<Snapshot[]> {
-    return request("GET", `${base}/services/${encodeURIComponent(name)}/snapshots`);
+  snapshots(name: string, from?: string): Promise<Snapshot[]> {
+    const q = from ? `?from=${encodeURIComponent(from)}` : "";
+    return request("GET", `${base}/services/${encodeURIComponent(name)}/snapshots${q}`);
   },
-  restore(name: string, req: { snapshot?: string; paths?: string[]; to: string }): Promise<{ restored: boolean }> {
+  restore(name: string, req: { from?: string; snapshot?: string; paths?: string[]; to: string }): Promise<{ restored: boolean }> {
     return request("POST", `${base}/services/${encodeURIComponent(name)}/restore`, req);
   },
 
@@ -174,7 +175,7 @@ export const api = {
   listProjects(): Promise<string[]> {
     return request("GET", `${base}/projects`);
   },
-  restoreProject(project: string, req: { as_of?: string; to: string }): Promise<RestoreProjectReport> {
+  restoreProject(project: string, req: { from?: string; as_of?: string; to: string }): Promise<RestoreProjectReport> {
     return request("POST", `${base}/projects/${encodeURIComponent(project)}/restore`, req);
   },
 

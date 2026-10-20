@@ -666,13 +666,20 @@ func (o *Ops) Wait() { o.runs.Wait() }
 // orders them, filtered to this service's tag so one destination
 // shared by several services never mixes their snapshots.
 func (o *Ops) Snapshots(ctx context.Context, service string) ([]restic.Snapshot, error) {
+	return o.SnapshotsFrom(ctx, service, "")
+}
+
+// SnapshotsFrom is Snapshots read from the named destination, which
+// must be one of the service's configured targets ("" means the main
+// destination).
+func (o *Ops) SnapshotsFrom(ctx context.Context, service, from string) ([]restic.Snapshot, error) {
 	svc, err := inventory.GetService(o.DB, service)
 	if err != nil {
 		return nil, wrapf("service "+service, err)
 	}
-	dest, err := inventory.GetDestination(o.DB, svc.Destination)
+	dest, err := o.restoreSource(svc, from)
 	if err != nil {
-		return nil, wrapf("service "+service, err)
+		return nil, err
 	}
 	repo, err := o.repoFor(dest)
 	if err != nil {
@@ -688,6 +695,7 @@ func (o *Ops) Snapshots(ctx context.Context, service string) ([]restic.Snapshot,
 // RestoreRequest is the input to Restore.
 type RestoreRequest struct {
 	Service  string
+	From     string // destination to restore from; "" means the service's main destination
 	Snapshot string // "" or "latest" means this service's newest snapshot
 	Paths    []string
 	To       string
@@ -714,9 +722,9 @@ func (o *Ops) Restore(ctx context.Context, req RestoreRequest) error {
 	if err != nil {
 		return wrapf("service "+req.Service, err)
 	}
-	dest, err := inventory.GetDestination(o.DB, svc.Destination)
+	dest, err := o.restoreSource(svc, req.From)
 	if err != nil {
-		return wrapf("service "+req.Service, err)
+		return err
 	}
 	repo, err := o.repoFor(dest)
 	if err != nil {
@@ -732,6 +740,33 @@ func (o *Ops) Restore(ctx context.Context, req RestoreRequest) error {
 		return o.redactErr(wrapf("service "+req.Service, err))
 	}
 	return nil
+}
+
+// restoreSource picks the destination a restore or snapshot listing
+// reads from: the service's main destination when from is empty,
+// otherwise from, which must be one of the service's configured
+// targets (so an unrelated repository is never read).
+func (o *Ops) restoreSource(svc inventory.Service, from string) (inventory.Destination, error) {
+	name := svc.Destination
+	if from != "" {
+		found := false
+		var names []string
+		for _, t := range svc.EffectiveTargets() {
+			names = append(names, t.Destination)
+			if t.Destination == from {
+				found = true
+			}
+		}
+		if !found {
+			return inventory.Destination{}, fmt.Errorf("service %s: %w: %q is not one of this service's destinations (%s)", svc.Name, ErrValidation, from, strings.Join(names, ", "))
+		}
+		name = from
+	}
+	dest, err := inventory.GetDestination(o.DB, name)
+	if err != nil {
+		return inventory.Destination{}, wrapf("service "+svc.Name, err)
+	}
+	return dest, nil
 }
 
 // resolveServiceSnapshot resolves want ("", "latest", or an explicit

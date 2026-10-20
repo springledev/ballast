@@ -72,6 +72,10 @@ type RestoreProjectRequest struct {
 	// same instant" rarely exists — this is "as it stood by this
 	// point," not a single shared snapshot.
 	AsOf *time.Time
+	// From restores every service from this destination instead of its
+	// main one. A service that does not use it is reported as failed
+	// (the others still restore).
+	From string
 	// To is the directory config/dump files are restored into, one
 	// subdirectory per service (<To>/<service>/...). Docker volumes are
 	// restored straight into fresh Docker volumes instead (see
@@ -189,7 +193,7 @@ func contains(ss []string, s string) bool {
 func (o *Ops) restoreProjectService(ctx context.Context, svc inventory.Service, kind string, req RestoreProjectRequest) RestoreProjectResult {
 	res := RestoreProjectResult{Service: svc.Name, Kind: kind}
 
-	dest, err := inventory.GetDestination(o.DB, svc.Destination)
+	dest, err := o.restoreSource(svc, req.From)
 	if err != nil {
 		res.Error = o.redact(err.Error())
 		return res

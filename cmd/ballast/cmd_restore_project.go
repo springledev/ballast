@@ -11,6 +11,7 @@ import (
 var (
 	restoreProjectTo   string
 	restoreProjectAsOf string
+	restoreProjectFrom string
 )
 
 // restoreProjectCmd is `ballast restore-project <project> --to <dir>
@@ -37,7 +38,7 @@ var restoreProjectCmd = &cobra.Command{
 		}
 		return withApp(cfg, cmd.ErrOrStderr(), func(a *app) error {
 			rep, err := a.ops.RestoreProject(cmd.Context(), api.RestoreProjectRequest{
-				Project: args[0], AsOf: asOf, To: restoreProjectTo,
+				Project: args[0], AsOf: asOf, From: restoreProjectFrom, To: restoreProjectTo,
 			})
 			printRestoreProjectReport(cmd, rep)
 			return err
@@ -61,6 +62,7 @@ func printRestoreProjectReport(cmd *cobra.Command, rep api.RestoreProjectReport)
 }
 
 func init() {
+	restoreProjectCmd.Flags().StringVar(&restoreProjectFrom, "from", "", "destination to restore from (default: each service's main destination)")
 	restoreProjectCmd.Flags().StringVar(&restoreProjectTo, "to", "", "directory to restore config/dump files into, one subdirectory per service (required)")
 	restoreProjectCmd.Flags().StringVar(&restoreProjectAsOf, "as-of", "", "restore each service's newest backup at or before this time (RFC3339; default: each service's latest)")
 	_ = restoreProjectCmd.MarkFlagRequired("to")

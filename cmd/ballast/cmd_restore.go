@@ -9,6 +9,7 @@ var (
 	restoreSnapshot string
 	restoreFiles    []string
 	restoreTo       string
+	restoreFrom     string
 )
 
 // restoreCmd is `ballast restore <service> [--snapshot id] [--file
@@ -26,6 +27,7 @@ var restoreCmd = &cobra.Command{
 		return withApp(cfg, cmd.ErrOrStderr(), func(a *app) error {
 			err := a.ops.Restore(cmd.Context(), api.RestoreRequest{
 				Service:  args[0],
+				From:     restoreFrom,
 				Snapshot: restoreSnapshot,
 				Paths:    restoreFiles,
 				To:       restoreTo,
@@ -40,6 +42,7 @@ var restoreCmd = &cobra.Command{
 }
 
 func init() {
+	restoreCmd.Flags().StringVar(&restoreFrom, "from", "", "destination to restore from (default: the service's main destination)")
 	restoreCmd.Flags().StringVar(&restoreSnapshot, "snapshot", "", "snapshot ID to restore (default: this service's latest)")
 	restoreCmd.Flags().StringArrayVar(&restoreFiles, "file", nil, "restrict the restore to this path (repeatable)")
 	restoreCmd.Flags().StringVar(&restoreTo, "to", "", "directory to restore into (required; must not already hold data)")

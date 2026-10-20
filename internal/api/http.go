@@ -358,7 +358,7 @@ func (h *handler) startBackup(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *handler) snapshots(w http.ResponseWriter, r *http.Request) {
-	snaps, err := h.ops.Snapshots(r.Context(), pathName(r))
+	snaps, err := h.ops.SnapshotsFrom(r.Context(), pathName(r), r.URL.Query().Get("from"))
 	if err != nil {
 		h.writeErr(w, err, http.StatusInternalServerError)
 		return
@@ -367,6 +367,7 @@ func (h *handler) snapshots(w http.ResponseWriter, r *http.Request) {
 }
 
 type restoreRequestBody struct {
+	From     string   `json:"from"`
 	Snapshot string   `json:"snapshot"`
 	Paths    []string `json:"paths"`
 	To       string   `json:"to"`
@@ -379,7 +380,7 @@ func (h *handler) restore(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	err := h.ops.Restore(r.Context(), RestoreRequest{
-		Service: pathName(r), Snapshot: body.Snapshot, Paths: body.Paths, To: body.To,
+		Service: pathName(r), From: body.From, Snapshot: body.Snapshot, Paths: body.Paths, To: body.To,
 	})
 	if err != nil {
 		h.writeErr(w, err, http.StatusInternalServerError)
@@ -398,6 +399,7 @@ func (h *handler) listProjects(w http.ResponseWriter, r *http.Request) {
 }
 
 type restoreProjectRequestBody struct {
+	From string `json:"from"`
 	AsOf string `json:"as_of"`
 	To   string `json:"to"`
 }
@@ -423,7 +425,7 @@ func (h *handler) restoreProject(w http.ResponseWriter, r *http.Request) {
 		asOf = &t
 	}
 	rep, err := h.ops.RestoreProject(r.Context(), RestoreProjectRequest{
-		Project: r.PathValue("project"), AsOf: asOf, To: body.To,
+		Project: r.PathValue("project"), AsOf: asOf, From: body.From, To: body.To,
 	})
 	if err != nil && rep.Results == nil {
 		h.writeErr(w, err, http.StatusInternalServerError)
