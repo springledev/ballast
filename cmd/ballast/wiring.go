@@ -197,7 +197,7 @@ func openApp(cfg config.Config, logw io.Writer) (*app, error) {
 	dockerHosts.CredDirs = credDirs
 	proxmoxResolver := proxmox.Resolver{CredDirs: credDirs, Redact: secrets}
 	pl.Proxmox = proxmoxResolver
-	ops = &api.Ops{SelfNotifier: adapter, HoldRepository: func(ctx context.Context, label, location string) (func(), error) {
+	ops = &api.Ops{Version: buildVersion(), SelfNotifier: adapter, HoldRepository: func(ctx context.Context, label, location string) (func(), error) {
 		return pipeline.HoldRepository(ctx, label, location, nil)
 	}, RetainTagged: pipeline.RetainTagged, Progress: uploads, DB: st.DB(), Catalog: reg, CatalogDirs: cfg.CatalogDirs, Coord: coord, Repo: repoFor, RepoHealth: health, DestinationLocks: scheduler.FileLocker{Dir: filepath.Join(cfg.DataDir, "locks", "destinations")}, Runner: r, DockerHosts: dockerHosts, Proxmox: proxmoxResolver, CredentialsDir: cfg.WritableCredentialsDir, CredentialSearchDirs: credDirs, Redact: secrets, WorkRoot: pl.WorkRoot, SelfBackupFiles: api.SelfBackupSources{ConfigFile: filepath.Join(cfg.ConfigDir, "ballast.yaml"), CatalogDirs: cfg.CatalogDirs}}
 

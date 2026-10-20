@@ -235,6 +235,12 @@ h3 {
   padding: 1.25rem var(--gutter) calc(var(--tab-h) + 2rem + env(safe-area-inset-bottom));
 }
 
+.app-foot {
+  margin-top: 2rem;
+  font-size: 0.8rem;
+  opacity: 0.7;
+}
+
 .page {
   width: 100%;
   max-width: 1680px;

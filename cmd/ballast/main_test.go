@@ -12,6 +12,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"syscall"
 	"testing"
@@ -32,8 +33,8 @@ func TestVersionCmdPrintsVersion(t *testing.T) {
 	if err := rootCmd.Execute(); err != nil {
 		t.Fatalf("version command failed: %v", err)
 	}
-	if got := strings.TrimSpace(out.String()); got != version {
-		t.Errorf("version output = %q, want %q", got, version)
+	if got := strings.TrimSpace(out.String()); got != buildVersion() {
+		t.Errorf("version output = %q, want %q", got, buildVersion())
 	}
 }
 
@@ -747,5 +748,34 @@ func TestNextMinuteBoundary(t *testing.T) {
 				t.Errorf("nextMinuteBoundary(%v) = %v, want %v", tt.now, got, tt.want)
 			}
 		})
+	}
+}
+
+// TestUntaggedBuildReportsCommit builds the real binary the way a
+// plain `go build` does (no -ldflags, no tag) and checks it reports
+// the git commit, never "dev" (spec §21.5). Skipped outside a git
+// checkout, where the toolchain has no commit to record.
+func TestUntaggedBuildReportsCommit(t *testing.T) {
+	if testing.Short() {
+		t.Skip("builds the binary; skipped in -short")
+	}
+	if err := exec.Command("git", "rev-parse", "--verify", "HEAD").Run(); err != nil {
+		t.Skip("not a git checkout with a commit")
+	}
+	bin := filepath.Join(t.TempDir(), "ballast")
+	build := exec.Command("go", "build", "-o", bin, ".")
+	if out, err := build.CombinedOutput(); err != nil {
+		t.Fatalf("go build: %v\n%s", err, out)
+	}
+	out, err := exec.Command(bin, "version").Output()
+	if err != nil {
+		t.Fatalf("ballast version: %v", err)
+	}
+	got := strings.TrimSpace(string(out))
+	if got == "dev" || got == "" {
+		t.Fatalf("untagged build reports %q, want the commit", got)
+	}
+	if !regexp.MustCompile(`^[0-9a-f]{7,}(-dirty)?$|^v\S+$`).MatchString(got) {
+		t.Errorf("version = %q, want a short commit (optionally -dirty) or a tag", got)
 	}
 }

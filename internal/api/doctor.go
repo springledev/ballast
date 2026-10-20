@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"syscall"
 
+	"github.com/springledev/ballast/internal/buildinfo"
 	"github.com/springledev/ballast/internal/inventory"
 )
 
@@ -70,6 +71,8 @@ func (o *Ops) Doctor(ctx context.Context) (DoctorReport, error) {
 	add := func(area, name string, st DoctorStatus, detail string) {
 		rep.Checks = append(rep.Checks, DoctorCheck{Area: area, Name: name, Status: st, Detail: o.redact(detail)})
 	}
+
+	add("ballast", "version", DoctorOK, "Ballast "+o.version()+" is running.")
 
 	pre := o.CheckPreflight(ctx)
 	switch {
@@ -219,4 +222,12 @@ func projStatus(p DiskProjection) DoctorStatus {
 		return DoctorWarn
 	}
 	return DoctorOK
+}
+
+// version is the reported build version, "dev" when none was set.
+func (o *Ops) version() string {
+	if o.Version == "" {
+		return buildinfo.Dev
+	}
+	return o.Version
 }

@@ -51,6 +51,10 @@ type Ops struct {
 	// Doctor warns when it is open to the network.
 	ListenAddr string
 
+	// Version is the build version shown by doctor and GET /api/v1/version
+	// (spec §21.5). Empty reads as "dev".
+	Version string
+
 	// InTerminal is true when `ballast serve` was started by hand in a
 	// terminal rather than as a service; Doctor and Health then warn that
 	// schedules stop when the terminal closes.

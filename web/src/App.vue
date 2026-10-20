@@ -9,6 +9,7 @@ import { markSignedIn, markSignedOut, session } from "@/api/auth";
 import { nextTheme, theme, themeLabel } from "@/lib/prefs";
 
 const insecure = ref(false);
+const buildVersion = ref("");
 const moreOpen = ref(false);
 const route = useRoute();
 
@@ -46,6 +47,7 @@ async function checkSession() {
   try {
     insecure.value = (await api.session()).insecure_exposure;
     markSignedIn();
+    loadVersion();
   } catch {
     markSignedOut();
   }
@@ -56,6 +58,15 @@ async function signOut() {
     await api.logout();
   } finally {
     markSignedOut();
+  }
+}
+
+// The footer shows the build (spec §21.5); a failed read just hides it.
+async function loadVersion() {
+  try {
+    buildVersion.value = (await api.version()).version;
+  } catch {
+    buildVersion.value = "";
   }
 }
 
@@ -109,6 +120,7 @@ onMounted(checkSession);
           Put Ballast behind a reverse proxy that provides HTTPS (or use a VPN/tailnet).
         </p>
         <router-view />
+        <footer v-if="buildVersion" class="app-foot">Ballast {{ buildVersion }}</footer>
       </div>
     </main>
 

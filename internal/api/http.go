@@ -55,6 +55,7 @@ func NewAuthedHandler(ops *Ops, auth *Auth) http.Handler {
 	protected.HandleFunc("GET /api/v1/detect", h.detect)
 	protected.HandleFunc("GET /api/v1/preflight", h.preflight)
 	protected.HandleFunc("GET /api/v1/doctor", h.doctor)
+	protected.HandleFunc("GET /api/v1/version", h.version)
 	protected.HandleFunc("POST /api/v1/verify", h.verifyAll)
 	protected.HandleFunc("POST /api/v1/self-backup", h.selfBackup)
 	protected.HandleFunc("GET /api/v1/ballast-health", h.ballastHealth)
@@ -200,6 +201,11 @@ func (h *handler) status(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, st)
+}
+
+// version reports the build version (spec §21.5) for the web UI footer.
+func (h *handler) version(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, http.StatusOK, map[string]string{"version": h.ops.version()})
 }
 
 func (h *handler) catalog(w http.ResponseWriter, r *http.Request) {

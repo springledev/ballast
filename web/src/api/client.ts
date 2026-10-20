@@ -108,6 +108,9 @@ export const api = {
   session(): Promise<{ ok: boolean; insecure_exposure: boolean }> {
     return request("GET", `${base}/auth/session`);
   },
+  version(): Promise<{ version: string }> {
+    return request("GET", `${base}/version`);
+  },
   rotateKey(): Promise<{ token: string }> {
     return request("POST", `${base}/auth/rotate`);
   },

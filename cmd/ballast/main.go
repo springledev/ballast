@@ -20,12 +20,14 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"runtime/debug"
 	"strings"
 	"sync"
 	"syscall"
 	"time"
 
 	"github.com/springledev/ballast/internal/api"
+	"github.com/springledev/ballast/internal/buildinfo"
 	"github.com/springledev/ballast/internal/config"
 	"github.com/springledev/ballast/internal/notify"
 	"github.com/springledev/ballast/internal/scheduler"
@@ -39,6 +41,13 @@ import (
 // version is the build version, overridable at build time with
 // -ldflags "-X main.version=...". Defaults to a plain dev marker.
 var version = "dev"
+
+// buildVersion is the version to report: the stamped one, or the git
+// commit the Go toolchain recorded for an unstamped source build.
+func buildVersion() string {
+	bi, _ := debug.ReadBuildInfo()
+	return buildinfo.Resolve(version, bi)
+}
 
 var rootCmd = &cobra.Command{
 	Use:   "ballast",
@@ -55,7 +64,7 @@ var versionCmd = &cobra.Command{
 	Args:  noArgs,
 	Short: "Print the ballast version",
 	RunE: func(cmd *cobra.Command, args []string) error {
-		cmd.Println(version)
+		cmd.Println(buildVersion())
 		return nil
 	},
 }

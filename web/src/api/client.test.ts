@@ -194,4 +194,12 @@ describe("api client", () => {
     await api.detect();
     expect(fetchMock.mock.calls[0][0]).toBe("/api/v1/detect");
   });
+
+  it("reads the build version for the footer", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse(200, { version: "v0.5-35dad2f" }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(api.version()).resolves.toEqual({ version: "v0.5-35dad2f" });
+    expect(fetchMock.mock.calls[0][0]).toMatch(/\/api\/v1\/version$/);
+  });
 });

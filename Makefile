@@ -5,7 +5,9 @@
 
 BINARY  := ballast
 GO      ?= go
-VERSION ?= $(shell $(GO) run ./cmd/ballast version 2>/dev/null || echo dev)
+# Spec §21.5: the tag when one exists, else the short commit (-dirty when
+# the tree has changes). Tag releases with vX.Y.Z; tagging is the maintainer's step.
+VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
 
 LDFLAGS := -s -w -X main.version=$(if $(VERSION),$(VERSION),dev)
 
