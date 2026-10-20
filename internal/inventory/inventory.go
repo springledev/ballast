@@ -85,6 +85,11 @@ type Destination struct {
 	KeepMonthly int `json:"keep_monthly"`
 }
 
+// SelfBackupService is the reserved name under which Ballast's own
+// settings backup is scheduled, run, shown and alerted on like a
+// service. No configured service may use it.
+const SelfBackupService = "ballast-self"
+
 // Retention returns d's restic retention policy.
 func (d Destination) Retention() restic.RetentionPolicy {
 	return Retention{KeepLast: d.KeepLast, KeepDaily: d.KeepDaily, KeepWeekly: d.KeepWeekly, KeepMonthly: d.KeepMonthly}.Policy()
@@ -629,6 +634,9 @@ func (s Service) EffectiveRetention(d Destination) Retention {
 func PutService(db *sql.DB, s Service) error {
 	if err := ValidateName(s.Name); err != nil {
 		return fmt.Errorf("service: %w", err)
+	}
+	if s.Name == SelfBackupService {
+		return fmt.Errorf("service %s: that name is reserved for Ballast's own settings backup; choose another name", s.Name)
 	}
 	guestJSON := ""
 	if s.IsGuestJob() {

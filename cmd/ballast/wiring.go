@@ -15,6 +15,7 @@ import (
 	"github.com/springledev/ballast/internal/api"
 	"github.com/springledev/ballast/internal/catalog"
 	"github.com/springledev/ballast/internal/config"
+	"github.com/springledev/ballast/internal/engine"
 	"github.com/springledev/ballast/internal/inventory"
 	"github.com/springledev/ballast/internal/notify"
 	"github.com/springledev/ballast/internal/pipeline"
@@ -156,10 +157,18 @@ func openApp(cfg config.Config, logw io.Writer) (*app, error) {
 		realRunner = runner
 	}
 
+	// Ballast's own settings backup is scheduled and run like a service
+	// under a reserved name; ops is filled in below, before any run starts.
+	var ops *api.Ops
 	coord := &scheduler.Coordinator{
-		DB:          st.DB(),
-		Locks:       scheduler.FileLocker{Dir: filepath.Join(cfg.DataDir, "locks")},
-		Runner:      realRunner,
+		DB:    st.DB(),
+		Locks: scheduler.FileLocker{Dir: filepath.Join(cfg.DataDir, "locks")},
+		Runner: scheduler.RunnerFunc(func(ctx context.Context, service string) (engine.State, error) {
+			if service == api.SelfBackupService {
+				return ops.RunSelfBackup(ctx)
+			}
+			return realRunner.Run(ctx, service)
+		}),
 		Log:         logw,
 		MaxParallel: cfg.MaxParallelJobs,
 		Notifier:    adapter,
@@ -188,7 +197,9 @@ func openApp(cfg config.Config, logw io.Writer) (*app, error) {
 	dockerHosts.CredDirs = credDirs
 	proxmoxResolver := proxmox.Resolver{CredDirs: credDirs, Redact: secrets}
 	pl.Proxmox = proxmoxResolver
-	ops := &api.Ops{Progress: uploads, DB: st.DB(), Catalog: reg, CatalogDirs: cfg.CatalogDirs, Coord: coord, Repo: repoFor, RepoHealth: health, DestinationLocks: scheduler.FileLocker{Dir: filepath.Join(cfg.DataDir, "locks", "destinations")}, Runner: r, DockerHosts: dockerHosts, Proxmox: proxmoxResolver, CredentialsDir: cfg.WritableCredentialsDir, CredentialSearchDirs: credDirs, Redact: secrets, WorkRoot: pl.WorkRoot, SelfBackupFiles: api.SelfBackupSources{ConfigFile: filepath.Join(cfg.ConfigDir, "ballast.yaml"), CatalogDirs: cfg.CatalogDirs}}
+	ops = &api.Ops{SelfNotifier: adapter, HoldRepository: func(ctx context.Context, label, location string) (func(), error) {
+		return pipeline.HoldRepository(ctx, label, location, nil)
+	}, RetainTagged: pipeline.RetainTagged, Progress: uploads, DB: st.DB(), Catalog: reg, CatalogDirs: cfg.CatalogDirs, Coord: coord, Repo: repoFor, RepoHealth: health, DestinationLocks: scheduler.FileLocker{Dir: filepath.Join(cfg.DataDir, "locks", "destinations")}, Runner: r, DockerHosts: dockerHosts, Proxmox: proxmoxResolver, CredentialsDir: cfg.WritableCredentialsDir, CredentialSearchDirs: credDirs, Redact: secrets, WorkRoot: pl.WorkRoot, SelfBackupFiles: api.SelfBackupSources{ConfigFile: filepath.Join(cfg.ConfigDir, "ballast.yaml"), CatalogDirs: cfg.CatalogDirs}}
 
 	a := &app{health: health, cfg: cfg, store: st, ops: ops, coord: coord, notifier: notifier, apiToken: apiToken, secrets: secrets, logw: logw}
 	// The notice is useful once, noisy every time: show it only when

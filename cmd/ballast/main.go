@@ -199,6 +199,9 @@ func runScheduleLoop(ctx context.Context, a *app) {
 // results (spec §18.3). The freshness sweep never hides the sweep's
 // own error.
 func sweepDue(ctx context.Context, a *app, now time.Time) error {
+	if serr := a.ops.EnsureSelfBackupSchedule(ctx, now); serr != nil {
+		a.logf("self-backup schedule: %v", serr)
+	}
 	err := a.coord.RunDue(ctx, now)
 	maybeSweepFreshness(ctx, a)
 	maybeSendDigest(ctx, a, now)

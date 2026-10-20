@@ -15,6 +15,7 @@ import (
 	"fmt"
 	"github.com/springledev/ballast/internal/progress"
 	"github.com/springledev/keel/dockerhost"
+	"io"
 	"os"
 	"path/filepath"
 	"sort"
@@ -135,6 +136,22 @@ type Ops struct {
 	// (config file and user catalog directories; the status DB is
 	// always included). Zero value backs up the DB only.
 	SelfBackupFiles SelfBackupSources
+
+	// SelfNotifier receives the outcome of the scheduled self-backup
+	// (RunSelfBackup) like any service's run. Nil means no
+	// notifications for it.
+	SelfNotifier engine.Notifier
+
+	// HoldRepository and RetainTagged, when set, make self-backup share
+	// the pipeline's per-repository gate, so its prune never runs under
+	// another service's upload. Wiring passes the pipeline's own; nil
+	// means no gate (tests).
+	HoldRepository RepoHolder
+	RetainTagged   TagRetainer
+
+	// Log receives Ops' own one-line notes (retention results). Nil
+	// means os.Stderr.
+	Log io.Writer
 
 	// Redact holds secret strings that must never reach a returned
 	// error's text (spec rule 2), the last line of defence before an
@@ -370,7 +387,11 @@ type ScheduleStatus struct {
 
 // ServiceStatus is one configured service's full status.
 type ServiceStatus struct {
-	Service      string               `json:"service"`
+	Service string `json:"service"`
+	// Self is true for Ballast's own settings backup, which has a light
+	// like a service but is not one: it cannot be restored from the
+	// service picker or edited as a service.
+	Self         bool                 `json:"self,omitempty"`
 	CatalogEntry string               `json:"catalog_entry"`
 	Destination  string               `json:"destination"`
 	Schedule     *ScheduleStatus      `json:"schedule,omitempty"`
@@ -395,7 +416,13 @@ type ServiceStatus struct {
 // `ballast status --verify`").
 func (o *Ops) Status(ctx context.Context, service string, withVerify bool) ([]ServiceStatus, error) {
 	var services []inventory.Service
-	if service != "" {
+	if service == SelfBackupService {
+		s, err := o.selfService()
+		if err != nil {
+			return nil, err
+		}
+		services = []inventory.Service{s}
+	} else if service != "" {
 		s, err := inventory.GetService(o.DB, service)
 		if err != nil {
 			return nil, wrapf("service "+service, err)
@@ -418,6 +445,23 @@ func (o *Ops) Status(ctx context.Context, service string, withVerify bool) ([]Se
 		scheduleByService[s.Service] = s
 	}
 
+	if service == "" {
+		// Ballast's own settings backup gets a light of its own once it
+		// is scheduled or has run.
+		_, scheduled := scheduleByService[SelfBackupService]
+		last, err := engine.LastStartedRun(o.DB, SelfBackupService)
+		if err != nil {
+			return nil, err
+		}
+		if scheduled || last.RunID != 0 {
+			s, err := o.selfService()
+			if err != nil {
+				return nil, err
+			}
+			services = append(services, s)
+		}
+	}
+
 	fresh := notify.NewFreshnessChecker(o.DB)
 	out := make([]ServiceStatus, 0, len(services))
 	for _, s := range services {
@@ -425,6 +469,7 @@ func (o *Ops) Status(ctx context.Context, service string, withVerify bool) ([]Se
 		if err != nil {
 			return nil, err
 		}
+		st.Self = s.Name == SelfBackupService
 		out = append(out, st)
 	}
 	return out, nil

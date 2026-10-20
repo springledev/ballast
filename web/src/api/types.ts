@@ -280,6 +280,8 @@ export interface AlertDecision {
 
 export interface ServiceStatus {
   service: string;
+  /** True for Ballast's own settings backup: it has a light but is not a service you can restore from. */
+  self?: boolean;
   catalog_entry: string;
   destination: string;
   schedule?: ScheduleStatus;

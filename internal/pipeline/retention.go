@@ -174,29 +174,52 @@ const retentionGroupBy = "tags"
 // the run's outcome: a failure is logged, and the next verified
 // backup tries again.
 func (p *Pipeline) applyRetention(ctx context.Context, service, dest string, repo *restic.Repository, policy inventory.Retention) {
-	release, ok := p.holdExclusive(ctx, service, dest, repo.Location)
+	retainTagged(ctx, p.logf, p.redact, service, dest, repo, serviceTag(service), policy)
+}
+
+// RetainTagged is applyRetention for a series that is not a service:
+// it forgets and prunes only the snapshots of repo carrying tag, under
+// the same repository gate, and never returns an error (a failure is
+// logged through logf, because the backup it follows is already
+// verified). label names the series in log lines. Self-backup uses it
+// with its own tag.
+func RetainTagged(ctx context.Context, logf func(format string, args ...any), redact func(string) string, label, dest string, repo *restic.Repository, tag string, policy inventory.Retention) {
+	retainTagged(ctx, logf, redact, label, dest, repo, tag, policy)
+}
+
+// HoldRepository takes the shared side of the gate of the repository at
+// location, so a prune running in this process cannot start under (or
+// be started under) an upload or read-back made outside the pipeline.
+// label names the caller in the "waiting for" notes passed to waiting
+// (may be nil). Call the returned func to release.
+func HoldRepository(ctx context.Context, label, location string, waiting func(holder string)) (func(), error) {
+	return repoGate(location).holdShared(ctx, label, waiting)
+}
+
+func retainTagged(ctx context.Context, logf func(string, ...any), redact func(string) string, label, dest string, repo *restic.Repository, tag string, policy inventory.Retention) {
+	release, ok := holdExclusive(ctx, logf, label, dest, repo.Location)
 	if !ok {
 		return
 	}
 	defer release()
 
 	res, err := repo.Forget(ctx, policy.Policy(), restic.ForgetOptions{
-		Tags:    []string{serviceTag(service)},
+		Tags:    []string{tag},
 		GroupBy: retentionGroupBy,
 	})
 	if err != nil {
-		p.logf("%s: retention cleanup (forget) failed, the backup itself succeeded: %s", service, p.redact(err.Error()))
+		logf("%s: retention cleanup (forget) failed, the backup itself succeeded: %s", label, redact(err.Error()))
 		return
 	}
 	if len(res.Removed) == 0 {
 		return
 	}
 	if err := repo.Prune(ctx); err != nil {
-		p.logf("%s: removed %d old backup(s) but reclaiming their space (prune) failed, the backup itself succeeded: %s", service, len(res.Removed), p.redact(err.Error()))
+		logf("%s: removed %d old backup(s) but reclaiming their space (prune) failed, the backup itself succeeded: %s", label, len(res.Removed), redact(err.Error()))
 		return
 	}
-	p.logf("%s: retention kept %d backup(s) and removed %d older one(s) (keep last %d, %d daily, %d weekly, %d monthly)",
-		service, len(res.Kept), len(res.Removed), policy.KeepLast, policy.KeepDaily, policy.KeepWeekly, policy.KeepMonthly)
+	logf("%s: retention kept %d backup(s) and removed %d older one(s) (keep last %d, %d daily, %d weekly, %d monthly)",
+		label, len(res.Kept), len(res.Removed), policy.KeepLast, policy.KeepDaily, policy.KeepWeekly, policy.KeepMonthly)
 }
 
 // holdExclusive waits, up to retentionWaitLimit, for the repository
@@ -204,7 +227,7 @@ func (p *Pipeline) applyRetention(ctx context.Context, service, dest string, rep
 // never queues ahead of later uploads or read-backs (see repoGates):
 // if the repository stays busy, retention is skipped, said so in the
 // log, and tried again after the service's next verified backup.
-func (p *Pipeline) holdExclusive(ctx context.Context, service, dest, location string) (func(), bool) {
+func holdExclusive(ctx context.Context, logf func(string, ...any), service, dest, location string) (func(), bool) {
 	g := repoGate(location)
 	limit := time.NewTimer(retentionWaitLimit)
 	defer limit.Stop()
@@ -215,13 +238,13 @@ func (p *Pipeline) holdExclusive(ctx context.Context, service, dest, location st
 			return release, true
 		}
 		if holder != last {
-			p.logf("%s: %s before removing old backups", service, lockWaitNote(dest, holder))
+			logf("%s: %s before removing old backups", service, lockWaitNote(dest, holder))
 			last = holder
 		}
 		select {
 		case <-wake:
 		case <-limit.C:
-			p.logf("%s: skipped removing old backups this time because %s is still busy (in use by %s); this is tried again after the next verified backup", service, dest, holder)
+			logf("%s: skipped removing old backups this time because %s is still busy (in use by %s); this is tried again after the next verified backup", service, dest, holder)
 			return nil, false
 		case <-ctx.Done():
 			return nil, false

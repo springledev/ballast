@@ -13,6 +13,8 @@ ballast self-backup <destination>
 
 `self-backup` sends Ballast's own status database, config and your own catalog files to a destination and checks that they can be read back.
 
+Once you have a destination, Ballast also does this by itself every day at 04:30, to every destination, and shows it on the dashboard as `ballast-self` with its own light and alerts. Older copies are removed by the destination's retention policy, and only after the new one has been read back. To turn it off, disable its schedule; to run it right now, use `ballast backup ballast-self`.
+
 ## What changes
 
 | Then (v0.1) | Now |
