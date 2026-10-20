@@ -129,6 +129,10 @@ func (o *Ops) Doctor(ctx context.Context) (DoctorReport, error) {
 		add("runtime", "terminal", DoctorWarn, TerminalNotice)
 	}
 
+	for _, c := range o.scriptDoctorChecks() {
+		add(c.Area, c.Name, c.Status, c.Detail)
+	}
+
 	o.diskProjectionDoctor(ctx, add)
 
 	if o.WorkRoot != "" {

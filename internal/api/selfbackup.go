@@ -99,6 +99,9 @@ func (o *Ops) stageSelf(ctx context.Context) (*selfStaging, error) {
 			return fail(fmt.Errorf("self-backup: copying catalog %s: %w", dir, err))
 		}
 	}
+	if err := o.stageScripts(stage); err != nil {
+		return fail(err)
+	}
 	err := filepath.WalkDir(stage, func(p string, d fs.DirEntry, werr error) error {
 		if werr == nil && !d.IsDir() {
 			rel, _ := filepath.Rel(stage, p)

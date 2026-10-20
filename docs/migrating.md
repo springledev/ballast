@@ -37,3 +37,9 @@ Once you have a destination, Ballast also does this by itself every day at 04:30
 ## If something looks wrong
 
 Run `ballast doctor` first. Your old snapshots stay in their restic repositories, so you can always restore them with `ballast restore`, even if you roll back to the old binary. Copy back the data folder from before the upgrade if you do roll back.
+
+## Scripts in custom entries
+
+If a custom catalog entry runs a script (an `exec` backup or an `exec-script` check), `self-backup` also saves that script under `scripts/`, keeping its full path, and lists it. `ballast doctor` warns when such a script is missing or cannot be saved.
+
+Do not put passwords or keys inside those scripts. Anything in your credentials folder is never backed up, and a script that lives there or links into it is left out. Have the script read secrets from a root-only file instead.
