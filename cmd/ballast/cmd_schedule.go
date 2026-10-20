@@ -64,6 +64,7 @@ func setScheduleEnabled(cmd *cobra.Command, service string, enabled bool) error 
 
 var scheduleListCmd = &cobra.Command{
 	Use:   "list",
+	Args:  noArgs,
 	Short: "List configured schedules",
 	RunE: func(cmd *cobra.Command, args []string) error {
 		cfg, err := loadConfig()

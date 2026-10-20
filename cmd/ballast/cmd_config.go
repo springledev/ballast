@@ -22,7 +22,7 @@ the listen address, the folders Ballast uses, and every password, key and
 
 It only looks; it never starts a backup and never prints a secret.
 It exits with an error if anything needs fixing.`,
-	Args: cobra.NoArgs,
+	Args: noArgs,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		cfg, err := loadConfig()
 		if err != nil {

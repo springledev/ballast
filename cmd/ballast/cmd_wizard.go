@@ -27,6 +27,7 @@ import (
 // wizard is not allowed any privileged path either).
 var wizardCmd = &cobra.Command{
 	Use:   "wizard",
+	Args:  noArgs,
 	Short: "Set up your first backup, step by step, and prove it can be restored",
 	Long: `The wizard walks you through everything needed for your first backup:
 what to back up, where to keep the backups, how to be told when something

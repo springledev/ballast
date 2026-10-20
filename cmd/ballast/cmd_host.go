@@ -111,6 +111,7 @@ that is offline right now.`,
 
 var hostListCmd = &cobra.Command{
 	Use:   "list",
+	Args:  noArgs,
 	Short: "List configured Docker hosts",
 	RunE: func(cmd *cobra.Command, args []string) error {
 		cfg, err := loadConfig()

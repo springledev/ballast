@@ -20,6 +20,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -51,6 +52,7 @@ that every backup actually restores before marking it done.`,
 
 var versionCmd = &cobra.Command{
 	Use:   "version",
+	Args:  noArgs,
 	Short: "Print the ballast version",
 	RunE: func(cmd *cobra.Command, args []string) error {
 		cmd.Println(version)
@@ -61,6 +63,7 @@ var versionCmd = &cobra.Command{
 var serveAddr string
 
 var serveCmd = &cobra.Command{
+	Args:  noArgs,
 	Use:   "serve",
 	Short: "Serve the Web UI and REST API",
 	RunE: func(cmd *cobra.Command, args []string) error {
@@ -407,6 +410,7 @@ func resolveTriggerToken(service, flagToken, tokenFile, credDir string, stderr i
 
 var runDueCmd = &cobra.Command{
 	Use:   "run-due",
+	Args:  noArgs,
 	Short: "Run every backup job whose schedule is due (for systemd timers/cron)",
 	RunE: func(cmd *cobra.Command, args []string) error {
 		cfg, err := loadConfig()
@@ -501,6 +505,31 @@ func shutdownContext(parent context.Context) (context.Context, context.CancelFun
 		stop()
 	}()
 	return ctx, stop
+}
+
+// configureStreams makes results go to stdout. Cobra's Print helpers
+// default to stderr, which hides results from `| grep` and `$(...)`
+// (spec §21.2); errors and notices stay on stderr.
+func configureStreams(root *cobra.Command) {
+	root.SetOut(os.Stdout)
+	root.SetErr(os.Stderr)
+}
+
+// verbose is the global --verbose flag.
+var verbose bool
+
+// noArgs is the Args check for a command that takes no positional
+// arguments. Unlike cobra.NoArgs it says what to do instead.
+func noArgs(cmd *cobra.Command, args []string) error {
+	if len(args) == 0 {
+		return nil
+	}
+	return fmt.Errorf("`%s` takes no arguments, but got %q; run `%s --help` to see what it accepts", cmd.CommandPath(), strings.Join(args, " "), cmd.CommandPath())
+}
+
+func init() {
+	configureStreams(rootCmd)
+	rootCmd.PersistentFlags().BoolVar(&verbose, "verbose", false, "show extra detail, such as which credential directory is in use")
 }
 
 func main() {

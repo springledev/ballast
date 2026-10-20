@@ -60,6 +60,10 @@ func resetCLIFlags() {
 	daemonURL = ""
 
 	statusService, statusJSON, statusVerify = "", false, false
+	verbose, forceCredentialNotice = false, false
+	if f := rootCmd.PersistentFlags().Lookup("verbose"); f != nil {
+		f.Changed = false
+	}
 	snapshotsJSON = false
 	restoreSnapshot, restoreFiles, restoreTo = "", nil, ""
 

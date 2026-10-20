@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"fmt"
 	"time"
 
 	"github.com/springledev/ballast/internal/api"
@@ -17,15 +18,23 @@ var (
 // statusCmd is `ballast status [--service X] [--json] [--verify]`
 // (spec §9).
 var statusCmd = &cobra.Command{
-	Use:   "status",
+	Use:   "status [service]",
+	Args:  cobra.MaximumNArgs(1),
 	Short: "Show backup status for one or all configured services",
 	RunE: func(cmd *cobra.Command, args []string) error {
 		cfg, err := loadConfig()
 		if err != nil {
 			return err
 		}
+		service := statusService
+		if len(args) == 1 {
+			if service != "" && service != args[0] {
+				return fmt.Errorf("`ballast status` got two different services (%q and --service %q); give just one", args[0], service)
+			}
+			service = args[0]
+		}
 		return withApp(cfg, cmd.ErrOrStderr(), func(a *app) error {
-			st, err := a.ops.Status(cmd.Context(), statusService, statusVerify)
+			st, err := a.ops.Status(cmd.Context(), service, statusVerify)
 			if err != nil {
 				return err
 			}

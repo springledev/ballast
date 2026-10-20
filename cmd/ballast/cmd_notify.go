@@ -127,6 +127,7 @@ ntfy topic URL or webhook URL (see the notifications guide).`,
 
 var notifyChannelListCmd = &cobra.Command{
 	Use:   "list",
+	Args:  noArgs,
 	Short: "List notification channels",
 	RunE: func(cmd *cobra.Command, args []string) error {
 		cfg, err := loadConfig()
@@ -427,7 +428,7 @@ has it turned on (ballast notify channel edit <name> --digest).
 The digest is one message: how many services are green, amber and red,
 when each one last had a verified restore, and free disk space.
 ` + "`ballast serve`" + ` (or ` + "`ballast run-due`" + `) sends it automatically once a week.`,
-	Args: cobra.NoArgs,
+	Args: noArgs,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		cfg, err := loadConfig()
 		if err != nil {

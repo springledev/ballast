@@ -167,6 +167,7 @@ func retentionLine(s inventory.Service, dest inventory.Destination) string {
 
 var serviceListCmd = &cobra.Command{
 	Use:   "list",
+	Args:  noArgs,
 	Short: "List configured backup services",
 	RunE: func(cmd *cobra.Command, args []string) error {
 		cfg, err := loadConfig()

@@ -58,7 +58,7 @@ under Datacenter -> Permissions -> API Tokens, then:
 By default Ballast connects with the new settings before saving, so a typo
 never leaves a connection that doesn't work; pass --no-test to save one that
 is offline right now.`,
-	Args: cobra.NoArgs,
+	Args: noArgs,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		creds, err := readProxmoxCredentials()
 		if err != nil {
@@ -89,7 +89,7 @@ is offline right now.`,
 var proxmoxTestCmd = &cobra.Command{
 	Use:   "test",
 	Short: "Check that the configured Proxmox connection works",
-	Args:  cobra.NoArgs,
+	Args:  noArgs,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		cfg, err := loadConfig()
 		if err != nil {
@@ -109,7 +109,7 @@ var proxmoxTestCmd = &cobra.Command{
 var proxmoxGuestsCmd = &cobra.Command{
 	Use:   "guests",
 	Short: "List the VMs and LXC containers on the Proxmox host",
-	Args:  cobra.NoArgs,
+	Args:  noArgs,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		cfg, err := loadConfig()
 		if err != nil {
@@ -144,7 +144,7 @@ Example:
 This is a dump only and is not verified as restorable until the verification
 drill runs (spec §14 step 26). The result will include the backup volume ID,
 size, and any pruned dumps.`,
-	Args: cobra.NoArgs,
+	Args: noArgs,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		cfg, err := loadConfig()
 		if err != nil {
@@ -207,7 +207,7 @@ size, and any pruned dumps.`,
 var proxmoxRemoveCmd = &cobra.Command{
 	Use:   "remove",
 	Short: "Remove the configured Proxmox connection",
-	Args:  cobra.NoArgs,
+	Args:  noArgs,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		cfg, err := loadConfig()
 		if err != nil {
@@ -244,7 +244,7 @@ this machine where the Proxmox storage appears (such as an NFS mount).
 Example:
 
   ballast proxmox job add --name pve-vm100 --node pve --vmid 100 --storage backup-nas --keep-last 2 --schedule "0 3 * * 0"`,
-	Args: cobra.NoArgs,
+	Args: noArgs,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		cfg, err := loadConfig()
 		if err != nil {
@@ -291,7 +291,7 @@ Ballast only reads from Proxmox here; it never changes its settings.
 Example:
 
   ballast proxmox config add --name pve-config --to local --schedule "30 2 * * *"`,
-	Args: cobra.NoArgs,
+	Args: noArgs,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		cfg, err := loadConfig()
 		if err != nil {
@@ -320,7 +320,7 @@ var proxmoxConfigShowCmd = &cobra.Command{
 	Long: `Read the Proxmox host's settings right now and print them as JSON, or save them
 to a folder with --out (one file per part). Nothing is stored in a backup and
 nothing is changed in Proxmox.`,
-	Args: cobra.NoArgs,
+	Args: noArgs,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		cfg, err := loadConfig()
 		if err != nil {

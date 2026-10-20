@@ -18,12 +18,14 @@ var (
 var doctorCmd = &cobra.Command{
 	Use:   "doctor",
 	Short: "Check restic, Docker hosts, destinations, and disk space for common configuration problems",
-	Args:  cobra.NoArgs,
+	Args:  noArgs,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		cfg, err := loadConfig()
 		if err != nil {
 			return err
 		}
+		forceCredentialNotice = true
+		defer func() { forceCredentialNotice = false }()
 		return withApp(cfg, cmd.ErrOrStderr(), func(a *app) error {
 			report, err := a.ops.Doctor(cmd.Context())
 			if doctorJSON {

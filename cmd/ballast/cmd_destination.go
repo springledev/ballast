@@ -163,6 +163,7 @@ func readDestinationCredentials(cmd *cobra.Command) (backend.Credentials, error)
 
 var destinationListCmd = &cobra.Command{
 	Use:   "list",
+	Args:  noArgs,
 	Short: "List configured destinations",
 	RunE: func(cmd *cobra.Command, args []string) error {
 		cfg, err := loadConfig()

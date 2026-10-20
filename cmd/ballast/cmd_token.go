@@ -34,7 +34,7 @@ func writeAPIToken(path, token string) error {
 var tokenRotateCmd = &cobra.Command{
 	Use:   "rotate",
 	Short: "Make a new access key and sign every browser out (shown once)",
-	Args:  cobra.NoArgs,
+	Args:  noArgs,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		cfg, err := loadConfig()
 		if err != nil {

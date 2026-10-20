@@ -400,7 +400,7 @@ var installCmd = &cobra.Command{
 	Long: "Sets Ballast up as a systemd service: creates /etc/ballast and /var/lib/ballast, moves any existing\n" +
 		"Ballast setup from your home folder into them, installs and starts the service, and prints the web\n" +
 		"address and access key. It is safe to run again, and it never overwrites a different install.",
-	Args: cobra.NoArgs,
+	Args: noArgs,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		if os.Geteuid() != 0 {
 			return errors.New("ballast install needs root: run it with sudo")

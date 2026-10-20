@@ -14,6 +14,7 @@ var catalogCmd = &cobra.Command{Use: "catalog", Short: "Browse the service catal
 // catalogListCmd is `ballast catalog list` (spec §9).
 var catalogListCmd = &cobra.Command{
 	Use:   "list",
+	Args:  noArgs,
 	Short: "List available catalog entries",
 	RunE: func(cmd *cobra.Command, args []string) error {
 		cfg, err := loadConfig()

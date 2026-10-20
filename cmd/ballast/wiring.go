@@ -80,6 +80,10 @@ func (a *app) logf(format string, args ...any) {
 	fmt.Fprintln(w, a.redact(fmt.Sprintf("ballast: "+format, args...)))
 }
 
+// forceCredentialNotice makes openApp announce the credential
+// directory; `ballast doctor` sets it.
+var forceCredentialNotice bool
+
 // openApp resolves every dependency a command needs, in the order the
 // step 11 plan specifies: config (already resolved into cfg) → store
 // → catalog registry → notifier (+ its secrets) → API token (+ its
@@ -187,10 +191,16 @@ func openApp(cfg config.Config, logw io.Writer) (*app, error) {
 	ops := &api.Ops{Progress: uploads, DB: st.DB(), Catalog: reg, CatalogDirs: cfg.CatalogDirs, Coord: coord, Repo: repoFor, RepoHealth: health, DestinationLocks: scheduler.FileLocker{Dir: filepath.Join(cfg.DataDir, "locks", "destinations")}, Runner: r, DockerHosts: dockerHosts, Proxmox: proxmoxResolver, CredentialsDir: cfg.WritableCredentialsDir, CredentialSearchDirs: credDirs, Redact: secrets, WorkRoot: pl.WorkRoot, SelfBackupFiles: api.SelfBackupSources{ConfigFile: filepath.Join(cfg.ConfigDir, "ballast.yaml"), CatalogDirs: cfg.CatalogDirs}}
 
 	a := &app{health: health, cfg: cfg, store: st, ops: ops, coord: coord, notifier: notifier, apiToken: apiToken, secrets: secrets, logw: logw}
-	if cfg.WritableCredentialsDir != cfg.CredentialsDir {
-		a.logf("using credential directories %s (provided) and %s (secrets Ballast creates are saved here)", cfg.CredentialsDir, cfg.WritableCredentialsDir)
-	} else {
-		a.logf("using credential directory %s", cfg.CredentialsDir)
+	// The notice is useful once, noisy every time: show it only when
+	// asked (--verbose, doctor) or when the directory is not the
+	// default (spec §21.2).
+	nonDefault := cfg.WritableCredentialsDir != cfg.CredentialsDir
+	if verbose || forceCredentialNotice || nonDefault {
+		if nonDefault {
+			a.logf("using credential directories %s (provided) and %s (secrets Ballast creates are saved here)", cfg.CredentialsDir, cfg.WritableCredentialsDir)
+		} else {
+			a.logf("using credential directory %s", cfg.CredentialsDir)
+		}
 	}
 	for _, p := range notifyProblems {
 		// Per service, never fatal (spec §3 principle 3): one broken
