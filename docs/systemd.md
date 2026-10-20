@@ -26,6 +26,13 @@ and starts the service, and prints the web address and your access key. Running 
 again is safe, and it refuses to overwrite a different install. Ballast also works
 when root has no home folder: it then uses those two folders by default.
 
+The install also links `ballast` into `/usr/local/bin`, so you can type
+`sudo ballast status` from anywhere. Once `/etc/ballast` exists, `ballast` run as
+root uses those folders on its own: you no longer need to set `BALLAST_CONFIG_DIR`
+or `BALLAST_DATA_DIR`. Run as a normal user, it tells you to use `sudo` instead of
+showing an empty setup. (Set those two variables if you really want a separate
+per-user setup.)
+
 If you start `ballast serve` by hand in a terminal, Ballast warns you (in the
 dashboard and in `ballast doctor`) that schedules stop when the terminal closes.
 

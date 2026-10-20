@@ -218,9 +218,29 @@ const (
 // can stand in for it.
 var isRoot = func() bool { return os.Geteuid() == 0 }
 
+// systemDirs are the system install's folders; variables so tests can
+// point them at temporary directories.
+var (
+	systemConfigDir = SystemConfigDir
+	systemDataDir   = SystemDataDir
+)
+
 // defaultDirs computes XDG-style defaults. Kept as a separate function
 // so file overlays can be distinguished from env overrides in Load.
 func defaultDirs(getenv func(string) string, homeDir func() (string, error)) (Config, error) {
+	// A machine with `ballast install` done keeps everything in the
+	// system folders. Neither folder variable is set, so the caller
+	// means "this machine's Ballast": root gets it without being told
+	// where it lives, anyone else is pointed at sudo instead of being
+	// shown an empty per-user setup that does not match the service.
+	if getenv("BALLAST_CONFIG_DIR") == "" && getenv("BALLAST_DATA_DIR") == "" {
+		if fi, err := os.Stat(systemConfigDir); err == nil && fi.IsDir() {
+			if !isRoot() {
+				return Config{}, fmt.Errorf("Ballast is installed as a system service on this machine (%s), and its settings and backups can only be read by root; run this command with sudo, e.g. `sudo ballast ...`. To work with a separate per-user setup instead, set BALLAST_CONFIG_DIR and BALLAST_DATA_DIR", systemConfigDir)
+			}
+			return Config{DataDir: systemDataDir, ConfigDir: systemConfigDir}, nil
+		}
+	}
 	// home is only needed when no environment variable names the
 	// directory. A root process without $HOME (a systemd unit, a
 	// minimal cron job) uses the system-wide directories instead of

@@ -309,3 +309,71 @@ func TestLoadRootWithoutHome(t *testing.T) {
 		})
 	}
 }
+
+// useFakeSystemInstall points the system folders at a temp dir and
+// fakes the caller's root status. exists says whether the "system
+// config folder" is present.
+func useFakeSystemInstall(t *testing.T, root, exists bool) (cfgDir, dataDir string) {
+	t.Helper()
+	base := t.TempDir()
+	cfgDir = filepath.Join(base, "etc-ballast")
+	dataDir = filepath.Join(base, "var-lib-ballast")
+	if exists {
+		if err := os.MkdirAll(cfgDir, 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	oc, od, or := systemConfigDir, systemDataDir, isRoot
+	t.Cleanup(func() { systemConfigDir, systemDataDir, isRoot = oc, od, or })
+	systemConfigDir, systemDataDir = cfgDir, dataDir
+	isRoot = func() bool { return root }
+	return cfgDir, dataDir
+}
+
+func TestLoadSystemInstall(t *testing.T) {
+	tests := []struct {
+		name       string
+		root       bool
+		exists     bool
+		env        map[string]string
+		wantSystem bool
+		wantErr    string
+	}{
+		{name: "root with a system install uses the system paths", root: true, exists: true, wantSystem: true},
+		{name: "non-root with a system install is told to use sudo", exists: true, wantErr: "sudo"},
+		{name: "no system install keeps the per-user paths", root: true},
+		{name: "environment variables still win", root: true, exists: true,
+			env: map[string]string{"BALLAST_CONFIG_DIR": "/somewhere/else"}},
+		{name: "environment variables let a normal user opt out", exists: true,
+			env: map[string]string{"BALLAST_DATA_DIR": "/somewhere/else"}},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			sysCfg, sysData := useFakeSystemInstall(t, tc.root, tc.exists)
+			h := t.TempDir()
+			cfg, err := Load(getenv(tc.env), func() (string, error) { return h, nil })
+			if tc.wantErr != "" {
+				if err == nil || !strings.Contains(err.Error(), tc.wantErr) {
+					t.Fatalf("err = %v, want it to mention %q", err, tc.wantErr)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("Load: %v", err)
+			}
+			if tc.wantSystem {
+				if cfg.ConfigDir != sysCfg || cfg.DataDir != sysData {
+					t.Errorf("got config %q data %q, want the system paths %q and %q", cfg.ConfigDir, cfg.DataDir, sysCfg, sysData)
+				}
+				return
+			}
+			if cfg.ConfigDir == sysCfg || cfg.DataDir == sysData {
+				t.Errorf("used the system paths when it should not have: %q %q", cfg.ConfigDir, cfg.DataDir)
+			}
+		})
+	}
+}
+
+// Keep every other test independent of a real /etc/ballast on the
+// machine running them.
+func init() { systemConfigDir = filepath.Join(os.TempDir(), "ballast-no-such-system-install") }

@@ -227,3 +227,51 @@ func TestStartedFromTerminal(t *testing.T) {
 		})
 	}
 }
+
+func TestRunInstallLinksBallastOnPath(t *testing.T) {
+	tests := []struct {
+		name     string
+		prepare  func(t *testing.T, link string)
+		wantLink string // expected symlink target, "" = not a link to Exe
+		wantSay  string
+	}{
+		{name: "fresh install adds the link", wantLink: "/opt/ballast", wantSay: "Linked"},
+		{name: "an existing link to this binary is kept quietly", wantLink: "/opt/ballast",
+			prepare: func(t *testing.T, link string) {
+				if err := os.Symlink("/opt/ballast", link); err != nil {
+					t.Fatal(err)
+				}
+			}},
+		{name: "another file there is never overwritten", wantSay: "Left",
+			prepare: func(t *testing.T, link string) {
+				if err := os.WriteFile(link, []byte("other"), 0o755); err != nil {
+					t.Fatal(err)
+				}
+			}},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			e := newInstallEnv(t)
+			link := filepath.Join(t.TempDir(), "bin", "ballast")
+			if tc.prepare != nil {
+				if err := os.MkdirAll(filepath.Dir(link), 0o755); err != nil {
+					t.Fatal(err)
+				}
+				tc.prepare(t, link)
+			}
+			e.plan.BinLink = link
+			out := &bytes.Buffer{}
+			e.plan.Out = out
+			if _, err := runInstall(context.Background(), e.plan); err != nil {
+				t.Fatalf("runInstall: %v", err)
+			}
+			got, _ := os.Readlink(link)
+			if got != tc.wantLink {
+				t.Errorf("link target = %q, want %q", got, tc.wantLink)
+			}
+			if tc.wantSay != "" && !strings.Contains(out.String(), tc.wantSay) {
+				t.Errorf("output %q should mention %q", out.String(), tc.wantSay)
+			}
+		})
+	}
+}

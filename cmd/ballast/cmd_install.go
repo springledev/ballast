@@ -31,6 +31,9 @@ type installPlan struct {
 	UnitPath string
 	// Exe is the ballast binary the unit will run.
 	Exe string
+	// BinLink is where `ballast` is put on PATH (a link to Exe),
+	// /usr/local/bin/ballast in production. Empty means skip.
+	BinLink string
 	// Sources are existing per-user installs to move in: pairs of
 	// config and state folders, as found for the invoking user and root.
 	Sources []installSource
@@ -320,6 +323,10 @@ func runInstall(ctx context.Context, p installPlan) (installResult, error) {
 		return res, err
 	}
 
+	if p.BinLink != "" {
+		linkOnPath(p.BinLink, p.Exe, say)
+	}
+
 	env := func(k string) string {
 		if k == "BALLAST_CONFIG_DIR" {
 			return p.ConfigDir
@@ -336,6 +343,31 @@ func runInstall(ctx context.Context, p installPlan) (installResult, error) {
 	res.Listen = cfg.Listen
 	return res, nil
 }
+
+// linkOnPath makes link point at exe so `ballast` works from any shell.
+// An existing link to exe is left alone; anything else at that path is
+// never overwritten, and the install carries on with a note, because
+// the service itself does not need the link.
+func linkOnPath(link, exe string, say func(string, ...any)) {
+	if cur, err := os.Readlink(link); err == nil && cur == exe {
+		return
+	}
+	if _, err := os.Lstat(link); err == nil {
+		say("Left %s as it is: something else is already there. Remove it and run `ballast install` again if you want `ballast` on your PATH.", link)
+		return
+	}
+	if err := os.MkdirAll(filepath.Dir(link), 0o755); err == nil {
+		err = os.Symlink(exe, link)
+		if err == nil {
+			say("Linked %s to %s", link, exe)
+			return
+		}
+	}
+	say("Could not put ballast on your PATH at %s; the service is not affected. Run it by its full path, %s.", link, exe)
+}
+
+// systemBinLink is where `ballast install` puts ballast on PATH.
+const systemBinLink = "/usr/local/bin/ballast"
 
 // uiURL turns a listen address into a URL a person can open.
 func uiURL(listen, hostname string) string {
@@ -418,6 +450,7 @@ var installCmd = &cobra.Command{
 			DataDir:   config.SystemDataDir,
 			UnitPath:  "/etc/systemd/system/" + installUnitName,
 			Exe:       exe,
+			BinLink:   systemBinLink,
 			Sources:   userInstallSources(),
 			Systemctl: systemctl,
 			Out:       out,
