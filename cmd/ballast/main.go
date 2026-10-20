@@ -512,7 +512,7 @@ func init() {
 	triggerCmd.Flags().StringVar(&triggerToken, "token", "", "external trigger token for the service (visible in the process list; prefer --token-file)")
 	triggerCmd.Flags().StringVar(&triggerTokenFile, "token-file", "", "path to a file (mode 0600) holding the trigger token")
 	rootCmd.AddCommand(serveCmd, versionCmd, runDueCmd, triggerCmd)
-	rootCmd.AddCommand(waitIdleCmd)
+	rootCmd.AddCommand(waitIdleCmd, supportBundleCmd)
 	registerServiceCommands(rootCmd)
 	registerDestinationCommands(rootCmd)
 	registerHostCommands(rootCmd)

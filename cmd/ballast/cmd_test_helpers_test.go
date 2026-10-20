@@ -61,6 +61,7 @@ func resetCLIFlags() {
 
 	statusService, statusJSON, statusVerify, statusRunning, statusCheck = "", false, false, false, false
 	waitIdleTimeout = waitIdleDefault
+	supportBundleOutput = ""
 	verbose, forceCredentialNotice = false, false
 	if f := rootCmd.PersistentFlags().Lookup("verbose"); f != nil {
 		f.Changed = false

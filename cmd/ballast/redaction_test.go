@@ -1,7 +1,10 @@
 package main
 
 import (
+	"archive/tar"
 	"bytes"
+	"compress/gzip"
+	"io"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
@@ -527,5 +530,127 @@ func TestRepositoryPasswordAddedAfterStartupRedacted(t *testing.T) {
 		if strings.Contains(logBuf.String(), pw) {
 			t.Errorf("app log leaks a repository password:\n%s", logBuf.String())
 		}
+	}
+}
+
+// Seeded secrets for TestSupportBundleHasNoSecrets: one recognisable
+// value per kind of secret Ballast handles.
+const (
+	bundleResticPassword = "SEEDED-RESTIC-REPO-PASSWORD-q1w2e3"
+	bundleB2KeyID        = "SEEDED-B2-KEY-ID-0011223344"
+	bundleB2Key          = "SEEDED-B2-APPLICATION-KEY-5566778899"
+	bundleS3Secret       = "SEEDED-S3-SECRET-ACCESS-KEY-aabbccdd"
+	bundleSFTPKey        = "SEEDED-SFTP-PRIVATE-KEY-BODY-eeff0011"
+	bundleNtfyTopic      = "https://ntfy.sh/SEEDED-NTFY-TOPIC-zz99yy88"
+	bundleNtfyToken      = "SEEDED-NTFY-TOKEN-tk_abcdef123456"
+	bundleWebhookURL     = "https://hooks.example.com/SEEDED-WEBHOOK-PATH-998877"
+	bundleAPIToken       = "SEEDED-API-TOKEN-ffeeddcc9988"
+	bundleHeartbeatURL   = "https://hc-ping.example.com/SEEDED-HEARTBEAT-UUID-112233"
+	bundleDBPassword     = "SEEDED-DB-PASSWORD-pg_s3cr3t_77"
+)
+
+// TestSupportBundleHasNoSecrets seeds a secret of every kind, writes a
+// support bundle, then opens the archive and scans every entry (names
+// and contents) for any of them (spec §21.7, rule 2).
+func TestSupportBundleHasNoSecrets(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "restic"), []byte(resticLeakingStubScript), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	data := filepath.Join(t.TempDir(), "data")
+	conf := filepath.Join(t.TempDir(), "config")
+	credDir := filepath.Join(conf, "credentials")
+	t.Setenv("BALLAST_DATA_DIR", data)
+	t.Setenv("BALLAST_CONFIG_DIR", conf)
+	t.Setenv("CREDENTIALS_DIRECTORY", "")
+	if err := os.MkdirAll(credDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	seeds := map[string]string{
+		"ballast-restic-password.local": bundleResticPassword,
+		"ballast-b2-key-id":             bundleB2KeyID,
+		"ballast-b2-key":                bundleB2Key,
+		"ballast-s3-secret":             bundleS3Secret,
+		"ballast-sftp-key":              bundleSFTPKey,
+		"ballast-ntfy-topic":            bundleNtfyTopic,
+		"ballast-ntfy-token":            bundleNtfyToken,
+		"ballast-webhook-url":           bundleWebhookURL,
+		"ballast-api-token":             bundleAPIToken,
+		"ballast-heartbeat-url":         bundleHeartbeatURL,
+		"db-password":                   bundleDBPassword,
+	}
+	for name, v := range seeds {
+		if err := os.WriteFile(filepath.Join(credDir, name), []byte(v+"\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if out, err := execCLI(t, "destination", "add", "local", "--location", "/srv/backups"); err != nil {
+		t.Fatalf("destination add: %v (%s)", err, out)
+	}
+	if out, err := execCLI(t, "service", "add", "svc", "--catalog", "folder", "--destination", "local", "--param", "path="+t.TempDir()); err != nil {
+		t.Fatalf("service add: %v (%s)", err, out)
+	}
+	// A failed backup leaves a real alert decision and error text behind.
+	_, _ = execCLI(t, "backup", "svc")
+
+	out := filepath.Join(t.TempDir(), "bundle.tar.gz")
+	stdout, err := execCLI(t, "support-bundle", "--output", out)
+	if err != nil {
+		t.Fatalf("support-bundle: %v (%s)", err, stdout)
+	}
+	if !strings.Contains(stdout, out) {
+		t.Errorf("stdout should say where the bundle was written (%s):\n%s", out, stdout)
+	}
+	info, err := os.Stat(out)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Mode().Perm() != 0o600 {
+		t.Errorf("bundle mode = %v, want 0600", info.Mode().Perm())
+	}
+
+	f, err := os.Open(out)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+	gz, err := gzip.NewReader(f)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tr := tar.NewReader(gz)
+	names := map[string]bool{}
+	for {
+		h, err := tr.Next()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+		body, err := io.ReadAll(tr)
+		if err != nil {
+			t.Fatal(err)
+		}
+		names[h.Name] = true
+		for name, v := range seeds {
+			for _, needle := range []string{v, strings.TrimPrefix(v, "https://ntfy.sh/")} {
+				if strings.Contains(h.Name, needle) || strings.Contains(string(body), needle) {
+					t.Errorf("bundle entry %s leaks the secret from %s", h.Name, name)
+				}
+			}
+		}
+	}
+	for _, want := range []string{"version.txt", "doctor.json", "status.json", "alert-decisions.json", "schema.txt", "tools.txt", "catalog.txt"} {
+		if !names[want] {
+			t.Errorf("bundle is missing %s (has %v)", want, names)
+		}
+	}
+	if _, err := execCLI(t, "support-bundle", "--output", out); err == nil {
+		t.Error("support-bundle should refuse to overwrite an existing file")
+	}
+	if _, err := execCLI(t, "support-bundle", "extra"); err == nil {
+		t.Error("support-bundle should take no arguments")
 	}
 }
