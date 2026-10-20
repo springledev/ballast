@@ -4,3 +4,4 @@ web/node_modules/
 /ballast
 go.work
 go.work.sum
+/cmd/ballast/ballast
