@@ -270,6 +270,14 @@ export interface ScheduleStatus {
   enabled: boolean;
 }
 
+/** One remembered alert decision: sent, held back, or failed. */
+export interface AlertDecision {
+  at: string;
+  type: string;
+  outcome: "sent" | "held" | "failed";
+  reason?: string;
+}
+
 export interface ServiceStatus {
   service: string;
   catalog_entry: string;
@@ -280,6 +288,7 @@ export interface ServiceStatus {
   /** One light per destination; the service's own light is the worst of them. */
   targets?: TargetStatus[];
   freshness_age_seconds?: number;
+  alert_decisions?: AlertDecision[];
 }
 
 export interface Snapshot {

@@ -54,10 +54,20 @@ type EngineAdapter struct {
 	// Cooldown is how long a still-failing service stays quiet before a
 	// reminder; zero means DefaultAlertCooldown.
 	Cooldown time.Duration
+	// Now overrides the clock in tests; nil means the real clock.
+	Now func() time.Time
 }
 
 func (a *EngineAdapter) gate() *AlertGate {
-	return &AlertGate{DB: a.DB, Cooldown: a.Cooldown}
+	return &AlertGate{DB: a.DB, Cooldown: a.Cooldown, Now: a.Now}
+}
+
+// decide logs and stores one alert decision.
+func (a *EngineAdapter) decide(ev Event, outcome, reason string) {
+	logDecision(a.DB, AlertDecision{
+		Service: ev.Service, At: a.gate().now(), Type: string(ev.Type),
+		Outcome: outcome, Reason: reason,
+	}, a.Notifier.Destinations(ev.Service))
 }
 
 // sendAlert delivers a failure event unless the service was already
@@ -65,16 +75,19 @@ func (a *EngineAdapter) gate() *AlertGate {
 // delivery succeeded, so an unreachable channel is retried next time.
 func (a *EngineAdapter) sendAlert(ctx context.Context, ev Event) error {
 	g := a.gate()
-	ok, err := g.ShouldAlert(ev.Service)
+	ok, why, err := g.Decide(ev.Service)
 	if err != nil {
 		return err
 	}
 	if !ok {
+		a.decide(ev, OutcomeHeld, why)
 		return nil
 	}
 	if err := a.Notifier.Send(ctx, ev); err != nil {
+		a.decide(ev, OutcomeFailed, err.Error())
 		return err
 	}
+	a.decide(ev, OutcomeSent, "")
 	return g.RecordAlert(ev.Service)
 }
 
@@ -114,8 +127,12 @@ func (a *EngineAdapter) NotifySuccessHeartbeat(ctx context.Context, service stri
 	if alerting, err := g.IsAlerting(service); err != nil {
 		return err
 	} else if alerting {
-		if recoverErr = a.Notifier.Send(ctx, FormatRecovery(service)); recoverErr == nil {
+		rec := FormatRecovery(service)
+		if recoverErr = a.Notifier.Send(ctx, rec); recoverErr == nil {
+			a.decide(rec, OutcomeSent, "")
 			recoverErr = g.Clear(service)
+		} else {
+			a.decide(rec, OutcomeFailed, recoverErr.Error())
 		}
 	}
 	enabled, err := a.heartbeatEnabled(service)

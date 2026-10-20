@@ -383,6 +383,10 @@ type ServiceStatus struct {
 	// SUCCESS_UNVERIFIED — spec §11) finished, or nil if there has
 	// never been one.
 	FreshnessAgeSeconds *int64 `json:"freshness_age_seconds,omitempty"`
+	// AlertDecisions is the last few alert decisions for the service
+	// (sent, held back or failed), newest first. Never holds a topic,
+	// URL or token.
+	AlertDecisions []notify.AlertDecision `json:"alert_decisions,omitempty"`
 }
 
 // Status returns the status of the named service, or every configured
@@ -435,6 +439,11 @@ func (o *Ops) statusOne(s inventory.Service, sched scheduler.ScheduledJob, withV
 	}
 	if sched.Cron != "" {
 		st.Schedule = &ScheduleStatus{Cron: sched.Cron, Enabled: sched.Enabled}
+	}
+	if ds, err := notify.ListAlertDecisions(o.DB, s.Name, 5); err != nil {
+		return ServiceStatus{}, wrapf("service "+s.Name, err)
+	} else {
+		st.AlertDecisions = ds
 	}
 
 	last, err := engine.LastStartedRun(o.DB, s.Name)

@@ -53,6 +53,18 @@ onMounted(async () => {
           </li>
         </ul>
 
+        <details v-if="s.alert_decisions?.length" class="advanced">
+          <summary>Recent alerts</summary>
+          <div class="advanced-body">
+            <ul style="list-style: none; padding: 0; margin: 0">
+              <li v-for="(d, i) in s.alert_decisions" :key="i" class="hint">
+                {{ new Date(d.at).toLocaleString() }} · {{ d.outcome === "sent" ? "Sent" : d.outcome === "held" ? "Held back" : "Could not send" }}
+                {{ d.type.replace(/_/g, " ") }}<template v-if="d.reason"> ({{ d.reason }})</template>
+              </li>
+            </ul>
+          </div>
+        </details>
+
         <details v-if="s.verification?.length" class="advanced">
           <summary>Details</summary>
           <div class="advanced-body">

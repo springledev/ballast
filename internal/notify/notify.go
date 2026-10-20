@@ -393,6 +393,33 @@ func (n *Notifier) RegisterChannel(service string, ch Channel) {
 	n.channels[service] = append(n.channels[service], ch)
 }
 
+// channelsFor returns the channels registered or resolved for service.
+func (n *Notifier) channelsFor(service string) ([]Channel, error) {
+	chs := n.channels[service]
+	if len(chs) == 0 && n.Resolve != nil {
+		var err error
+		if chs, err = n.Resolve(service); err != nil {
+			return nil, fmt.Errorf("%s: loading notification channels: %w", service, err)
+		}
+	}
+	return chs, nil
+}
+
+// Destinations names where alerts for service go, by channel kind
+// (such as "ntfy, webhook"), never by address. It is "" when nothing is
+// set up or channels cannot be loaded.
+func (n *Notifier) Destinations(service string) string {
+	chs, err := n.channelsFor(service)
+	if err != nil {
+		return ""
+	}
+	var kinds []string
+	for _, c := range chs {
+		kinds = append(kinds, c.Type())
+	}
+	return strings.Join(uniqueStrings(kinds), ", ")
+}
+
 // Send delivers an event to all registered channels for that service.
 // If delivery fails on any channel, every failure is collected and
 // returned together (via errors.Join) so one channel's outage can
@@ -405,12 +432,9 @@ func (n *Notifier) RegisterChannel(service string, ch Channel) {
 // optional to configure, but once a caller asks to send one, "nobody
 // was listening" must be visible, not indistinguishable from success.
 func (n *Notifier) Send(ctx context.Context, event Event) error {
-	chs := n.channels[event.Service]
-	if len(chs) == 0 && n.Resolve != nil {
-		var err error
-		if chs, err = n.Resolve(event.Service); err != nil {
-			return fmt.Errorf("%s: loading notification channels: %w", event.Service, err)
-		}
+	chs, err := n.channelsFor(event.Service)
+	if err != nil {
+		return err
 	}
 	if len(chs) == 0 {
 		return fmt.Errorf("%s: %w", event.Service, ErrNoChannels)

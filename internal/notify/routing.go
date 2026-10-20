@@ -142,19 +142,38 @@ func (g *AlertGate) cooldown() time.Duration {
 // ShouldAlert reports whether a failure alert for service should be
 // sent now (first failure, or the cool-down has passed).
 func (g *AlertGate) ShouldAlert(service string) (bool, error) {
+	ok, _, err := g.Decide(service)
+	return ok, err
+}
+
+// Decide is ShouldAlert plus a plain-English reason when the alert is
+// held back (such as "alerted 23h ago, cool-down 24h").
+func (g *AlertGate) Decide(service string) (bool, string, error) {
 	var last string
 	err := g.DB.QueryRow(`SELECT last_alert_at FROM alert_state WHERE service = ?`, service).Scan(&last)
 	if errors.Is(err, sql.ErrNoRows) {
-		return true, nil
+		return true, "", nil
 	}
 	if err != nil {
-		return false, fmt.Errorf("service %s: reading alert state: %w", service, err)
+		return false, "", fmt.Errorf("service %s: reading alert state: %w", service, err)
 	}
 	t, perr := time.Parse(time.RFC3339Nano, last)
 	if perr != nil {
-		return true, nil
+		return true, "", nil
 	}
-	return g.now().Sub(t) >= g.cooldown(), nil
+	ago := g.now().Sub(t)
+	if ago >= g.cooldown() {
+		return true, "", nil
+	}
+	return false, fmt.Sprintf("alerted %s ago, cool-down %s", shortDuration(ago), shortDuration(g.cooldown())), nil
+}
+
+// shortDuration renders d as whole hours, or minutes under an hour.
+func shortDuration(d time.Duration) string {
+	if d < time.Hour {
+		return fmt.Sprintf("%dm", int(d.Minutes()))
+	}
+	return fmt.Sprintf("%dh", int(d.Hours()))
 }
 
 // RecordAlert notes that an alert was just delivered for service.
