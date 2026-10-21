@@ -98,6 +98,15 @@ func runStatusCheck(cmd *cobra.Command, service string) error {
 // running or has no backups yet, since none of those is confirmed green;
 // otherwise 0. No services at all is 1 for the same reason.
 func checkStatus(services []api.ServiceStatus) (int, string) {
+	// The self-backup waiting for its first scheduled run has no light
+	// yet, which is expected, not a problem: leave it out until it runs.
+	confirmable := make([]api.ServiceStatus, 0, len(services))
+	for _, s := range services {
+		if !s.FirstRunPending {
+			confirmable = append(confirmable, s)
+		}
+	}
+	services = confirmable
 	if len(services) == 0 {
 		return 1, "No services are configured, so there is no backup to confirm."
 	}
@@ -159,6 +168,14 @@ func printStatusPlain(cmd *cobra.Command, services []api.ServiceStatus) {
 	}
 	for _, s := range services {
 		tier := s.Tiers[0]
+		if s.FirstRunPending {
+			if s.FirstRunAt != nil {
+				cmd.Printf("%s: no backups yet, first run at %s\n", s.Service, s.FirstRunAt.Format("Mon 2 Jan 15:04"))
+			} else {
+				cmd.Printf("%s: no backups yet, and no schedule will start one\n", s.Service)
+			}
+			continue
+		}
 		cmd.Printf("%s: %s\n", s.Service, lightLabel(tier.Light))
 		if tier.Light == "running" && tier.Phase != "" {
 			cmd.Printf("  now: %s (running for %s)\n", tier.Phase, (time.Duration(tier.ElapsedSeconds) * time.Second).String())

@@ -398,7 +398,14 @@ type ServiceStatus struct {
 	// Self is true for Ballast's own settings backup, which has a light
 	// like a service but is not one: it cannot be restored from the
 	// service picker or edited as a service.
-	Self         bool                 `json:"self,omitempty"`
+	Self bool `json:"self,omitempty"`
+	// FirstRunPending is true for the self-backup while it is scheduled
+	// but has never run. It has no light yet, and that is not a
+	// problem, so `status --check` ignores it.
+	FirstRunPending bool `json:"first_run_pending,omitempty"`
+	// FirstRunAt is when a pending first run is due (nil when the
+	// schedule is off or never fires).
+	FirstRunAt   *time.Time           `json:"first_run_at,omitempty"`
 	CatalogEntry string               `json:"catalog_entry"`
 	Destination  string               `json:"destination"`
 	Schedule     *ScheduleStatus      `json:"schedule,omitempty"`
@@ -498,6 +505,16 @@ func (o *Ops) Status(ctx context.Context, service string, withVerify bool) ([]Se
 			return nil, err
 		}
 		st.Self = s.Name == SelfBackupService
+		if st.Self && len(st.Tiers) > 0 && st.Tiers[0].LastRunID == 0 {
+			st.FirstRunPending = true
+			if sc := scheduleByService[s.Name]; sc.Enabled {
+				if sched, perr := scheduler.ParseCron(sc.Cron); perr == nil {
+					if next, ok := sched.Next(time.Now()); ok {
+						st.FirstRunAt = &next
+					}
+				}
+			}
+		}
 		out = append(out, st)
 	}
 	return out, nil

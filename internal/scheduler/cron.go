@@ -160,6 +160,16 @@ func (s Schedule) IsDue(now, lastRun time.Time) bool {
 	return !s.fixedTime && s.firesInRepeatedMinutes(last, now)
 }
 
+// Next returns the first firing strictly after from, in from's
+// location, or false when the schedule never fires again.
+func (s Schedule) Next(from time.Time) (time.Time, bool) {
+	w, ok := s.nextWall(wallClock(from))
+	if !ok {
+		return time.Time{}, false
+	}
+	return time.Date(w.Year(), w.Month(), w.Day(), w.Hour(), w.Minute(), 0, 0, from.Location()), true
+}
+
 // Gap returns the time between the first two firings after from, so
 // callers can size things (such as alert reminders) to the schedule.
 // It reports false when the schedule does not fire twice.

@@ -328,3 +328,47 @@ func TestRunSelfBackupRetentionRealRestic(t *testing.T) {
 		t.Fatalf("after retention: %d self-backup snapshots (want 2), %d service snapshots (want 1)", self, svc)
 	}
 }
+
+// TestStatusSelfBackupFirstRunPending: a self-backup that is scheduled
+// but has never run is listed as waiting for its first run, with the
+// time; once it has run it is an ordinary light.
+func TestStatusSelfBackupFirstRunPending(t *testing.T) {
+	h, _ := selfHarness(t)
+	ctx := context.Background()
+	now := time.Date(2026, 10, 20, 12, 0, 0, 0, time.UTC)
+	if err := h.ops.EnsureSelfBackupSchedule(ctx, now); err != nil {
+		t.Fatal(err)
+	}
+	all, err := h.ops.Status(ctx, "", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var self *ServiceStatus
+	for i := range all {
+		if all[i].Self {
+			self = &all[i]
+		}
+	}
+	if self == nil {
+		t.Fatal("scheduled self-backup is not listed")
+	}
+	if !self.FirstRunPending || self.FirstRunAt == nil {
+		t.Fatalf("self = pending %v at %v, want pending with a time", self.FirstRunPending, self.FirstRunAt)
+	}
+	if self.FirstRunAt.Hour() != 4 || self.FirstRunAt.Minute() != 30 {
+		t.Errorf("first run at %v, want 04:30", self.FirstRunAt)
+	}
+
+	if _, err := h.ops.RunSelfBackup(ctx); err != nil {
+		t.Fatal(err)
+	}
+	all, err = h.ops.Status(ctx, "", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, s := range all {
+		if s.Self && (s.FirstRunPending || s.FirstRunAt != nil || s.Tiers[0].Light != "green") {
+			t.Errorf("after a run: %+v, want a plain green light", s)
+		}
+	}
+}

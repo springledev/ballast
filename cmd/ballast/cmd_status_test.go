@@ -286,6 +286,9 @@ func TestCheckStatusExitCode(t *testing.T) {
 		{"no backups yet", []api.ServiceStatus{svc("vault", "none", false)}, 1, "1 no backups yet (vault)"},
 		{"red", []api.ServiceStatus{svc("immich", "red", false)}, 2, "1 red (immich)"},
 		{"red beats amber", []api.ServiceStatus{svc("immich", "red", false), svc("vault", "amber", false)}, 2, "1 red (immich), 1 amber (vault)"},
+		{"self-backup waiting for its first run is ignored", []api.ServiceStatus{svc("vault", "green", false), {Service: "ballast-self", Self: true, FirstRunPending: true, Tiers: []api.TierStatus{{Tier: "restic", Light: "none"}}}}, 0, "1 green"},
+		{"self-backup that ran and failed still counts", []api.ServiceStatus{svc("vault", "green", false), {Service: "ballast-self", Self: true, Tiers: []api.TierStatus{{Tier: "restic", Light: "red"}}}}, 2, "1 red (ballast-self)"},
+		{"only a waiting self-backup confirms nothing", []api.ServiceStatus{{Service: "ballast-self", Self: true, FirstRunPending: true, Tiers: []api.TierStatus{{Tier: "restic", Light: "none"}}}}, 1, "No services are configured"},
 		{"nothing configured", nil, 1, "No services are configured"},
 	}
 	for _, tt := range tests {

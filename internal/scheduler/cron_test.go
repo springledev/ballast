@@ -528,3 +528,16 @@ func TestScheduleGap(t *testing.T) {
 		})
 	}
 }
+
+func TestScheduleNext(t *testing.T) {
+	loc := time.FixedZone("test", 2*3600)
+	s, err := ParseCron("30 4 * * *")
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, ok := s.Next(time.Date(2026, 10, 20, 12, 0, 0, 0, loc))
+	want := time.Date(2026, 10, 21, 4, 30, 0, 0, loc)
+	if !ok || !got.Equal(want) {
+		t.Fatalf("Next = %v, %v; want %v", got, ok, want)
+	}
+}
