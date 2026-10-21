@@ -355,13 +355,18 @@ type selfRunner interface {
 // settings-backup name runs as the settings backup. A leftover v0.5
 // service with that name is quarantined: it runs as the ordinary service
 // it is. If Ballast cannot tell which it is (for example the status
-// database is briefly busy) the settings backup is still attempted, which
-// re-checks and either runs or reports the problem: the run is never
-// handed to base, which has no service of that name and would skip the
-// backup without a trace.
+// database is briefly busy) it does not guess: running the settings
+// backup would turn away a leftover service's real backup, and handing
+// it to base would skip the settings backup without a trace. It returns
+// an error wrapping scheduler.ErrRunNotStarted instead, which makes the
+// scheduler give the firing back and retry at the next sweep.
 func dispatchRun(ctx context.Context, ops selfRunner, base scheduler.Runner, service string) (engine.State, error) {
 	if service == api.SelfBackupService {
-		if active, err := ops.SelfBackupActive(); err != nil || active {
+		active, err := ops.SelfBackupActive()
+		if err != nil {
+			return "", fmt.Errorf("%s: %w: could not tell whether the name is used by the settings backup or by a service: %w", service, scheduler.ErrRunNotStarted, err)
+		}
+		if active {
 			return ops.RunSelfBackup(ctx)
 		}
 	}

@@ -858,6 +858,30 @@ func TestRunSelfBackupSetupFailureLeavesARedRun(t *testing.T) {
 	}
 }
 
+// TestRunSelfBackupCheckErrorLeavesARedRun: if Ballast cannot even check
+// whether a service holds the reserved name, the attempt still leaves a
+// failed run (red light, alert) rather than no trace. A genuine
+// leftover-service conflict is different: doctor reports that, and no
+// run is recorded under that service's name.
+func TestRunSelfBackupCheckErrorLeavesARedRun(t *testing.T) {
+	h, _ := selfHarness(t)
+	h.ops.Log = &strings.Builder{}
+	if _, err := h.ops.DB.Exec(`PRAGMA foreign_keys = OFF`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := h.ops.DB.Exec(`ALTER TABLE services RENAME TO services_gone`); err != nil {
+		t.Skipf("cannot make the lookup fail: %v", err)
+	}
+	state, err := h.ops.RunSelfBackup(context.Background())
+	if err == nil || state != engine.FAILED {
+		t.Fatalf("RunSelfBackup = %v, %v; want FAILED", state, err)
+	}
+	last, lerr := engine.LastStartedRun(h.ops.DB, SelfBackupService)
+	if lerr != nil || last.RunID == 0 {
+		t.Fatalf("no run recorded for the failed attempt: %+v, %v", last, lerr)
+	}
+}
+
 // TestLockSelfRidesOutAProbe: a status probe holding the self-backup's
 // run lock for an instant must not turn a manual self-backup away with
 // "already running".
@@ -869,7 +893,7 @@ func TestLockSelfRidesOutAProbe(t *testing.T) {
 		t.Fatalf("TryLock: %v, %v", ok, err)
 	}
 	time.AfterFunc(150*time.Millisecond, release)
-	got, err := h.ops.lockSelf()
+	got, err := h.ops.lockSelf(context.Background())
 	if err != nil {
 		t.Fatalf("lockSelf during a momentary probe = %v, want success", err)
 	}
@@ -926,7 +950,9 @@ func TestSelfBackupNeverRanWithoutASchedule(t *testing.T) {
 }
 
 // TestSelfBackupReEnabledScheduleIsPending: a schedule switched back on
-// is waiting for its next firing, however long ago it last fired.
+// long after its last firing is run by the scheduler at its next sweep,
+// so the first run is expected right away (not at the next 04:30), and
+// only turns amber an hour later.
 func TestSelfBackupReEnabledScheduleIsPending(t *testing.T) {
 	h, _ := selfHarness(t)
 	ctx := context.Background()
@@ -936,10 +962,60 @@ func TestSelfBackupReEnabledScheduleIsPending(t *testing.T) {
 	}
 	reenabled := time.Date(2026, 10, 21, 2, 0, 0, 0, time.UTC)
 	setScheduleUpdated(t, h, reenabled)
-	h.ops.Now = func() time.Time { return reenabled.Add(time.Hour) }
+	h.ops.Now = func() time.Time { return reenabled.Add(10 * time.Minute) }
 	self := selfStatus(t, h)
 	if self == nil || !self.FirstRunPending || self.Tiers[0].Light == "amber" {
-		t.Fatalf("re-enabled self-backup = %+v, want waiting for 04:30", self)
+		t.Fatalf("re-enabled self-backup = %+v, want waiting", self)
+	}
+	if self.FirstRunAt == nil || !self.FirstRunAt.Equal(reenabled) {
+		t.Errorf("first run at %v, want %v (the next sweep)", self.FirstRunAt, reenabled)
+	}
+	h.ops.Now = func() time.Time { return reenabled.Add(2 * time.Hour) }
+	if self := selfStatus(t, h); self == nil || self.FirstRunPending || self.Tiers[0].Light != "amber" {
+		t.Errorf("two hours on = %+v, want amber", self)
+	}
+}
+
+// TestLockSelfStopsWaitingWhenCancelled: Ctrl-C or a closed request ends
+// the wait for the self-backup lock at once.
+func TestLockSelfStopsWaitingWhenCancelled(t *testing.T) {
+	h := newHarness(t)
+	h.ops.Coord.LockWait = time.Minute
+	release, ok, err := h.locks.TryLock(SelfBackupService)
+	if err != nil || !ok {
+		t.Fatalf("TryLock: %v, %v", ok, err)
+	}
+	defer release()
+	ctx, cancel := context.WithTimeout(context.Background(), 150*time.Millisecond)
+	defer cancel()
+	start := time.Now()
+	_, err = h.ops.lockSelf(ctx)
+	if !errors.Is(err, context.DeadlineExceeded) || time.Since(start) > 5*time.Second {
+		t.Fatalf("lockSelf with a cancelled ctx = %v after %v, want context.DeadlineExceeded promptly", err, time.Since(start))
+	}
+}
+
+// TestSelfBackupFirstFiringIsStable: the first firing is anchored on when
+// the schedule was created, so a self-backup that keeps failing to start
+// (each try moves the last-fired mark) still turns amber one hour after
+// its first firing instead of staying "waiting" forever.
+func TestSelfBackupFirstFiringIsStable(t *testing.T) {
+	h, _ := selfHarness(t)
+	ctx := context.Background()
+	created := time.Date(2026, 10, 20, 12, 0, 0, 0, time.UTC)
+	if err := h.ops.EnsureSelfBackupSchedule(ctx, created); err != nil {
+		t.Fatal(err)
+	}
+	setScheduleUpdated(t, h, created)
+	// The 04:30 firing was tried at 04:31 and did not start; the next
+	// try is tomorrow.
+	if err := scheduler.MarkFired(h.ops.DB, SelfBackupService, time.Date(2026, 10, 21, 4, 31, 0, 0, time.UTC)); err != nil {
+		t.Fatal(err)
+	}
+	h.ops.Now = func() time.Time { return time.Date(2026, 10, 21, 5, 45, 0, 0, time.UTC) }
+	self := selfStatus(t, h)
+	if self == nil || self.FirstRunPending || self.Tiers[0].Light != "amber" {
+		t.Fatalf("self = %+v, want amber (never ran, an hour past its first firing)", self)
 	}
 }
 

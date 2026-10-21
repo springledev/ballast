@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"errors"
+	"github.com/springledev/ballast/internal/scheduler"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -216,8 +217,8 @@ func TestDispatchRun(t *testing.T) {
 	}{
 		{"settings backup", api.SelfBackupService, stubSelf{active: true}, 1, 0, nil},
 		{"leftover service of that name", api.SelfBackupService, stubSelf{active: false}, 0, 1, nil},
-		{"cannot tell, still the settings backup", api.SelfBackupService, stubSelf{activeErr: busy}, 1, 0, nil},
-		{"cannot tell and the run fails, error surfaces", api.SelfBackupService, stubSelf{activeErr: busy, runErr: busy}, 1, 0, busy},
+		{"cannot tell: nothing runs, the firing is given back", api.SelfBackupService, stubSelf{activeErr: busy}, 0, 0, scheduler.ErrRunNotStarted},
+		{"cannot tell: the cause is kept", api.SelfBackupService, stubSelf{activeErr: busy}, 0, 0, busy},
 		{"ordinary service", "immich", stubSelf{active: true}, 0, 1, nil},
 	}
 	for _, tt := range tests {

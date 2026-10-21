@@ -607,11 +607,16 @@ func (o *Ops) markNeverRan(st *ServiceStatus, sc scheduler.ScheduledJob) error {
 	return nil
 }
 
-// selfFirstFiring returns when the self-backup's schedule first fires:
-// the first firing after the later of its last-fired mark and the time
-// the schedule was created or switched back on, read on the host's clock
-// like the scheduler does. A schedule with no last-fired mark (set by
-// hand) is due at once, from the time it was set. ok is false when the
+// selfFirstFiring returns when the self-backup's schedule first fires,
+// as the scheduler will see it, read on the host's clock. It is anchored
+// on when the schedule was created or last switched on (updated_at),
+// which stays put, not on the last-fired mark, which moves with every
+// firing even when the backup then fails to start. The scheduler runs a
+// schedule at its next sweep when the cron slot after the baseline it
+// counts from (ScheduleBaseline) has already passed, or when it has no
+// baseline at all (set by hand); then the first firing is the moment the
+// schedule was set. Otherwise it is the next cron slot after that
+// baseline, but never before the schedule was set. ok is false when the
 // schedule is off or never fires.
 func (o *Ops) selfFirstFiring(sc scheduler.ScheduledJob) (time.Time, bool, error) {
 	if !sc.Enabled {
@@ -621,30 +626,37 @@ func (o *Ops) selfFirstFiring(sc scheduler.ScheduledJob) (time.Time, bool, error
 	if err != nil {
 		return time.Time{}, false, nil
 	}
-	fired, err := scheduler.LastFired(o.DB, SelfBackupService)
-	if err != nil {
-		return time.Time{}, false, err
-	}
 	var upd string
 	if err := o.DB.QueryRow(`SELECT updated_at FROM schedules WHERE service = ?`, SelfBackupService).Scan(&upd); err != nil {
 		return time.Time{}, false, fmt.Errorf("looking up when the %s schedule was set: %w", SelfBackupService, err)
 	}
 	set, perr := time.Parse(time.RFC3339Nano, upd)
 	if perr != nil {
-		set = time.Time{}
+		return time.Time{}, false, nil
 	}
 	loc := o.now().Location()
-	if fired.IsZero() {
-		if set.IsZero() {
-			return time.Time{}, false, nil
-		}
-		return set.In(loc), true, nil
+	set = set.In(loc)
+	base, err := scheduler.ScheduleBaseline(o.DB, SelfBackupService)
+	if err != nil {
+		return time.Time{}, false, err
 	}
-	if set.After(fired) {
-		fired = set
+	if base.IsZero() {
+		return set, true, nil
 	}
-	next, ok := sched.Next(fired.In(loc))
-	return next, ok, nil
+	// A baseline after the schedule was set is a firing that has since
+	// happened (and failed to start); count from the set time so the
+	// first firing does not move.
+	if base.After(set) {
+		base = set
+	}
+	next, ok := sched.Next(base.In(loc))
+	if !ok {
+		return time.Time{}, false, nil
+	}
+	if next.Before(set) {
+		return set, true, nil
+	}
+	return next, true, nil
 }
 
 // statusOne builds the status of a single configured service.

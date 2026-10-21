@@ -793,6 +793,31 @@ func TestRunDueReArmsWhenRunReturnsUnverifiedStateDuringShutdown(t *testing.T) {
 	}
 }
 
+// TestRunDueRetriesARunThatCouldNotStart: a runner that could not even
+// begin the run gives the firing back, so the next sweep tries again
+// instead of the backup silently never running until the next slot.
+func TestRunDueRetriesARunThatCouldNotStart(t *testing.T) {
+	f := newFixture(t)
+	f.schedule(t, "immich", "0 3 * * *")
+	calls := 0
+	f.c.Runner = RunnerFunc(func(context.Context, string) (engine.State, error) {
+		calls++
+		if calls == 1 {
+			return "", fmt.Errorf("immich: %w: database is locked", ErrRunNotStarted)
+		}
+		return engine.SUCCESS, nil
+	})
+	if err := f.c.RunDue(context.Background(), nightly); err == nil {
+		t.Fatal("first sweep: want the not-started error reported")
+	}
+	if fired, _ := LastFired(f.c.DB, "immich"); !fired.IsZero() {
+		t.Errorf("last firing = %v, want zero (given back for the next sweep)", fired)
+	}
+	if err := f.c.RunDue(context.Background(), nightly.Add(time.Minute)); err != nil || calls != 2 {
+		t.Errorf("second sweep: err=%v calls=%d, want a retry that succeeds", err, calls)
+	}
+}
+
 func TestRunDueReportsInterruptedServiceOnceEvenIfAlsoFailing(t *testing.T) {
 	f := newFixture(t)
 	f.schedule(t, "immich", "0 3 * * *")

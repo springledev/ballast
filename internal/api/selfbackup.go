@@ -113,12 +113,12 @@ var ErrSelfBackupRunning = errors.New("a self-backup is already running; wait fo
 // `ballast run-due` process exclude each other. It refuses when the
 // lock is held. Only while holding it are staging folders left behind
 // by a crashed run cleared, so a live run's folder is never wiped. The
-// returned func releases the lock.
-func (o *Ops) lockSelf() (func(), error) {
+// returned func releases the lock. Cancelling ctx stops the wait.
+func (o *Ops) lockSelf(ctx context.Context) (func(), error) {
 	if o.Coord == nil || o.Coord.Locks == nil {
 		return nil, fmt.Errorf("self-backup: no run lock is configured (internal wiring error)")
 	}
-	release, err := o.Coord.Lock(context.Background(), SelfBackupService)
+	release, err := o.Coord.Lock(ctx, SelfBackupService)
 	if errors.Is(err, scheduler.ErrAlreadyRunning) {
 		return nil, ErrSelfBackupRunning
 	}
@@ -314,7 +314,7 @@ func (o *Ops) SelfBackup(ctx context.Context, destination string) (SelfBackupRes
 	if err := o.ReservedNameConflict(); err != nil {
 		return res, fmt.Errorf("self-backup to %s: %w", destination, err)
 	}
-	unlock, err := o.lockSelf()
+	unlock, err := o.lockSelf(ctx)
 	if err != nil {
 		return res, fmt.Errorf("self-backup to %s: %w", destination, err)
 	}
@@ -408,8 +408,12 @@ func (o *Ops) selfService() (inventory.Service, error) {
 // in any process.
 func (o *Ops) RunSelfBackup(ctx context.Context) (engine.State, error) {
 	const svc = SelfBackupService
-	if err := o.ReservedNameConflict(); err != nil {
-		return "", fmt.Errorf("%s: %w", svc, err)
+	// A leftover service of this name is reported by doctor and gets no
+	// run here. Any other failure to check is recorded below as a failed
+	// run, so it is never silent.
+	checkErr := o.ReservedNameConflict()
+	if errors.Is(checkErr, ErrReservedName) {
+		return "", fmt.Errorf("%s: %w", svc, checkErr)
 	}
 	// The scheduler's Coordinator already holds this service's run lock
 	// (keyed SelfBackupService) around this call, so nothing else is
@@ -417,7 +421,9 @@ func (o *Ops) RunSelfBackup(ctx context.Context) (engine.State, error) {
 	o.clearStaleStaging()
 	m, err := engine.StartRun(o.DB, svc)
 	if err != nil {
-		return "", fmt.Errorf("%s: %w", svc, err)
+		err = o.redactErr(errors.Join(fmt.Errorf("%s: %w", svc, err), checkErr))
+		o.logf("%s: could not start the run: %s", svc, err)
+		return "", err
 	}
 	if o.SelfNotifier != nil {
 		m.SetNotifier(ctx, o.SelfNotifier)
@@ -462,6 +468,9 @@ func (o *Ops) RunSelfBackup(ctx context.Context) (engine.State, error) {
 	// instead of no trace.
 	if err := m.Transition(engine.PREPARING, "preparing"); err != nil {
 		return fail(err)
+	}
+	if checkErr != nil {
+		return fail(checkErr)
 	}
 	if o.WorkRoot == "" {
 		return fail(errors.New("no work directory is configured (internal wiring error)"))

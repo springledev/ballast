@@ -152,6 +152,12 @@ const (
 	sweepNotStarted                     // shutdown began before its turn
 )
 
+// ErrRunNotStarted is wrapped by a Runner's error when it could not even
+// begin the run (for example it could not tell which pipeline owns the
+// service). No run was recorded, so a sweep gives the firing back and
+// tries again at the next sweep instead of counting it as served.
+var ErrRunNotStarted = errors.New("the backup could not be started")
+
 // errShuttingDown marks a due service that was claimed but not started
 // because ctx was cancelled in the meantime.
 var errShuttingDown = errors.New("not started: Ballast is shutting down")
@@ -285,6 +291,15 @@ func (c *Coordinator) sweepOne(ctx context.Context, j ScheduledJob, now time.Tim
 				return errors.Join(checkErr, fmt.Errorf("could not re-arm the schedule, so it will next run at its following firing: %w", err))
 			}
 			return fmt.Errorf("run cut short because Ballast is shutting down; it will run again at the next sweep: %w", checkErr)
+		}
+		if errors.Is(checkErr, ErrRunNotStarted) {
+			// Nothing was started or recorded: give the firing back
+			// so the next sweep tries again rather than skipping
+			// this backup until its next slot.
+			if err := MarkFired(c.DB, j.Service, last); err != nil {
+				return errors.Join(checkErr, fmt.Errorf("could not re-arm the schedule, so it will next run at its following firing: %w", err))
+			}
+			return fmt.Errorf("%w (it will be tried again at the next sweep)", checkErr)
 		}
 		return checkErr
 	})
