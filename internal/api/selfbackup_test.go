@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/springledev/ballast/internal/inventory"
+	"github.com/springledev/ballast/internal/scheduler"
 )
 
 func TestSelfBackupStagesAndVerifies(t *testing.T) {
@@ -197,5 +198,92 @@ func TestReservedNameConflict(t *testing.T) {
 	}
 	if !found {
 		t.Fatalf("doctor has no check for the reserved name: %+v", rep.Checks)
+	}
+}
+
+// otherProcessOps builds a second Ops over the same database, work
+// folder and lock directory, like a separate CLI or run-due process.
+func otherProcessOps(h *harness) *Ops {
+	o := &Ops{
+		DB:             h.ops.DB,
+		Catalog:        h.ops.Catalog,
+		Coord:          &scheduler.Coordinator{DB: h.ops.DB, Locks: h.locks, Runner: h.runner, LockWait: -1},
+		Repo:           h.ops.Repo,
+		CredentialsDir: h.ops.CredentialsDir,
+		WorkRoot:       h.ops.WorkRoot,
+	}
+	return o
+}
+
+// TestSelfBackupExcludesOtherProcesses: a self-backup in another
+// process (its own Ops, same lock directory) is refused while one is
+// uploading, and does not wipe the running one's staging folder.
+func TestSelfBackupExcludesOtherProcesses(t *testing.T) {
+	h := newHarness(t)
+	h.addDestination("local")
+	h.ops.WorkRoot = filepath.Join(t.TempDir(), "work")
+	entered, release := make(chan struct{}), make(chan struct{})
+	var once sync.Once
+	h.ops.HoldRepository = func(context.Context, string, string) (func(), error) {
+		once.Do(func() {
+			close(entered)
+			<-release
+		})
+		return func() {}, nil
+	}
+	first := make(chan error, 1)
+	go func() {
+		_, err := h.ops.SelfBackup(context.Background(), "local")
+		first <- err
+	}()
+	<-entered
+
+	other := otherProcessOps(h)
+	if _, err := other.SelfBackup(context.Background(), "local"); err == nil || !strings.Contains(err.Error(), "already running") {
+		t.Fatalf("self-backup from another process = %v, want refusal", err)
+	}
+	if entries, _ := os.ReadDir(h.ops.WorkRoot); len(entries) != 1 {
+		t.Errorf("the running self-backup's staging folder was wiped: %d entries", len(entries))
+	}
+	close(release)
+	if err := <-first; err != nil {
+		t.Fatalf("first self-backup: %v", err)
+	}
+}
+
+// TestSelfBackupRefusedWhileScheduledRunHoldsLock: the scheduler's
+// lock for the self-backup also blocks a manual one.
+func TestSelfBackupRefusedWhileScheduledRunHoldsLock(t *testing.T) {
+	h := newHarness(t)
+	h.addDestination("local")
+	h.ops.WorkRoot = filepath.Join(t.TempDir(), "work")
+	h.holdRunLock(t, SelfBackupService)
+	stale := filepath.Join(h.ops.WorkRoot, selfStagePrefix+"live")
+	if err := os.MkdirAll(stale, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := h.ops.SelfBackup(context.Background(), "local"); err == nil || !strings.Contains(err.Error(), "already running") {
+		t.Fatalf("err = %v, want refusal", err)
+	}
+	if _, err := os.Stat(stale); err != nil {
+		t.Fatalf("a folder was cleared without holding the lock: %v", err)
+	}
+}
+
+// TestSelfBackupClearsStaleStagingOnlyUnderLock: leftovers of a crashed
+// run are removed once the lock is held.
+func TestSelfBackupClearsStaleStagingOnlyUnderLock(t *testing.T) {
+	h := newHarness(t)
+	h.addDestination("local")
+	h.ops.WorkRoot = filepath.Join(t.TempDir(), "work")
+	stale := filepath.Join(h.ops.WorkRoot, selfStagePrefix+"old")
+	if err := os.MkdirAll(stale, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := h.ops.SelfBackup(context.Background(), "local"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(stale); !os.IsNotExist(err) {
+		t.Fatalf("stale staging folder not cleared: %v", err)
 	}
 }

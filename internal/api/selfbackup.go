@@ -84,30 +84,40 @@ func (o *Ops) ReservedNameConflict() error {
 const selfStagePrefix = "_self"
 
 // errSelfBackupRunning is returned when a self-backup is asked for
-// while another one is in progress.
+// while another one (in this or any other Ballast process) is in
+// progress.
 var errSelfBackupRunning = errors.New("a self-backup is already running; wait for it to finish, then try again")
 
-// lockSelf makes this the only self-backup in progress and clears
-// staging folders left behind by a crashed one. With wait it queues
-// behind a running one (until ctx ends); without, it refuses. The
+// lockSelf takes the self-backup's run lock, the same cross-process
+// flock the scheduler holds for a scheduled self-backup (keyed
+// SelfBackupService), so a manual self-backup, the daemon and any
+// `ballast run-due` process exclude each other. It refuses when the
+// lock is held. Only while holding it are staging folders left behind
+// by a crashed run cleared, so a live run's folder is never wiped. The
 // returned func releases the lock.
-func (o *Ops) lockSelf(ctx context.Context, wait bool) (func(), error) {
-	for !o.selfMu.TryLock() {
-		if !wait {
-			return nil, errSelfBackupRunning
-		}
-		select {
-		case <-ctx.Done():
-			return nil, ctx.Err()
-		case <-time.After(100 * time.Millisecond):
-		}
+func (o *Ops) lockSelf() (func(), error) {
+	if o.Coord == nil || o.Coord.Locks == nil {
+		return nil, fmt.Errorf("self-backup: no run lock is configured (internal wiring error)")
 	}
+	release, ok, err := o.Coord.Locks.TryLock(SelfBackupService)
+	if err != nil {
+		return nil, err
+	}
+	if !ok {
+		return nil, errSelfBackupRunning
+	}
+	o.clearStaleStaging()
+	return release, nil
+}
+
+// clearStaleStaging removes self-backup staging folders under WorkRoot.
+// The caller must hold the self-backup run lock.
+func (o *Ops) clearStaleStaging() {
 	if old, err := filepath.Glob(filepath.Join(o.WorkRoot, selfStagePrefix+"*")); err == nil {
 		for _, d := range old {
 			_ = os.RemoveAll(d)
 		}
 	}
-	return o.selfMu.Unlock, nil
 }
 
 // stageSelf assembles what a self-backup saves in a clean private
@@ -279,7 +289,7 @@ func (o *Ops) SelfBackup(ctx context.Context, destination string) (SelfBackupRes
 	if o.WorkRoot == "" {
 		return res, fmt.Errorf("self-backup: no work directory is configured (internal wiring error)")
 	}
-	unlock, err := o.lockSelf(ctx, false)
+	unlock, err := o.lockSelf()
 	if err != nil {
 		return res, fmt.Errorf("self-backup to %s: %w", destination, err)
 	}
@@ -368,6 +378,9 @@ func (o *Ops) selfService() (inventory.Service, error) {
 // Retention (scoped to the self-backup tag) runs afterwards, and only
 // for destinations whose self-backup verified. It satisfies
 // scheduler.Runner's contract for the reserved name.
+// The caller (the scheduler Coordinator) must hold the SelfBackupService
+// run lock, which is what keeps it exclusive with manual self-backups
+// in any process.
 func (o *Ops) RunSelfBackup(ctx context.Context) (engine.State, error) {
 	const svc = SelfBackupService
 	if o.WorkRoot == "" {
@@ -377,11 +390,10 @@ func (o *Ops) RunSelfBackup(ctx context.Context) (engine.State, error) {
 	if err != nil {
 		return "", fmt.Errorf("%s: %w", svc, err)
 	}
-	unlock, err := o.lockSelf(ctx, true)
-	if err != nil {
-		return "", fmt.Errorf("%s: %w", svc, err)
-	}
-	defer unlock()
+	// The scheduler's Coordinator already holds this service's run lock
+	// (keyed SelfBackupService) around this call, so nothing else is
+	// staging now and leftovers from a crashed run are safe to clear.
+	o.clearStaleStaging()
 	m, err := engine.StartRun(o.DB, svc)
 	if err != nil {
 		return "", fmt.Errorf("%s: %w", svc, err)
