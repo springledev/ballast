@@ -352,6 +352,18 @@ func linkOnPath(link, exe string, say func(string, ...any)) {
 	if cur, err := os.Readlink(link); err == nil && cur == exe {
 		return
 	}
+	// The binary may itself live at the link path (copied there by hand),
+	// or the link may reach it by another route. Either way ballast is
+	// already on PATH, and removing what is there would remove the
+	// binary the service runs.
+	if link == exe {
+		return
+	}
+	if li, err := os.Stat(link); err == nil {
+		if ei, err := os.Stat(exe); err == nil && os.SameFile(li, ei) {
+			return
+		}
+	}
 	if _, err := os.Lstat(link); err == nil {
 		say("Left %s as it is: something else is already there. Remove it and run `ballast install` again if you want `ballast` on your PATH.", link)
 		return

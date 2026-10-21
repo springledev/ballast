@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -271,6 +272,74 @@ func TestRunInstallLinksBallastOnPath(t *testing.T) {
 			}
 			if tc.wantSay != "" && !strings.Contains(out.String(), tc.wantSay) {
 				t.Errorf("output %q should mention %q", out.String(), tc.wantSay)
+			}
+		})
+	}
+}
+
+func TestLinkOnPathRecognisesTheBinaryItself(t *testing.T) {
+	tests := []struct {
+		name string
+		// setup returns link and exe; both live under a temp dir.
+		setup    func(t *testing.T, dir string) (link, exe string)
+		wantKept bool // the file at link must survive untouched
+		wantSay  string
+		noSay    string
+	}{
+		{name: "the binary is already at the link path",
+			setup: func(t *testing.T, dir string) (string, string) {
+				p := filepath.Join(dir, "ballast")
+				if err := os.WriteFile(p, []byte("bin"), 0o755); err != nil {
+					t.Fatal(err)
+				}
+				return p, p
+			}, wantKept: true, noSay: "something else"},
+		{name: "the link is a symlink to the binary by another path",
+			setup: func(t *testing.T, dir string) (string, string) {
+				real := filepath.Join(dir, "real", "ballast")
+				if err := os.MkdirAll(filepath.Dir(real), 0o755); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(real, []byte("bin"), 0o755); err != nil {
+					t.Fatal(err)
+				}
+				alias := filepath.Join(dir, "alias")
+				if err := os.Symlink("real", alias); err != nil {
+					t.Fatal(err)
+				}
+				link := filepath.Join(dir, "bin-ballast")
+				if err := os.Symlink(filepath.Join("alias", "ballast"), link); err != nil {
+					t.Fatal(err)
+				}
+				return link, real
+			}, noSay: "something else"},
+		{name: "a different file is left alone with a note",
+			setup: func(t *testing.T, dir string) (string, string) {
+				exe := filepath.Join(dir, "exe")
+				link := filepath.Join(dir, "other")
+				for _, p := range []string{exe, link} {
+					if err := os.WriteFile(p, []byte(p), 0o755); err != nil {
+						t.Fatal(err)
+					}
+				}
+				return link, exe
+			}, wantKept: true, wantSay: "Left"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			link, exe := tc.setup(t, t.TempDir())
+			var out bytes.Buffer
+			linkOnPath(link, exe, func(f string, a ...any) { fmt.Fprintf(&out, f+"\n", a...) })
+			if tc.wantKept {
+				if _, err := os.Stat(link); err != nil {
+					t.Errorf("file at link vanished: %v", err)
+				}
+			}
+			if tc.wantSay != "" && !strings.Contains(out.String(), tc.wantSay) {
+				t.Errorf("output %q should mention %q", out.String(), tc.wantSay)
+			}
+			if tc.noSay != "" && strings.Contains(out.String(), tc.noSay) {
+				t.Errorf("output %q must not say %q", out.String(), tc.noSay)
 			}
 		})
 	}
