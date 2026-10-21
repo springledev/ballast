@@ -1032,3 +1032,52 @@ func TestRecoverInterruptedFailsDeadRunsAtStartup(t *testing.T) {
 		t.Errorf("second call = %d, %v; want 0, nil", n, err)
 	}
 }
+
+// TestRunDueSurvivesAProbeHoldingTheLock: a status or wait-idle probe
+// takes the run lock for an instant. If that instant is the one in
+// which the sweep claims a due service, the backup must not be skipped
+// as "still in progress".
+func TestRunDueSurvivesAProbeHoldingTheLock(t *testing.T) {
+	f := newFixture(t)
+	f.schedule(t, "immich", "0 3 * * *")
+	release, ok, err := f.locks.TryLock("immich")
+	if err != nil || !ok {
+		t.Fatalf("probe lock: %v, %v", ok, err)
+	}
+	go func() {
+		time.Sleep(300 * time.Millisecond)
+		release()
+	}()
+
+	if err := f.c.RunDue(context.Background(), nightly); err != nil {
+		t.Fatalf("RunDue: %v", err)
+	}
+	if len(f.runner.ran) != 1 {
+		t.Errorf("ran = %v, want the due backup to run once the probe let go", f.runner.ran)
+	}
+	if strings.Contains(f.log.String(), "still in progress") {
+		t.Errorf("log = %q, a brief probe must not look like a running backup", f.log.String())
+	}
+}
+
+// TestRecoverInterruptedSurvivesAProbeHoldingTheLock: crash recovery
+// claims with the same patience.
+func TestRecoverInterruptedSurvivesAProbeHoldingTheLock(t *testing.T) {
+	f := newFixture(t)
+	m := f.leaveUnfinishedRun(t, "immich")
+	release, ok, err := f.locks.TryLock("immich")
+	if err != nil || !ok {
+		t.Fatalf("probe lock: %v, %v", ok, err)
+	}
+	go func() {
+		time.Sleep(300 * time.Millisecond)
+		release()
+	}()
+	n, err := f.c.RecoverInterrupted(context.Background())
+	if err != nil || n != 1 {
+		t.Fatalf("RecoverInterrupted = %d, %v; want 1 run cleared", n, err)
+	}
+	if got := runState(t, f, m); got.State != engine.FAILED {
+		t.Errorf("state = %v, want FAILED", got.State)
+	}
+}
