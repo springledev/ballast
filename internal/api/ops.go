@@ -586,6 +586,11 @@ const selfFirstRunGrace = time.Hour
 // self-backup that never ran is amber with a plain explanation, so
 // `status --check` and the dashboard notice it.
 func (o *Ops) markNeverRan(st *ServiceStatus, sc scheduler.ScheduledJob) error {
+	if sc.Cron == "" || !sc.Enabled {
+		// No schedule (no destination yet) or switched off: nothing was
+		// ever supposed to run, so there is nothing to warn about.
+		return nil
+	}
 	first, ok, err := o.selfFirstFiring(sc)
 	if err != nil {
 		return err
@@ -603,9 +608,11 @@ func (o *Ops) markNeverRan(st *ServiceStatus, sc scheduler.ScheduledJob) error {
 }
 
 // selfFirstFiring returns when the self-backup's schedule first fires:
-// the first firing after the schedule was created (its last-fired mark),
-// or its creation time when it has no mark (a schedule set by hand is due
-// at once). ok is false when the schedule is off or never fires.
+// the first firing after the later of its last-fired mark and the time
+// the schedule was created or switched back on, read on the host's clock
+// like the scheduler does. A schedule with no last-fired mark (set by
+// hand) is due at once, from the time it was set. ok is false when the
+// schedule is off or never fires.
 func (o *Ops) selfFirstFiring(sc scheduler.ScheduledJob) (time.Time, bool, error) {
 	if !sc.Enabled {
 		return time.Time{}, false, nil
@@ -618,18 +625,25 @@ func (o *Ops) selfFirstFiring(sc scheduler.ScheduledJob) (time.Time, bool, error
 	if err != nil {
 		return time.Time{}, false, err
 	}
+	var upd string
+	if err := o.DB.QueryRow(`SELECT updated_at FROM schedules WHERE service = ?`, SelfBackupService).Scan(&upd); err != nil {
+		return time.Time{}, false, fmt.Errorf("looking up when the %s schedule was set: %w", SelfBackupService, err)
+	}
+	set, perr := time.Parse(time.RFC3339Nano, upd)
+	if perr != nil {
+		set = time.Time{}
+	}
+	loc := o.now().Location()
 	if fired.IsZero() {
-		var upd string
-		if err := o.DB.QueryRow(`SELECT updated_at FROM schedules WHERE service = ?`, SelfBackupService).Scan(&upd); err != nil {
-			return time.Time{}, false, fmt.Errorf("looking up when the %s schedule was set: %w", SelfBackupService, err)
-		}
-		t, perr := time.Parse(time.RFC3339Nano, upd)
-		if perr != nil {
+		if set.IsZero() {
 			return time.Time{}, false, nil
 		}
-		return t, true, nil
+		return set.In(loc), true, nil
 	}
-	next, ok := sched.Next(fired)
+	if set.After(fired) {
+		fired = set
+	}
+	next, ok := sched.Next(fired.In(loc))
 	return next, ok, nil
 }
 

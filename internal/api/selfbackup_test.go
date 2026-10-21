@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -726,6 +727,7 @@ func TestStatusSelfBackupFirstRunPending(t *testing.T) {
 	if err := h.ops.EnsureSelfBackupSchedule(ctx, now); err != nil {
 		t.Fatal(err)
 	}
+	setScheduleUpdated(t, h, now)
 	all, err := h.ops.Status(ctx, "", false)
 	if err != nil {
 		t.Fatal(err)
@@ -787,6 +789,7 @@ func TestSelfBackupFirstRunPendingHasADeadline(t *testing.T) {
 	if err := h.ops.EnsureSelfBackupSchedule(ctx, created); err != nil {
 		t.Fatal(err)
 	}
+	setScheduleUpdated(t, h, created)
 	// First firing is 04:30 the next morning.
 	tests := []struct {
 		name        string
@@ -871,4 +874,82 @@ func TestLockSelfRidesOutAProbe(t *testing.T) {
 		t.Fatalf("lockSelf during a momentary probe = %v, want success", err)
 	}
 	got()
+}
+
+// setScheduleUpdated pretends the self-backup's schedule was last
+// created, changed or re-enabled at at (the schedule store stamps real
+// time, which a test running on a synthetic clock must override).
+func setScheduleUpdated(t *testing.T, h *harness, at time.Time) {
+	t.Helper()
+	if _, err := h.ops.DB.Exec(`UPDATE schedules SET updated_at = ? WHERE service = ?`, at.UTC().Format(time.RFC3339Nano), SelfBackupService); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// TestSelfBackupFirstRunUsesTheHostClock: the schedule's 04:30 is the
+// host's local 04:30, as the scheduler reads it, so on a UTC-5 host the
+// first run is not "overdue" at 01:00 local.
+func TestSelfBackupFirstRunUsesTheHostClock(t *testing.T) {
+	h, _ := selfHarness(t)
+	ctx := context.Background()
+	zone := time.FixedZone("UTC-5", -5*3600)
+	created := time.Date(2026, 10, 20, 7, 0, 0, 0, zone)
+	if err := h.ops.EnsureSelfBackupSchedule(ctx, created); err != nil {
+		t.Fatal(err)
+	}
+	setScheduleUpdated(t, h, created)
+	h.ops.Now = func() time.Time { return time.Date(2026, 10, 21, 1, 0, 0, 0, zone) }
+	self := selfStatus(t, h)
+	if self == nil || !self.FirstRunPending || self.Tiers[0].Light == "amber" {
+		t.Fatalf("self at 01:00 local = %+v, want waiting for the first run", self)
+	}
+	want := time.Date(2026, 10, 21, 4, 30, 0, 0, zone)
+	if self.FirstRunAt == nil || !self.FirstRunAt.Equal(want) {
+		t.Errorf("first run at %v, want %v", self.FirstRunAt, want)
+	}
+}
+
+// TestSelfBackupNeverRanWithoutASchedule: with no schedule at all (no
+// destination yet) there is nothing that should have run, so asking for
+// the settings backup's status is not an amber "has not run".
+func TestSelfBackupNeverRanWithoutASchedule(t *testing.T) {
+	h, _ := selfHarness(t)
+	sts, err := h.ops.Status(context.Background(), SelfBackupService, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, s := range sts {
+		if s.Tiers[0].Light == "amber" {
+			t.Errorf("status without a schedule = %+v, want no amber warning", s.Tiers[0])
+		}
+	}
+}
+
+// TestSelfBackupReEnabledScheduleIsPending: a schedule switched back on
+// is waiting for its next firing, however long ago it last fired.
+func TestSelfBackupReEnabledScheduleIsPending(t *testing.T) {
+	h, _ := selfHarness(t)
+	ctx := context.Background()
+	long := time.Date(2026, 10, 10, 12, 0, 0, 0, time.UTC)
+	if err := h.ops.EnsureSelfBackupSchedule(ctx, long); err != nil {
+		t.Fatal(err)
+	}
+	reenabled := time.Date(2026, 10, 21, 2, 0, 0, 0, time.UTC)
+	setScheduleUpdated(t, h, reenabled)
+	h.ops.Now = func() time.Time { return reenabled.Add(time.Hour) }
+	self := selfStatus(t, h)
+	if self == nil || !self.FirstRunPending || self.Tiers[0].Light == "amber" {
+		t.Fatalf("re-enabled self-backup = %+v, want waiting for 04:30", self)
+	}
+}
+
+// TestWriteErrReservedNameIs409: a name clash with the settings backup is
+// the caller's to fix, with its plain-English message, not a 500.
+func TestWriteErrReservedNameIs409(t *testing.T) {
+	h := newHarness(t)
+	rec := httptest.NewRecorder()
+	(&handler{ops: h.ops}).writeErr(rec, fmt.Errorf("self-backup: %w: rename it", ErrReservedName), http.StatusInternalServerError)
+	if rec.Code != http.StatusConflict || !strings.Contains(rec.Body.String(), "reserved for Ballast's own settings backup") {
+		t.Errorf("writeErr = %d %s, want 409 with the reserved-name message", rec.Code, rec.Body.String())
+	}
 }
