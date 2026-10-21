@@ -73,6 +73,18 @@ const DefaultLockWait = 10 * time.Second
 // this long once a minute for that service, in parallel with the rest.
 const sweepClaimGrace = 2 * time.Second
 
+// sweepGrace is the patience sweeps and crash recovery use: SweepGrace
+// when set, otherwise sweepClaimGrace.
+func (c *Coordinator) sweepGrace() time.Duration {
+	switch {
+	case c.SweepGrace == 0:
+		return sweepClaimGrace
+	case c.SweepGrace < 0:
+		return 0
+	}
+	return c.SweepGrace
+}
+
 // lockPollInterval is how often a waiting RunNow retries the run lock.
 const lockPollInterval = 100 * time.Millisecond
 
@@ -108,6 +120,11 @@ type Coordinator struct {
 	// moment (sweepClaimGrace), to ride out a status probe: a locked
 	// service is then skipped until the next sweep.
 	LockWait time.Duration
+	// SweepGrace is how long RunDue and RecoverInterrupted keep
+	// retrying a locked service before treating it as running (to ride
+	// out status probes). Zero means 2 seconds; negative means do not
+	// wait. Tests that drive many sweeps shorten it.
+	SweepGrace time.Duration
 	// Notifier, when set, is attached to a run that withClaim finds
 	// interrupted before it is failed out, so the interruption is
 	// reported the same way any other job failure is (spec §11). Nil
@@ -241,7 +258,7 @@ func (c *Coordinator) sweepOne(ctx context.Context, j ScheduledJob, now time.Tim
 	if needed, err := c.sweepNeedsClaim(j.Service, sched, now); err == nil && !needed {
 		return sweepOK
 	}
-	interrupted, err := c.withClaim(ctx, j.Service, sweepClaimGrace, func() error {
+	interrupted, err := c.withClaim(ctx, j.Service, c.sweepGrace(), func() error {
 		last, err := LastFired(c.DB, j.Service)
 		if err != nil {
 			return err
@@ -480,7 +497,7 @@ func (c *Coordinator) RecoverInterrupted(ctx context.Context) (int, error) {
 		errs []error
 	)
 	for _, name := range names {
-		release, interrupted, err := c.claim(ctx, name, sweepClaimGrace)
+		release, interrupted, err := c.claim(ctx, name, c.sweepGrace())
 		if errors.Is(err, ErrAlreadyRunning) {
 			continue
 		}

@@ -43,6 +43,9 @@ func sweepApp(t *testing.T, finalState engine.State) *app {
 		Runner:   runner,
 		Log:      &bytes.Buffer{},
 		LockWait: -1,
+		// Many virtual minutes of sweeps pass in a test; do not make each
+		// one wait the full probe grace on a busy service.
+		SweepGrace: -1,
 	}
 	if err := scheduler.SetSchedule(st.DB(), "svc", "0 3 * * *"); err != nil {
 		t.Fatalf("SetSchedule: %v", err)

@@ -1,43 +1,42 @@
 package main
 
 import (
-	"context"
 	"testing"
 	"time"
 )
 
-func TestSweepWatchStuck(t *testing.T) {
+func TestSweepWatchStalled(t *testing.T) {
 	t0 := time.Date(2026, 3, 5, 3, 0, 0, 0, time.UTC)
+	min := func(n int) time.Time { return t0.Add(time.Duration(n) * time.Minute) }
 	tests := []struct {
-		name     string
-		inRunDue bool
-		running  bool
-		age      time.Duration
-		want     bool
+		name      string
+		started   []int // minutes at which sweeps began
+		finished  []int // of those, the start minutes of the ones that finished
+		at        int   // minute of the check
+		wantStall bool
 	}{
-		{"young sweep is fine", false, false, 5 * time.Minute, false},
-		{"exactly at the limit is fine", false, false, sweepStuckLimit, false},
-		{"old sweep outside RunDue is stuck even with a backup running", false, true, time.Hour, true},
-		{"old sweep in RunDue with a live backup is waiting, not stuck", true, true, 20 * time.Hour, false},
-		{"old sweep in RunDue with no backup running is stuck", true, false, time.Hour, true},
+		{"just started, nothing finished yet", []int{0}, nil, 0, false},
+		{"first sweep still open at the limit", []int{0}, nil, 10, false},
+		{"nothing has ever finished and the limit has passed", []int{0, 1, 2}, nil, 12, true},
+		{"quick sweeps finish every minute", []int{0, 1, 2, 3}, []int{0, 1, 2}, 3, false},
+		{"one old sweep open for hours while newer ones finish", []int{0, 59, 60, 61}, []int{59, 60}, 61, false},
+		{"a long old sweep finishing late is no evidence", []int{0, 1}, []int{0}, 40, true},
+		{"newer sweeps stopped finishing", []int{0, 1, 2, 30}, []int{0, 1, 2}, 30, true},
+		{"recovered after a stall", []int{0, 20, 21}, []int{0, 20}, 21, false},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			w := &sweepWatch{}
-			id := w.begin(t0)
-			w.setInRunDue(id, tc.inRunDue)
-			_, got := w.stuck(t0.Add(tc.age), sweepStuckLimit, func() bool { return tc.running })
-			if got != tc.want {
-				t.Errorf("stuck = %v, want %v", got, tc.want)
+			for _, m := range tc.started {
+				w.begin(min(m))
 			}
-			w.end(id)
-			if _, got := w.stuck(t0.Add(tc.age), sweepStuckLimit, func() bool { return tc.running }); got {
-				t.Error("a finished sweep must not count")
+			for _, m := range tc.finished {
+				w.finish(min(m))
+			}
+			_, got := w.stalled(min(tc.at), sweepStuckLimit)
+			if got != tc.wantStall {
+				t.Errorf("stalled = %v, want %v", got, tc.wantStall)
 			}
 		})
 	}
-}
-
-func TestMarkRunDueWithoutAWatchIsHarmless(t *testing.T) {
-	markRunDue(context.Background(), true) // run-due CLI path: no watch in ctx
 }

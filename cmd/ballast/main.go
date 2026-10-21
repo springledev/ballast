@@ -199,7 +199,7 @@ func runScheduleLoop(ctx context.Context, a *app) {
 			stop()
 			return
 		case now := <-ticks:
-			sweepID := a.sweeps.begin(now)
+			a.sweeps.begin(now)
 			if a.heartbeat != nil {
 				// Pinged from the loop's own tick, so a loop that has
 				// stopped stops the heartbeat. A sweep that has hung
@@ -211,11 +211,9 @@ func runScheduleLoop(ctx context.Context, a *app) {
 				wg.Add(1)
 				go func() {
 					defer wg.Done()
-					if since, stuck := a.sweeps.stuck(now, sweepStuckLimit, func() bool {
-						return backupsRunning(ctx, a)
-					}); stuck {
+					if since, stalled := a.sweeps.stalled(now, sweepStuckLimit); stalled {
 						if a.sweeps.changed(true) {
-							a.logf("heartbeat: the scheduler sweep that started at %s has not finished and no backup is running, so the heartbeat is paused until it does", since.Local().Format(time.RFC3339))
+							a.logf("heartbeat: no scheduler sweep has finished since the one that started at %s, so the heartbeat is paused until one does", since.Local().Format(time.RFC3339))
 						}
 						return
 					}
@@ -228,31 +226,12 @@ func runScheduleLoop(ctx context.Context, a *app) {
 			wg.Add(1)
 			go func() {
 				defer wg.Done()
-				defer a.sweeps.end(sweepID)
-				if err := sweepRun(withSweep(ctx, a.sweeps, sweepID), a, now); err != nil {
+				if err := sweepRun(ctx, a, now); err != nil {
 					a.logf("run-due sweep: %v", err)
 				}
+				a.sweeps.finish(now)
 			}()
 		}
-	}
-}
-
-// backupsRunning reports whether a backup is really running, giving up
-// (as "no") after a few seconds so a hung database cannot hang the
-// heartbeat check with it.
-func backupsRunning(ctx context.Context, a *app) bool {
-	res := make(chan bool, 1)
-	go func() {
-		names, err := a.ops.RunningServices(ctx)
-		res <- err == nil && len(names) > 0
-	}()
-	select {
-	case ok := <-res:
-		return ok
-	case <-time.After(10 * time.Second):
-		return false
-	case <-ctx.Done():
-		return false
 	}
 }
 
@@ -280,9 +259,7 @@ func sweepDue(ctx context.Context, a *app, now time.Time) error {
 	if serr := a.ops.EnsureSelfBackupSchedule(ctx, now); serr != nil {
 		a.logf("self-backup schedule: %v", serr)
 	}
-	markRunDue(ctx, true)
 	err := a.coord.RunDue(ctx, now)
-	markRunDue(ctx, false)
 	maybeSweepFreshness(ctx, a)
 	maybeSendDigest(ctx, a, now)
 	if a.health != nil {

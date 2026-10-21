@@ -1,106 +1,75 @@
 package main
 
 import (
-	"context"
 	"sync"
 	"time"
 )
 
-// sweepStuckLimit is how long a scheduler sweep may run without a
-// backup to blame before the heartbeat stops (spec §21.7).
+// sweepStuckLimit is how long the scheduler may go without finishing a
+// sweep before the heartbeat stops (spec §21.7).
 const sweepStuckLimit = 10 * time.Minute
 
 // sweepWatch tells the heartbeat whether the scheduler is making
 // progress, not merely whether its clock still ticks.
 //
 // The loop starts a new sweep goroutine on every tick, so a hung sweep
-// never stops the ticks. A sweep can legitimately last hours, though:
-// sweepDue runs its backups synchronously (Coordinator.RunDue waits for
-// them), so a long Immich backup keeps its sweep open for as long as
-// the backup runs. The rule that separates the two:
+// never stops the ticks. Individual sweeps can legitimately last hours:
+// RunDue waits for the backups it starts, a finished backup may still be
+// pruning old snapshots while it holds the run lock, and the repository
+// health check runs at the end of a sweep. None of that is a sign of
+// trouble, and none of it holds up the next minute's sweep: nothing
+// serialises sweeps (each claims a service's run lock without waiting
+// and skips a busy one, a destination already being checked is skipped
+// as busy, and the sweep's other steps are short). A healthy daemon
+// therefore finishes some sweep about every minute, even while older
+// ones are busy with long work.
 //
-//   - A sweep that has been open longer than sweepStuckLimit is
-//     excused only while it is inside RunDue AND a backup is really
-//     running (a live process holds its run lock). It is then waiting
-//     on work that is making progress.
-//   - Any other sweep open longer than the limit is stuck: a lock
-//     taken and never released, a deadlock, a database call that never
-//     returns, or a RunDue whose backups are gone but which did not
-//     come back. The heartbeat stops until it clears, so the outside
-//     monitor notices.
+// So the rule is: the scheduler is alive while some sweep that began
+// within the last sweepStuckLimit has finished. A deadlock, a lock
+// taken and never released, or a database call that never returns
+// stops every new sweep from finishing, and the heartbeat stops once
+// the limit has passed, so the outside monitor notices. A long sweep
+// that finally finishes proves nothing, because only its start time
+// counts. Before any sweep has finished, the first tick's time stands
+// in, which gives a starting daemon the same grace.
 //
 // Times are the loop's own tick times, so tests can drive them.
 type sweepWatch struct {
 	mu       sync.Mutex
-	next     int
-	open     map[int]*openSweep
+	first    time.Time // when the first sweep began
+	last     time.Time // when the newest sweep that finished began
 	reported bool
 }
 
-type openSweep struct {
-	started  time.Time
-	inRunDue bool
-}
-
-// begin records that a sweep started at now and returns its id.
-func (w *sweepWatch) begin(now time.Time) int {
+// begin records that a sweep started at now.
+func (w *sweepWatch) begin(now time.Time) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
-	if w.open == nil {
-		w.open = map[int]*openSweep{}
+	if w.first.IsZero() {
+		w.first = now
 	}
-	w.next++
-	w.open[w.next] = &openSweep{started: now}
-	return w.next
 }
 
-// end records that sweep id finished.
-func (w *sweepWatch) end(id int) {
+// finish records that the sweep that began at started has finished.
+func (w *sweepWatch) finish(started time.Time) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
-	delete(w.open, id)
+	if started.After(w.last) {
+		w.last = started
+	}
 }
 
-// setInRunDue records whether sweep id is inside RunDue, waiting on
-// backups.
-func (w *sweepWatch) setInRunDue(id int, in bool) {
+// stalled reports whether no sweep that began within limit of now has
+// finished, and since when the scheduler last showed progress (the start
+// of the newest finished sweep, or of the first sweep if none has).
+func (w *sweepWatch) stalled(now time.Time, limit time.Duration) (since time.Time, stalled bool) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
-	if s := w.open[id]; s != nil {
-		s.inRunDue = in
+	since = w.last
+	if since.IsZero() {
+		since = w.first
 	}
-}
-
-// stuck reports whether some sweep has been open longer than limit at
-// now without an excuse (see sweepWatch). backupsRunning is asked only
-// when a sweep inside RunDue is past the limit; if it fails or says no,
-// that sweep counts as stuck. It returns the oldest stuck sweep's start.
-func (w *sweepWatch) stuck(now time.Time, limit time.Duration, backupsRunning func() bool) (time.Time, bool) {
-	w.mu.Lock()
-	var overdue []openSweep
-	for _, s := range w.open {
-		if now.Sub(s.started) > limit {
-			overdue = append(overdue, *s)
-		}
-	}
-	w.mu.Unlock()
-	var oldest time.Time
-	found := false
-	excuse, asked := false, false
-	for _, s := range overdue {
-		if s.inRunDue {
-			if !asked {
-				excuse, asked = backupsRunning(), true
-			}
-			if excuse {
-				continue
-			}
-		}
-		if !found || s.started.Before(oldest) {
-			oldest, found = s.started, true
-		}
-	}
-	return oldest, found
+	return since, now.Sub(since) > limit
 }
 
 // changed records whether the heartbeat is being held back and reports
@@ -113,24 +82,4 @@ func (w *sweepWatch) changed(held bool) bool {
 	}
 	w.reported = held
 	return true
-}
-
-type sweepCtxKey struct{}
-
-type sweepRef struct {
-	w  *sweepWatch
-	id int
-}
-
-// withSweep marks ctx as belonging to sweep id of w.
-func withSweep(ctx context.Context, w *sweepWatch, id int) context.Context {
-	return context.WithValue(ctx, sweepCtxKey{}, sweepRef{w, id})
-}
-
-// markRunDue tells the watch (if ctx carries one) that the sweep is
-// entering or leaving RunDue. Outside the daemon's loop it does nothing.
-func markRunDue(ctx context.Context, in bool) {
-	if r, ok := ctx.Value(sweepCtxKey{}).(sweepRef); ok {
-		r.w.setInRunDue(r.id, in)
-	}
 }

@@ -1108,63 +1108,145 @@ func heartbeatServer(t *testing.T, hits *atomic.Int32) *heartbeat.Pinger {
 	return &heartbeat.Pinger{Credential: func() (string, error) { return srv.URL, nil }, Interval: 5 * time.Minute}
 }
 
-// TestHeartbeatStopsWhenASweepNeverReturns: the loop keeps ticking, but a
-// sweep that hangs with no backup to blame stops the heartbeat once it
-// is older than the limit (spec §21.7: "a stuck loop").
-func TestHeartbeatStopsWhenASweepNeverReturns(t *testing.T) {
+// lastFinished reports when the newest sweep that completed began.
+func lastFinished(a *app) time.Time {
+	a.sweeps.mu.Lock()
+	defer a.sweeps.mu.Unlock()
+	return a.sweeps.last
+}
+
+// waitSweepFinished waits until the sweep started at tick time at has
+// completed, so the next virtual minute sees it, as it would in real
+// time.
+func waitSweepFinished(t *testing.T, a *app, at time.Time) {
+	t.Helper()
+	waitFor(t, func() bool { return !lastFinished(a).Before(at) })
+}
+
+// TestHeartbeatStopsWhenEverySweepHangs: the loop keeps ticking, but
+// every sweep blocks on something they all need (a database lock, a
+// deadlock), so none completes and the heartbeat stops once the limit
+// has passed (spec §21.7: "a stuck loop").
+func TestHeartbeatStopsWhenEverySweepHangs(t *testing.T) {
 	var hits atomic.Int32
 	a := sweepApp(t, engine.SUCCESS)
 	a.logw = &syncBuf{}
-	a.ops.Coord = a.coord
 	a.heartbeat = heartbeatServer(t, &hits)
+	var shared sync.Mutex // what every sweep needs
+	shared.Lock()
 	old := sweepRun
-	sweepRun = func(ctx context.Context, _ *app, _ time.Time) error { <-ctx.Done(); return ctx.Err() }
+	sweepRun = func(ctx context.Context, _ *app, _ time.Time) error {
+		got := make(chan struct{})
+		go func() { shared.Lock(); shared.Unlock(); close(got) }()
+		select {
+		case <-got:
+		case <-ctx.Done(): // shutdown, so the loop can stop
+		}
+		return nil
+	}
 	t.Cleanup(func() { sweepRun = old })
+	t.Cleanup(shared.Unlock) // frees the helper goroutines
 
 	got := pingMinutes(t, a, &hits, 20, map[int]int32{0: 1, 5: 2, 10: 3}, nil)
 	if got != 3 {
-		t.Fatalf("pings = %d, want 3 (minutes 0, 5 and 10, then none once the sweep is past %s)", got, sweepStuckLimit)
+		t.Fatalf("pings = %d, want 3 (minutes 0, 5 and 10, then none once no sweep has finished for %s)", got, sweepStuckLimit)
 	}
 	if !strings.Contains(a.logw.(*syncBuf).String(), "heartbeat is paused") {
 		t.Errorf("log = %q, want one line saying the heartbeat is paused", a.logw)
 	}
 }
 
-// TestHeartbeatContinuesDuringALongBackup: a sweep that is only waiting
-// on a backup that is really running (its run lock is held) is not
-// stuck, however long the backup takes.
+// longFirstSweep makes sweepRun block the sweep of the first tick in
+// after (simulating long work that follows RunDue, or a long backup)
+// while every later sweep runs the real sweepDue.
+func longFirstSweep(t *testing.T, after func(ctx context.Context, a *app)) {
+	t.Helper()
+	old := sweepRun
+	var started atomic.Bool
+	sweepRun = func(ctx context.Context, a *app, now time.Time) error {
+		first := !started.Swap(true)
+		err := old(ctx, a, now)
+		if first {
+			after(ctx, a)
+		}
+		return err
+	}
+	t.Cleanup(func() { sweepRun = old })
+}
+
+// pingWhileFirstSweepIsLong runs 26 virtual minutes in which the first
+// sweep never finishes and every later one does, and returns the pings.
+func pingWhileFirstSweepIsLong(t *testing.T, a *app, hits *atomic.Int32) int32 {
+	t.Helper()
+	t0 := time.Date(2026, 3, 5, 3, 0, 20, 0, time.UTC)
+	return pingMinutes(t, a, hits, 25, map[int]int32{0: 1, 5: 2, 10: 3, 15: 4, 20: 5, 25: 6}, func(i int) {
+		if i > 0 {
+			waitSweepFinished(t, a, t0.Add(time.Duration(i)*time.Minute))
+		}
+	})
+}
+
+// TestHeartbeatContinuesDuringALongHealthCheck: the repository health
+// check and the other work sweepDue does after RunDue can take half an
+// hour. That is not a stuck daemon, because newer sweeps go on
+// finishing.
+func TestHeartbeatContinuesDuringALongHealthCheck(t *testing.T) {
+	var hits atomic.Int32
+	a := sweepApp(t, engine.SUCCESS)
+	a.logw = &syncBuf{}
+	a.heartbeat = heartbeatServer(t, &hits)
+	longFirstSweep(t, func(ctx context.Context, _ *app) { <-ctx.Done() })
+
+	if got := pingWhileFirstSweepIsLong(t, a, &hits); got != 6 {
+		t.Fatalf("pings = %d, want 6 (every 5 minutes while the health check runs)", got)
+	}
+	if strings.Contains(a.logw.(*syncBuf).String(), "heartbeat is paused") {
+		t.Errorf("log = %q, the heartbeat must not pause for a long health check", a.logw)
+	}
+}
+
+// TestHeartbeatContinuesDuringALongPruneAfterSuccess: retention's
+// forget --prune runs after the run is marked SUCCESS, still holding
+// the run lock, and can take tens of minutes against a remote
+// repository.
+func TestHeartbeatContinuesDuringALongPruneAfterSuccess(t *testing.T) {
+	var hits atomic.Int32
+	a := sweepApp(t, engine.SUCCESS)
+	a.logw = &syncBuf{}
+	a.ops.Coord = a.coord
+	a.heartbeat = heartbeatServer(t, &hits)
+	inner := a.coord.Runner
+	a.coord.Runner = scheduler.RunnerFunc(func(ctx context.Context, service string) (engine.State, error) {
+		state, err := inner.Run(ctx, service) // marked SUCCESS
+		<-ctx.Done()                          // ...then pruning, lock still held
+		return state, err
+	})
+
+	if got := pingWhileFirstSweepIsLong(t, a, &hits); got != 6 {
+		t.Fatalf("pings = %d, want 6 (every 5 minutes while the prune runs)", got)
+	}
+}
+
+// TestHeartbeatContinuesDuringALongBackup: a sweep waiting on a backup
+// for hours does not stop the heartbeat, because the next minute's
+// sweep skips the busy service and finishes.
 func TestHeartbeatContinuesDuringALongBackup(t *testing.T) {
 	var hits atomic.Int32
 	a := sweepApp(t, engine.SUCCESS)
 	a.logw = &syncBuf{}
 	a.ops.Coord = a.coord
 	a.heartbeat = heartbeatServer(t, &hits)
-	started := make(chan struct{})
 	a.coord.Runner = scheduler.RunnerFunc(func(ctx context.Context, service string) (engine.State, error) {
 		m, err := engine.StartRun(a.store.DB(), service)
 		if err != nil {
 			return engine.FAILED, err
 		}
-		close(started)
 		<-ctx.Done() // a backup that outlasts the whole test
 		_ = m.Transition(engine.FAILED, "test over")
 		return engine.FAILED, ctx.Err()
 	})
 
-	got := pingMinutes(t, a, &hits, 25, map[int]int32{0: 1, 5: 2, 10: 3, 15: 4, 20: 5, 25: 6}, func(i int) {
-		if i == 0 {
-			<-started
-			return
-		}
-		// Ticks here arrive instantly, so let the quick sweeps of the
-		// earlier ticks finish: only the backup's sweep stays open.
-		waitFor(t, func() bool {
-			a.sweeps.mu.Lock()
-			defer a.sweeps.mu.Unlock()
-			return len(a.sweeps.open) <= 1
-		})
-	})
-	if got != 6 {
+	if got := pingWhileFirstSweepIsLong(t, a, &hits); got != 6 {
 		t.Fatalf("pings = %d, want 6 (every 5 minutes while the backup runs)", got)
 	}
 }
