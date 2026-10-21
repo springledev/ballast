@@ -187,15 +187,7 @@ func openApp(cfg config.Config, logw io.Writer) (*app, error) {
 		DB:    st.DB(),
 		Locks: scheduler.FileLocker{Dir: filepath.Join(cfg.DataDir, "locks")},
 		Runner: scheduler.RunnerFunc(func(ctx context.Context, service string) (engine.State, error) {
-			// A leftover v0.5 service with the same name is quarantined:
-			// it runs as the ordinary service it is, not as the
-			// settings backup.
-			if service == api.SelfBackupService {
-				if active, err := ops.SelfBackupActive(); err == nil && active {
-					return ops.RunSelfBackup(ctx)
-				}
-			}
-			return realRunner.Run(ctx, service)
+			return dispatchRun(ctx, ops, realRunner, service)
 		}),
 		Log:         logw,
 		MaxParallel: cfg.MaxParallelJobs,
@@ -350,4 +342,28 @@ func loadOptionalCredential(dirs []string, name string) (string, error) {
 		return "", nil
 	}
 	return "", err
+}
+
+// selfRunner is the part of api.Ops that decides and runs Ballast's own
+// settings backup.
+type selfRunner interface {
+	SelfBackupActive() (bool, error)
+	RunSelfBackup(ctx context.Context) (engine.State, error)
+}
+
+// dispatchRun runs service through base, except that the reserved
+// settings-backup name runs as the settings backup. A leftover v0.5
+// service with that name is quarantined: it runs as the ordinary service
+// it is. If Ballast cannot tell which it is (for example the status
+// database is briefly busy) the settings backup is still attempted, which
+// re-checks and either runs or reports the problem: the run is never
+// handed to base, which has no service of that name and would skip the
+// backup without a trace.
+func dispatchRun(ctx context.Context, ops selfRunner, base scheduler.Runner, service string) (engine.State, error) {
+	if service == api.SelfBackupService {
+		if active, err := ops.SelfBackupActive(); err != nil || active {
+			return ops.RunSelfBackup(ctx)
+		}
+	}
+	return base.Run(ctx, service)
 }

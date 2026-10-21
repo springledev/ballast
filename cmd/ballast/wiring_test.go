@@ -12,6 +12,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/springledev/ballast/internal/api"
+	"github.com/springledev/ballast/internal/engine"
 	"github.com/springledev/ballast/internal/inventory"
 )
 
@@ -172,5 +174,59 @@ func TestDestinationSetupLockedAcrossApps(t *testing.T) {
 	}
 	if _, err := inventory.GetDestination(other.store.DB(), "local"); !errors.Is(err, inventory.ErrNotFound) {
 		t.Errorf("GetDestination: err = %v, want ErrNotFound (nothing may be written while the lock is held elsewhere)", err)
+	}
+}
+
+type stubSelf struct {
+	active    bool
+	activeErr error
+	runErr    error
+	selfRuns  int
+}
+
+func (s *stubSelf) SelfBackupActive() (bool, error) { return s.active, s.activeErr }
+func (s *stubSelf) RunSelfBackup(context.Context) (engine.State, error) {
+	s.selfRuns++
+	if s.runErr != nil {
+		return engine.FAILED, s.runErr
+	}
+	return engine.SUCCESS, nil
+}
+
+type stubBase struct{ ran []string }
+
+func (b *stubBase) Run(_ context.Context, service string) (engine.State, error) {
+	b.ran = append(b.ran, service)
+	return engine.SUCCESS, nil
+}
+
+// TestDispatchRun: the settings backup is never handed to the ordinary
+// pipeline (which would fail with "service not found" and skip the
+// backup), even when Ballast cannot tell right now whether the name is
+// reserved.
+func TestDispatchRun(t *testing.T) {
+	busy := errors.New("database is locked")
+	tests := []struct {
+		name         string
+		service      string
+		self         stubSelf
+		wantSelfRuns int
+		wantBase     int
+		wantErr      error
+	}{
+		{"settings backup", api.SelfBackupService, stubSelf{active: true}, 1, 0, nil},
+		{"leftover service of that name", api.SelfBackupService, stubSelf{active: false}, 0, 1, nil},
+		{"cannot tell, still the settings backup", api.SelfBackupService, stubSelf{activeErr: busy}, 1, 0, nil},
+		{"cannot tell and the run fails, error surfaces", api.SelfBackupService, stubSelf{activeErr: busy, runErr: busy}, 1, 0, busy},
+		{"ordinary service", "immich", stubSelf{active: true}, 0, 1, nil},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			base := &stubBase{}
+			_, err := dispatchRun(context.Background(), &tt.self, base, tt.service)
+			if !errors.Is(err, tt.wantErr) || tt.self.selfRuns != tt.wantSelfRuns || len(base.ran) != tt.wantBase {
+				t.Errorf("err=%v selfRuns=%d baseRuns=%v; want err=%v selfRuns=%d baseRuns=%d", err, tt.self.selfRuns, base.ran, tt.wantErr, tt.wantSelfRuns, tt.wantBase)
+			}
+		})
 	}
 }
