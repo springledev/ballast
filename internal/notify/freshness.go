@@ -6,6 +6,8 @@ import (
 	"errors"
 	"fmt"
 	"time"
+
+	"github.com/springledev/ballast/internal/store"
 )
 
 // FreshnessChecker checks whether a service's most recent verified
@@ -41,7 +43,7 @@ func (f *FreshnessChecker) LastSuccessfulRun(service string) (time.Time, error) 
 		SELECT r.finished_at
 		FROM runs r
 		JOIN jobs j ON j.id = r.job_id
-		WHERE j.service = ? AND r.state = 'SUCCESS'
+		WHERE j.service = ? AND r.state = 'SUCCESS' AND `+store.RunsAfterFloorSQL+`
 		ORDER BY r.finished_at DESC
 		LIMIT 1
 	`, service).Scan(&finishedAt)

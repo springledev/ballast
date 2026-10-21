@@ -904,15 +904,42 @@ func ListProjects(db *sql.DB) ([]string, error) {
 	return out, nil
 }
 
-// DeleteService removes a service. Nothing else references a service
-// by name, so no ErrInUse case exists here (unlike DeleteDestination).
+// DeleteService removes a service and everything keyed to it by name
+// only (no foreign key): its schedule, trigger token and alert
+// bookkeeping, so a later service with the same name does not inherit
+// them. Its run history stays in the database, but is fenced off with a
+// history floor (store.HistoryFloorKeyPrefix) so the new service's status
+// is not coloured by the old one's runs. Nothing else references a
+// service by name, so no ErrInUse case exists here (unlike
+// DeleteDestination).
 func DeleteService(db *sql.DB, name string) error {
-	res, err := db.Exec(`DELETE FROM services WHERE name = ?`, name)
+	tx, err := db.Begin()
+	if err != nil {
+		return fmt.Errorf("deleting service %s: %w", name, err)
+	}
+	defer tx.Rollback()
+	res, err := tx.Exec(`DELETE FROM services WHERE name = ?`, name)
 	if err != nil {
 		return fmt.Errorf("deleting service %s: %w", name, err)
 	}
 	if n, _ := res.RowsAffected(); n == 0 {
 		return fmt.Errorf("service %s: %w", name, ErrNotFound)
+	}
+	for _, table := range []string{"schedules", "trigger_tokens", "alert_state", "alert_decisions", "freshness_alerts"} {
+		if _, err := tx.Exec(`DELETE FROM `+table+` WHERE service = ?`, name); err != nil {
+			return fmt.Errorf("deleting service %s: clearing %s: %w", name, table, err)
+		}
+	}
+	if _, err := tx.Exec(`
+		INSERT INTO meta (key, value)
+		SELECT ?, CAST(MAX(r.id) AS TEXT) FROM runs r JOIN jobs j ON j.id = r.job_id WHERE j.service = ?
+		HAVING MAX(r.id) IS NOT NULL
+		ON CONFLICT(key) DO UPDATE SET value = excluded.value`,
+		store.HistoryFloorKeyPrefix+name, name); err != nil {
+		return fmt.Errorf("deleting service %s: fencing off its run history: %w", name, err)
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("deleting service %s: %w", name, err)
 	}
 	return nil
 }

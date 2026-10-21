@@ -5,6 +5,8 @@ import (
 	"errors"
 	"fmt"
 	"time"
+
+	"github.com/springledev/ballast/internal/store"
 )
 
 // LatestRun describes the most recently started run for a service, as
@@ -39,7 +41,7 @@ func LastStartedRun(db *sql.DB, service string) (LatestRun, error) {
 	err := db.QueryRow(`
 		SELECT r.id, r.started_at, r.finished_at, r.waiting FROM runs r
 		JOIN jobs j ON j.id = r.job_id
-		WHERE j.service = ?
+		WHERE j.service = ? AND `+store.RunsAfterFloorSQL+`
 		ORDER BY r.id DESC LIMIT 1`, service,
 	).Scan(&id, &started, &finished, &waiting)
 	if errors.Is(err, sql.ErrNoRows) {

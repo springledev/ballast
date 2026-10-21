@@ -221,3 +221,14 @@ func migrationVersion(entry string) (int64, error) {
 	}
 	return v, nil
 }
+
+// HistoryFloorKeyPrefix starts the meta key ("history_floor:<service>")
+// that holds the newest run id belonging to a service that has since been
+// removed. Removing a service keeps its run history, but a later service
+// with the same name starts clean: status and freshness queries only look
+// at runs newer than this floor.
+const HistoryFloorKeyPrefix = "history_floor:"
+
+// RunsAfterFloorSQL is a SQL condition for queries over runs r joined to
+// jobs j: it keeps only runs newer than the service's history floor.
+const RunsAfterFloorSQL = `r.id > COALESCE((SELECT CAST(m.value AS INTEGER) FROM meta m WHERE m.key = '` + HistoryFloorKeyPrefix + `' || j.service), 0)`

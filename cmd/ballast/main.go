@@ -85,9 +85,7 @@ var serveCmd = &cobra.Command{
 			return err
 		}
 		defer a.Close()
-		if err := a.ops.ReservedNameConflict(); err != nil {
-			return err
-		}
+		a.warnReservedName()
 		tokenDir := execrunner.FindCredentialDir(apiTokenCredential, cfg.CredentialDirs()...)
 		tokenPath := filepath.Join(tokenDir, apiTokenCredential)
 		if a.apiToken == "" {
@@ -503,9 +501,7 @@ var runDueCmd = &cobra.Command{
 			return err
 		}
 		return withApp(cfg, cmd.ErrOrStderr(), func(a *app) error {
-			if err := a.ops.ReservedNameConflict(); err != nil {
-				return err
-			}
+			a.warnReservedName()
 			return sweepDue(cmd.Context(), a, time.Now())
 		})
 	},

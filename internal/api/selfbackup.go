@@ -62,12 +62,18 @@ type selfStaging struct {
 
 func (s *selfStaging) remove() { _ = os.RemoveAll(s.dir) }
 
-// ReservedNameConflict returns a plain-English error when a service
-// named like the self-backup (SelfBackupService) exists. Ballast before
-// v0.6 allowed that name; now the scheduled settings backup owns it, so
-// the old service would be hijacked and shown twice. Nothing is renamed
-// or deleted automatically: the owner decides. It returns nil when
-// there is no conflict.
+// ErrReservedName is wrapped by the error ReservedNameConflict returns.
+var ErrReservedName = errors.New("a service uses the name reserved for Ballast's own settings backup")
+
+// ReservedNameConflict returns a plain-English error (wrapping
+// ErrReservedName) when a service named like the self-backup
+// (SelfBackupService) exists. Ballast before v0.6 allowed that name.
+// Nothing is renamed or deleted automatically: the owner decides.
+// Meanwhile the conflict is quarantined: the leftover service keeps
+// running as an ordinary service, every other service is unaffected,
+// and the settings backup stays off (it is not scheduled, not run, and
+// not listed) until the service is renamed or removed. It returns nil
+// when there is no conflict; a failure to look is returned unwrapped.
 func (o *Ops) ReservedNameConflict() error {
 	_, err := inventory.GetService(o.DB, SelfBackupService)
 	if errors.Is(err, inventory.ErrNotFound) {
@@ -76,7 +82,20 @@ func (o *Ops) ReservedNameConflict() error {
 	if err != nil {
 		return fmt.Errorf("checking for a service named %s: %w", SelfBackupService, err)
 	}
-	return fmt.Errorf("a service is named %s, but Ballast now uses that name for backing up its own settings, so that service cannot be backed up. Add the same service again under another name, then remove this one with `ballast service remove %s`. Your existing backups in the destinations are not touched", SelfBackupService, SelfBackupService)
+	return fmt.Errorf("%w: a service is named %s, but Ballast now uses that name for backing up its own settings. That service still backs up as before and all your other services are unaffected, but Ballast's own settings are NOT being backed up until you fix this: add the same service again under another name, then remove this one with `ballast service remove %s`. Your existing backups in the destinations are not touched", ErrReservedName, SelfBackupService, SelfBackupService)
+}
+
+// SelfBackupActive reports whether the settings backup may run: false
+// while a leftover service holds its name.
+func (o *Ops) SelfBackupActive() (bool, error) {
+	err := o.ReservedNameConflict()
+	switch {
+	case err == nil:
+		return true, nil
+	case errors.Is(err, ErrReservedName):
+		return false, nil
+	}
+	return false, err
 }
 
 // selfStagePrefix starts the name of every self-backup staging folder
@@ -289,6 +308,9 @@ func (o *Ops) SelfBackup(ctx context.Context, destination string) (SelfBackupRes
 	if o.WorkRoot == "" {
 		return res, fmt.Errorf("self-backup: no work directory is configured (internal wiring error)")
 	}
+	if err := o.ReservedNameConflict(); err != nil {
+		return res, fmt.Errorf("self-backup to %s: %w", destination, err)
+	}
 	unlock, err := o.lockSelf()
 	if err != nil {
 		return res, fmt.Errorf("self-backup to %s: %w", destination, err)
@@ -385,6 +407,9 @@ func (o *Ops) RunSelfBackup(ctx context.Context) (engine.State, error) {
 	const svc = SelfBackupService
 	if o.WorkRoot == "" {
 		return "", fmt.Errorf("%s: no work directory is configured (internal wiring error)", svc)
+	}
+	if err := o.ReservedNameConflict(); err != nil {
+		return "", fmt.Errorf("%s: %w", svc, err)
 	}
 	dests, err := o.selfDestinations()
 	if err != nil {
@@ -542,6 +567,9 @@ func (o *Ops) RunSelfBackup(ctx context.Context) (engine.State, error) {
 // first backup happens at the next scheduled time, or when the operator
 // runs it ("ballast backup ballast-self").
 func (o *Ops) EnsureSelfBackupSchedule(ctx context.Context, now time.Time) error {
+	if active, err := o.SelfBackupActive(); err != nil || !active {
+		return err
+	}
 	jobs, err := scheduler.ListSchedules(o.DB)
 	if err != nil {
 		return fmt.Errorf("self-backup schedule: %w", err)

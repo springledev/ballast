@@ -1024,3 +1024,47 @@ func TestProtonDriveDestination(t *testing.T) {
 		})
 	}
 }
+
+// TestDeleteServiceClearsNameKeyedState: schedule, trigger token and
+// alert bookkeeping are keyed by service name with no foreign key, so
+// removing a service must remove them too; otherwise a new service (or
+// Ballast's own settings backup) with the same name would inherit them.
+func TestDeleteServiceClearsNameKeyedState(t *testing.T) {
+	db := openDB(t).DB()
+	if err := PutDestination(db, Destination{Name: "local", Location: "/srv/backups", KeepDaily: 7}); err != nil {
+		t.Fatal(err)
+	}
+	if err := PutService(db, Service{Name: "vault", CatalogEntry: "folder", Destination: "local", Params: map[string]string{"path": "/x"}}); err != nil {
+		t.Fatal(err)
+	}
+	for _, q := range []string{
+		`INSERT INTO schedules (service, cron_expr, enabled, updated_at) VALUES ('vault', '* * * * *', 1, 'x')`,
+		`INSERT INTO trigger_tokens (service, token_hash, created_at) VALUES ('vault', 'h', 'x')`,
+		`INSERT INTO alert_state (service, last_alert_at) VALUES ('vault', 'x')`,
+		`INSERT INTO alert_decisions (service, at, type, outcome) VALUES ('vault', 'x', 'failure', 'sent')`,
+		`INSERT INTO freshness_alerts (service, last_checked_at, is_stale) VALUES ('vault', 'x', 1)`,
+		// Another service's rows must stay.
+		`INSERT INTO schedules (service, cron_expr, enabled, updated_at) VALUES ('other', '* * * * *', 1, 'x')`,
+		`INSERT INTO alert_state (service, last_alert_at) VALUES ('other', 'x')`,
+	} {
+		if _, err := db.Exec(q); err != nil {
+			t.Fatalf("%s: %v", q, err)
+		}
+	}
+	if err := DeleteService(db, "vault"); err != nil {
+		t.Fatal(err)
+	}
+	for _, table := range []string{"schedules", "trigger_tokens", "alert_state", "alert_decisions", "freshness_alerts"} {
+		var n int
+		if err := db.QueryRow(`SELECT COUNT(*) FROM ` + table + ` WHERE service = 'vault'`).Scan(&n); err != nil {
+			t.Fatal(err)
+		}
+		if n != 0 {
+			t.Errorf("%s still has %d row(s) for the removed service", table, n)
+		}
+	}
+	var n int
+	if err := db.QueryRow(`SELECT (SELECT COUNT(*) FROM schedules WHERE service='other') + (SELECT COUNT(*) FROM alert_state WHERE service='other')`).Scan(&n); err != nil || n != 2 {
+		t.Errorf("another service's rows = %d, %v; want untouched (2)", n, err)
+	}
+}

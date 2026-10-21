@@ -460,7 +460,11 @@ func (o *Ops) RunningServices(ctx context.Context) ([]string, error) {
 // `ballast status --verify`").
 func (o *Ops) Status(ctx context.Context, service string, withVerify bool) ([]ServiceStatus, error) {
 	var services []inventory.Service
-	if service == SelfBackupService {
+	selfActive, err := o.SelfBackupActive()
+	if err != nil {
+		return nil, err
+	}
+	if service == SelfBackupService && selfActive {
 		s, err := o.selfService()
 		if err != nil {
 			return nil, err
@@ -489,7 +493,7 @@ func (o *Ops) Status(ctx context.Context, service string, withVerify bool) ([]Se
 		scheduleByService[s.Service] = s
 	}
 
-	if service == "" {
+	if service == "" && selfActive {
 		// Ballast's own settings backup gets a light of its own once it
 		// is scheduled or has run.
 		_, scheduled := scheduleByService[SelfBackupService]
@@ -513,7 +517,7 @@ func (o *Ops) Status(ctx context.Context, service string, withVerify bool) ([]Se
 		if err != nil {
 			return nil, err
 		}
-		st.Self = s.Name == SelfBackupService
+		st.Self = selfActive && s.Name == SelfBackupService
 		if st.Self && len(st.Tiers) > 0 && st.Tiers[0].LastRunID == 0 {
 			st.FirstRunPending = true
 			if sc := scheduleByService[s.Name]; sc.Enabled {

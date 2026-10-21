@@ -78,6 +78,15 @@ func (a *app) redact(s string) string {
 	return a.secrets.Redact(s)
 }
 
+// warnReservedName logs, in plain English, that a leftover service holds
+// the name of the settings backup. It never stops anything: every service
+// keeps running, and only the settings backup stays off until it is fixed.
+func (a *app) warnReservedName() {
+	if err := a.ops.ReservedNameConflict(); err != nil {
+		a.logf("WARNING: %v", err)
+	}
+}
+
 // logf writes one redacted, plain-English line to the app's log
 // writer (os.Stderr when unset).
 func (a *app) logf(format string, args ...any) {
@@ -178,8 +187,13 @@ func openApp(cfg config.Config, logw io.Writer) (*app, error) {
 		DB:    st.DB(),
 		Locks: scheduler.FileLocker{Dir: filepath.Join(cfg.DataDir, "locks")},
 		Runner: scheduler.RunnerFunc(func(ctx context.Context, service string) (engine.State, error) {
+			// A leftover v0.5 service with the same name is quarantined:
+			// it runs as the ordinary service it is, not as the
+			// settings backup.
 			if service == api.SelfBackupService {
-				return ops.RunSelfBackup(ctx)
+				if active, err := ops.SelfBackupActive(); err == nil && active {
+					return ops.RunSelfBackup(ctx)
+				}
 			}
 			return realRunner.Run(ctx, service)
 		}),

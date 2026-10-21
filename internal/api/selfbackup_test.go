@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"errors"
+	"github.com/springledev/ballast/internal/engine"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -11,6 +12,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/springledev/ballast/internal/inventory"
 	"github.com/springledev/ballast/internal/scheduler"
@@ -307,5 +309,93 @@ func TestSelfBackupHandlerBusyIs409(t *testing.T) {
 	NewHandler(h.ops, testAPIToken).ServeHTTP(rec, req)
 	if rec.Code != http.StatusConflict {
 		t.Fatalf("status = %d (%s), want 409", rec.Code, rec.Body.String())
+	}
+}
+
+// TestLeftoverServiceQuarantinesSelfBackup: while a service named like
+// the self-backup exists, the settings backup is off (not scheduled,
+// refused when asked) and the service is listed once, as the user's own
+// service.
+func TestLeftoverServiceQuarantinesSelfBackup(t *testing.T) {
+	h := newHarness(t)
+	h.ops.WorkRoot = filepath.Join(t.TempDir(), "work")
+	legacySelfNamedService(t, h)
+	ctx := context.Background()
+
+	if err := h.ops.EnsureSelfBackupSchedule(ctx, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	jobs, err := scheduler.ListSchedules(h.ops.DB)
+	if err != nil || len(jobs) != 0 {
+		t.Fatalf("schedules = %+v, %v; want none created over the leftover service", jobs, err)
+	}
+	if _, err := h.ops.SelfBackup(ctx, "local"); !errors.Is(err, ErrReservedName) {
+		t.Fatalf("SelfBackup = %v, want ErrReservedName", err)
+	}
+	if state, err := h.ops.RunSelfBackup(ctx); !errors.Is(err, ErrReservedName) {
+		t.Fatalf("RunSelfBackup = %v, %v; want ErrReservedName", state, err)
+	}
+	if runs, _ := engine.LastStartedRun(h.ops.DB, SelfBackupService); runs.RunID != 0 {
+		t.Fatalf("a run was recorded for the leftover service's name: %+v", runs)
+	}
+	for _, name := range []string{"", SelfBackupService} {
+		sts, err := h.ops.Status(ctx, name, false)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(sts) != 1 || sts[0].Service != SelfBackupService || sts[0].Self || sts[0].FirstRunPending {
+			t.Fatalf("Status(%q) = %+v, want one ordinary service entry", name, sts)
+		}
+	}
+}
+
+// TestRemovedServiceDoesNotColourSelfBackup: runs of an old service that
+// had the self-backup's name stay in history but do not colour the
+// self-backup's light, and its schedule and alert rows are gone.
+func TestRemovedServiceDoesNotColourSelfBackup(t *testing.T) {
+	h := newHarness(t)
+	h.ops.WorkRoot = filepath.Join(t.TempDir(), "work")
+	legacySelfNamedService(t, h)
+	ctx := context.Background()
+	m, err := engine.StartRun(h.ops.DB, SelfBackupService)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := m.Transition(engine.PREPARING, "p"); err != nil {
+		t.Fatal(err)
+	}
+	if err := m.Transition(engine.FAILED, "old service failed"); err != nil {
+		t.Fatal(err)
+	}
+	if err := scheduler.SetSchedule(h.ops.DB, SelfBackupService, "0 1 * * *"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := h.ops.DB.Exec(`INSERT INTO alert_state (service, last_alert_at) VALUES (?, 'x')`, SelfBackupService); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := h.ops.DeleteService(ctx, SelfBackupService); err != nil {
+		t.Fatal(err)
+	}
+	if jobs, _ := scheduler.ListSchedules(h.ops.DB); len(jobs) != 0 {
+		t.Fatalf("schedule survived the removal: %+v", jobs)
+	}
+	if err := h.ops.EnsureSelfBackupSchedule(ctx, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	sts, err := h.ops.Status(ctx, "", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(sts) != 1 || !sts[0].Self {
+		t.Fatalf("status = %+v, want just the self-backup", sts)
+	}
+	if tier := sts[0].Tiers[0]; tier.Light != "none" || tier.LastRunID != 0 {
+		t.Fatalf("self-backup tier = %+v, want no light and no run: the old service's failed run must not colour it", tier)
+	}
+	if last, _ := engine.LastStartedRun(h.ops.DB, SelfBackupService); last.RunID != 0 {
+		// History stays in the database under the service's name, but
+		// status-facing queries must skip it.
+		t.Fatalf("LastStartedRun still returns the removed service's run %d", last.RunID)
 	}
 }

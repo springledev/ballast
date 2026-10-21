@@ -781,10 +781,11 @@ func TestUntaggedBuildReportsCommit(t *testing.T) {
 	}
 }
 
-// TestRunDueRefusesReservedServiceName: a service called ballast-self
-// (allowed before v0.6) would be hijacked by the settings backup, so
-// run-due refuses to run anything and says how to fix it.
-func TestRunDueRefusesReservedServiceName(t *testing.T) {
+// TestRunDueQuarantinesReservedServiceName: a leftover service called
+// ballast-self (allowed before v0.6) must not stop every other service's
+// backups. run-due starts, runs the other service, says plainly what is
+// wrong, and does not schedule the settings backup on top of it.
+func TestRunDueQuarantinesReservedServiceName(t *testing.T) {
 	r := &spyRunner{}
 	data := cliEnv(t, r)
 	withDB(t, data, func(s *store.Store) {
@@ -801,15 +802,29 @@ func TestRunDueRefusesReservedServiceName(t *testing.T) {
 		if _, err := s.DB().Exec(`UPDATE services SET name = 'ballast-self' WHERE name = 'old-name'`); err != nil {
 			t.Fatal(err)
 		}
-		if err := scheduler.SetSchedule(s.DB(), "ballast-self", "* * * * *"); err != nil {
+		if err := scheduler.SetSchedule(s.DB(), "immich", "* * * * *"); err != nil {
 			t.Fatal(err)
 		}
 	})
-	out, err := execCLI(t, "run-due")
-	if err == nil || !strings.Contains(err.Error(), "ballast-self") || !strings.Contains(err.Error(), "another name") {
-		t.Fatalf("run-due = %v (output %q), want a refusal naming ballast-self", err, out)
+	_, stderr, err := execCLISplit(t, "run-due")
+	if err != nil {
+		t.Fatalf("run-due = %v, want it to start and run the other services", err)
 	}
-	if len(r.ran) != 0 {
-		t.Errorf("ran = %v, want nothing run", r.ran)
+	if len(r.ran) != 1 || r.ran[0] != "immich" {
+		t.Errorf("ran = %v, want [immich]", r.ran)
 	}
+	if !strings.Contains(stderr, "ballast-self") || !strings.Contains(stderr, "another name") {
+		t.Errorf("stderr %q should explain the name conflict", stderr)
+	}
+	withDB(t, data, func(s *store.Store) {
+		jobs, err := scheduler.ListSchedules(s.DB())
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, j := range jobs {
+			if j.Service == "ballast-self" {
+				t.Errorf("the settings backup was scheduled over the leftover service: %+v", j)
+			}
+		}
+	})
 }
