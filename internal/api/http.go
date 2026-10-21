@@ -167,7 +167,7 @@ func (h *handler) writeErr(w http.ResponseWriter, err error, defaultStatus int) 
 	switch {
 	case errors.Is(err, inventory.ErrNotFound):
 		status = http.StatusNotFound
-	case errors.Is(err, inventory.ErrInUse), errors.Is(err, scheduler.ErrAlreadyRunning), errors.Is(err, repohealth.ErrBusy), errors.Is(err, ErrSelfBackupRunning), errors.Is(err, ErrReservedName):
+	case errors.Is(err, inventory.ErrInUse), errors.Is(err, scheduler.ErrAlreadyRunning), errors.Is(err, repohealth.ErrBusy), errors.Is(err, ErrSelfBackupRunning), errors.Is(err, ErrReservedName), errors.Is(err, inventory.ErrReservedName):
 		status = http.StatusConflict
 	case errors.Is(err, ErrValidation):
 		status = http.StatusBadRequest

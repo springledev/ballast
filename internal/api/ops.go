@@ -1163,8 +1163,21 @@ func (o *Ops) resolvedEntry(ctx context.Context, name string) (inventory.Service
 	return s, entry, nil
 }
 
-// DeleteService removes a configured service.
+// DeleteService removes a configured service. It refuses (wrapping
+// scheduler.ErrAlreadyRunning, a 409) while the service is backing up,
+// and holds the service's run lock while it removes it, so no backup can
+// start halfway through.
 func (o *Ops) DeleteService(ctx context.Context, name string) error {
+	if o.Coord != nil && o.Coord.Locks != nil {
+		release, err := o.Coord.Lock(ctx, name)
+		if errors.Is(err, scheduler.ErrAlreadyRunning) {
+			return fmt.Errorf("service %s: %w: %s is backing up right now; wait for it to finish (ballast wait-idle) or try again later", name, scheduler.ErrAlreadyRunning, name)
+		}
+		if err != nil {
+			return fmt.Errorf("service %s: %w", name, err)
+		}
+		defer release()
+	}
 	if err := inventory.DeleteService(o.DB, name); err != nil {
 		return wrapf("service "+name, err)
 	}

@@ -797,3 +797,67 @@ func TestVersionEndpointReportsBuild(t *testing.T) {
 		t.Errorf("without key status = %d, want 401", rec.Code)
 	}
 }
+
+// serveAs runs one authenticated request through the real handler.
+func serveAs(t *testing.T, h *harness, method, path string, body any) *httptest.ResponseRecorder {
+	t.Helper()
+	var req *http.Request
+	if body != nil {
+		req = httptest.NewRequest(method, path, jsonBody(t, body))
+		req.Header.Set("Content-Type", "application/json")
+	} else {
+		req = httptest.NewRequest(method, path, nil)
+	}
+	req.Header.Set("Authorization", "Bearer "+testAPIToken)
+	rec := httptest.NewRecorder()
+	NewHandler(h.ops, testAPIToken).ServeHTTP(rec, req)
+	return rec
+}
+
+// TestDeleteServiceWhileBackingUpIsRefused: a service whose backup is
+// running cannot be removed (409, with plain advice); once it is idle it
+// can.
+func TestDeleteServiceWhileBackingUpIsRefused(t *testing.T) {
+	h := newHarness(t)
+	withService(t, h)
+	release, ok, err := h.locks.TryLock("svc")
+	if err != nil || !ok {
+		t.Fatalf("holding run lock: %v, %v", ok, err)
+	}
+	rec := serveAs(t, h, http.MethodDelete, "/api/v1/services/svc", nil)
+	if rec.Code != http.StatusConflict || !strings.Contains(rec.Body.String(), "backing up right now") {
+		t.Fatalf("DELETE while running = %d %s, want 409 saying it is backing up", rec.Code, rec.Body.String())
+	}
+	if _, err := inventory.GetService(h.ops.DB, "svc"); err != nil {
+		t.Fatalf("service was removed anyway: %v", err)
+	}
+	release()
+	if rec := serveAs(t, h, http.MethodDelete, "/api/v1/services/svc", nil); rec.Code >= 300 {
+		t.Fatalf("DELETE when idle = %d %s", rec.Code, rec.Body.String())
+	}
+}
+
+// TestPutReservedServiceNameIsNotA500: using the settings backup's
+// reserved name, whether adding a service or changing a leftover one
+// (here, storing its secret), is a conflict the caller can fix (409),
+// not a server error.
+func TestPutReservedServiceNameIsNotA500(t *testing.T) {
+	h := newHarness(t)
+	h.addDestination("local")
+	body := inventory.Service{Name: SelfBackupService, CatalogEntry: "folder", Destination: "local", Params: map[string]string{"path": "/x"}}
+	rec := serveAs(t, h, http.MethodPost, "/api/v1/services", body)
+	if rec.Code != http.StatusConflict || !strings.Contains(rec.Body.String(), "reserved") {
+		t.Errorf("POST reserved name = %d %s, want 409 mentioning it is reserved", rec.Code, rec.Body.String())
+	}
+	body.Name = ""
+	rec = serveAs(t, h, http.MethodPut, "/api/v1/services/"+SelfBackupService, body)
+	if rec.Code != http.StatusConflict {
+		t.Errorf("PUT reserved name = %d %s, want 409", rec.Code, rec.Body.String())
+	}
+	legacySelfNamedService(t, h)
+	h.ops.CredentialsDir = t.TempDir()
+	rec = serveAs(t, h, http.MethodPut, "/api/v1/services/"+SelfBackupService+"/secrets/pw", secretBody{Value: "x"})
+	if rec.Code != http.StatusConflict {
+		t.Errorf("secret on a leftover service = %d %s, want 409", rec.Code, rec.Body.String())
+	}
+}

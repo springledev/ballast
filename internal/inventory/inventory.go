@@ -38,6 +38,10 @@ var ErrNotFound = errors.New("not found")
 // references it.
 var ErrInUse = errors.New("still in use")
 
+// ErrReservedName is wrapped by PutService's error for the name
+// Ballast keeps for backing up its own settings (SelfBackupService).
+var ErrReservedName = errors.New("reserved name")
+
 // nameRE is the allowed shape for a destination or service name:
 // names end up in file names (run locks, work directories, credential
 // file defaults), so they are restricted to a safe, predictable
@@ -636,7 +640,7 @@ func PutService(db *sql.DB, s Service) error {
 		return fmt.Errorf("service: %w", err)
 	}
 	if s.Name == SelfBackupService {
-		return fmt.Errorf("service %s: that name is reserved for Ballast's own settings backup; choose another name", s.Name)
+		return fmt.Errorf("service %s: %w: that name is reserved for Ballast's own settings backup; choose another name", s.Name, ErrReservedName)
 	}
 	guestJSON := ""
 	if s.IsGuestJob() {
