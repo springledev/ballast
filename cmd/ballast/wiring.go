@@ -63,6 +63,9 @@ type app struct {
 	// heartbeat pings the external monitor from the scheduler loop; nil
 	// in tests that do not need it.
 	heartbeat *heartbeat.Pinger
+	// sweeps watches the daemon's scheduler sweeps so the heartbeat
+	// stops when one hangs; runScheduleLoop creates it.
+	sweeps *sweepWatch
 }
 
 // Close closes the underlying database.

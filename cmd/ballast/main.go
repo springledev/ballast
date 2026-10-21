@@ -189,6 +189,9 @@ func startedFromTerminal(getenv func(string) string, stdin *os.File) bool {
 // cancelled (serve shutting down), after every sweep it started has
 // finished.
 func runScheduleLoop(ctx context.Context, a *app) {
+	if a.sweeps == nil {
+		a.sweeps = &sweepWatch{}
+	}
 	var wg sync.WaitGroup
 	defer wg.Wait()
 	for {
@@ -198,26 +201,66 @@ func runScheduleLoop(ctx context.Context, a *app) {
 			stop()
 			return
 		case now := <-ticks:
+			sweepID := a.sweeps.begin(now)
 			if a.heartbeat != nil {
 				// Pinged from the loop's own tick, so a loop that has
-				// stopped stops the heartbeat. A failed ping is logged
-				// inside Beat and never touches the sweep (spec §21.7).
+				// stopped stops the heartbeat. A sweep that has hung
+				// (see sweepWatch) stops it too, so a stuck daemon is
+				// noticed even though its ticks go on. A failed ping is
+				// logged inside Beat and never touches the sweep (spec
+				// §21.7). The check runs here, not in the loop, so a hung
+				// database cannot stop the ticks.
 				wg.Add(1)
 				go func() {
 					defer wg.Done()
+					if since, stuck := a.sweeps.stuck(now, sweepStuckLimit, func() bool {
+						return backupsRunning(ctx, a)
+					}); stuck {
+						if a.sweeps.changed(true) {
+							a.logf("heartbeat: the scheduler sweep that started at %s has not finished and no backup is running, so the heartbeat is paused until it does", since.Local().Format(time.RFC3339))
+						}
+						return
+					}
+					if a.sweeps.changed(false) {
+						a.logf("heartbeat: the scheduler is moving again, heartbeat resumed")
+					}
 					a.heartbeat.Beat(ctx, now)
 				}()
 			}
 			wg.Add(1)
 			go func() {
 				defer wg.Done()
-				if err := sweepDue(ctx, a, now); err != nil {
+				defer a.sweeps.end(sweepID)
+				if err := sweepRun(withSweep(ctx, a.sweeps, sweepID), a, now); err != nil {
 					a.logf("run-due sweep: %v", err)
 				}
 			}()
 		}
 	}
 }
+
+// backupsRunning reports whether a backup is really running, giving up
+// (as "no") after a few seconds so a hung database cannot hang the
+// heartbeat check with it.
+func backupsRunning(ctx context.Context, a *app) bool {
+	res := make(chan bool, 1)
+	go func() {
+		names, err := a.ops.RunningServices(ctx)
+		res <- err == nil && len(names) > 0
+	}()
+	select {
+	case ok := <-res:
+		return ok
+	case <-time.After(10 * time.Second):
+		return false
+	case <-ctx.Done():
+		return false
+	}
+}
+
+// sweepRun is what each tick runs; a variable so tests can substitute a
+// sweep that hangs.
+var sweepRun = sweepDue
 
 // scheduleTicker returns a channel that delivers the next wall-clock
 // minute boundary and a function that cancels it. A variable so tests
@@ -239,7 +282,9 @@ func sweepDue(ctx context.Context, a *app, now time.Time) error {
 	if serr := a.ops.EnsureSelfBackupSchedule(ctx, now); serr != nil {
 		a.logf("self-backup schedule: %v", serr)
 	}
+	markRunDue(ctx, true)
 	err := a.coord.RunDue(ctx, now)
+	markRunDue(ctx, false)
 	maybeSweepFreshness(ctx, a)
 	maybeSendDigest(ctx, a, now)
 	if a.health != nil {
