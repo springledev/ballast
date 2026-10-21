@@ -86,28 +86,46 @@ onMounted(async () => {
   }
 });
 
-watch(selectedService, (name) => {
-  form.from = "";
-  success.value = "";
-  if (name) form.to = form.to || `/tmp/ballast-restore/${name}`;
+// One watcher for both inputs, so a service change fetches once. Changing the
+// service also resets the copy to the main one; that reset re-runs this
+// watcher, which then does the fetch.
+watch([selectedService, () => form.from], ([name, from], [oldName]) => {
+  if (name !== oldName) {
+    success.value = "";
+    if (name) form.to = form.to || `/tmp/ballast-restore/${name}`;
+    if (from) {
+      form.from = "";
+      return;
+    }
+  }
   loadSnapshots();
 });
-watch(() => form.from, () => loadSnapshots());
+
+// Each call gets a number. Only the newest call may write the list, so a slow
+// answer for an earlier service or copy cannot overwrite the current one.
+let snapshotRequest = 0;
 
 async function loadSnapshots() {
+  const request = ++snapshotRequest;
   const name = selectedService.value;
   snapshots.value = [];
   form.snapshot = "";
-  if (!name) return;
-  loadingSnapshots.value = true;
   error.value = "";
+  if (!name) {
+    loadingSnapshots.value = false;
+    return;
+  }
+  loadingSnapshots.value = true;
   try {
-    snapshots.value = await api.snapshots(name, form.from || undefined);
+    const list = await api.snapshots(name, form.from || undefined);
+    if (request !== snapshotRequest) return;
+    snapshots.value = list;
     form.snapshot = sorted.value[0]?.id ?? "";
   } catch (e) {
+    if (request !== snapshotRequest) return;
     error.value = (e as Error).message;
   } finally {
-    loadingSnapshots.value = false;
+    if (request === snapshotRequest) loadingSnapshots.value = false;
   }
 }
 
