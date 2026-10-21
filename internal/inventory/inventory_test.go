@@ -1100,3 +1100,21 @@ func TestDeleteServiceClearsChannelLinks(t *testing.T) {
 		t.Errorf("service_channels rows: removed service %d (want 0), other service %d (want 1)", gone, kept)
 	}
 }
+
+func TestServiceNames(t *testing.T) {
+	db := openDB(t).DB()
+	if got, err := ServiceNames(db); err != nil || len(got) != 0 {
+		t.Fatalf("empty ServiceNames = %v, %v", got, err)
+	}
+	if err := PutDestination(db, Destination{Name: "local", Location: "/srv/backups", KeepDaily: 7}); err != nil {
+		t.Fatal(err)
+	}
+	for _, n := range []string{"b", "a"} {
+		if err := PutService(db, Service{Name: n, CatalogEntry: "folder", Destination: "local", Params: map[string]string{"path": "/x"}}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if got, err := ServiceNames(db); err != nil || !reflect.DeepEqual(got, []string{"a", "b"}) {
+		t.Errorf("ServiceNames = %v, %v; want [a b]", got, err)
+	}
+}

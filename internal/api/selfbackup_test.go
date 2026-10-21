@@ -854,3 +854,21 @@ func TestRunSelfBackupSetupFailureLeavesARedRun(t *testing.T) {
 		t.Fatalf("light = %s, want red", st.Tiers[0].Light)
 	}
 }
+
+// TestLockSelfRidesOutAProbe: a status probe holding the self-backup's
+// run lock for an instant must not turn a manual self-backup away with
+// "already running".
+func TestLockSelfRidesOutAProbe(t *testing.T) {
+	h := newHarness(t)
+	h.ops.Coord.LockWait = 2 * time.Second
+	release, ok, err := h.locks.TryLock(SelfBackupService)
+	if err != nil || !ok {
+		t.Fatalf("TryLock: %v, %v", ok, err)
+	}
+	time.AfterFunc(150*time.Millisecond, release)
+	got, err := h.ops.lockSelf()
+	if err != nil {
+		t.Fatalf("lockSelf during a momentary probe = %v, want success", err)
+	}
+	got()
+}

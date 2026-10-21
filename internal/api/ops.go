@@ -463,13 +463,11 @@ func (o *Ops) RunningServices(ctx context.Context) ([]string, error) {
 		}
 	}
 	add(unfinished...)
-	services, err := inventory.ListServices(o.DB)
+	names, err := inventory.ServiceNames(o.DB)
 	if err != nil {
 		return nil, fmt.Errorf("checking for running backups: %w", err)
 	}
-	for _, svc := range services {
-		add(svc.Name)
-	}
+	add(names...)
 	schedules, err := scheduler.ListSchedules(o.DB)
 	if err != nil {
 		return nil, fmt.Errorf("checking for running backups: %w", err)
@@ -477,17 +475,17 @@ func (o *Ops) RunningServices(ctx context.Context) ([]string, error) {
 	for _, sc := range schedules {
 		add(sc.Service)
 	}
-	var names []string
+	var running []string
 	for _, name := range candidates {
-		running, err := o.Coord.IsRunning(name)
+		busy, err := o.Coord.IsRunning(name)
 		if err != nil {
 			return nil, fmt.Errorf("checking for running backups: %w", err)
 		}
-		if running {
-			names = append(names, name)
+		if busy {
+			running = append(running, name)
 		}
 	}
-	return names, nil
+	return running, nil
 }
 
 // now returns the current time from the Now clock.

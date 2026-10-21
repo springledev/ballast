@@ -118,12 +118,12 @@ func (o *Ops) lockSelf() (func(), error) {
 	if o.Coord == nil || o.Coord.Locks == nil {
 		return nil, fmt.Errorf("self-backup: no run lock is configured (internal wiring error)")
 	}
-	release, ok, err := o.Coord.Locks.TryLock(SelfBackupService)
+	release, err := o.Coord.Lock(context.Background(), SelfBackupService)
+	if errors.Is(err, scheduler.ErrAlreadyRunning) {
+		return nil, ErrSelfBackupRunning
+	}
 	if err != nil {
 		return nil, err
-	}
-	if !ok {
-		return nil, ErrSelfBackupRunning
 	}
 	o.clearStaleStaging()
 	return release, nil

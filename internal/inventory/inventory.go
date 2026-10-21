@@ -826,6 +826,28 @@ func scanService(row interface{ Scan(...any) error }) (Service, error) {
 	return s, nil
 }
 
+// ServiceNames returns just the names of the configured services, ordered
+// by name: a cheap query for callers that need no service details.
+func ServiceNames(db *sql.DB) ([]string, error) {
+	rows, err := db.Query(`SELECT name FROM services ORDER BY name`)
+	if err != nil {
+		return nil, fmt.Errorf("listing service names: %w", err)
+	}
+	defer rows.Close()
+	var out []string
+	for rows.Next() {
+		var n string
+		if err := rows.Scan(&n); err != nil {
+			return nil, fmt.Errorf("listing service names: %w", err)
+		}
+		out = append(out, n)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("listing service names: %w", err)
+	}
+	return out, nil
+}
+
 // ListServices returns every configured service, ordered by name.
 func ListServices(db *sql.DB) ([]Service, error) {
 	rows, err := db.Query(`SELECT ` + serviceColumns + ` FROM services ORDER BY name`)

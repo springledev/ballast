@@ -464,20 +464,49 @@ func (c *Coordinator) StartTrigger(ctx context.Context, service, token string) (
 	return c.Start(ctx, service)
 }
 
+// probeWindow is how long IsRunning keeps checking a held lock before
+// believing a backup is really running. Other probes and claims hold a
+// lock for only an instant, so a lock that stays held this long is a
+// real run; one that frees up in the meantime was only a probe.
+const probeWindow = 300 * time.Millisecond
+
+// probeInterval is how often IsRunning re-checks a held lock.
+const probeInterval = 20 * time.Millisecond
+
 // IsRunning reports whether a live process holds service's run lock,
 // i.e. a backup of it is really in progress. The kernel drops a lock
 // when its process dies, so an unfinished run record with a free lock
 // was left behind by a crash or power loss. It never keeps the lock.
+//
+// A probe is itself an instant lock holder, so two probes at once would
+// each see the other and wrongly report "running". The lock must stay
+// held for probeWindow before the answer is yes.
 func (c *Coordinator) IsRunning(service string) (bool, error) {
-	release, ok, err := c.Locks.TryLock(service)
-	if err != nil {
-		return false, fmt.Errorf("checking whether %s is running: %w", service, err)
+	deadline := time.Now().Add(probeWindow)
+	for {
+		release, ok, err := c.Locks.TryLock(service)
+		if err != nil {
+			return false, fmt.Errorf("checking whether %s is running: %w", service, err)
+		}
+		if ok {
+			release()
+			return false, nil
+		}
+		left := time.Until(deadline)
+		if left <= 0 {
+			return true, nil
+		}
+		time.Sleep(min(left, probeInterval))
 	}
-	if ok {
-		release()
-		return false, nil
-	}
-	return true, nil
+}
+
+// Lock takes service's run lock for a caller that runs the work itself
+// (a manual self-backup), waiting up to LockWait like RunNow does so a
+// momentary status probe or sweep claim is ridden out. It returns
+// ErrAlreadyRunning if the lock stayed taken. The caller must call the
+// returned release exactly once.
+func (c *Coordinator) Lock(ctx context.Context, service string) (func(), error) {
+	return c.lock(ctx, service, c.lockWait())
 }
 
 // RecoverInterrupted fails, right away, every run a previous Ballast

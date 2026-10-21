@@ -1081,3 +1081,55 @@ func TestRecoverInterruptedSurvivesAProbeHoldingTheLock(t *testing.T) {
 		t.Errorf("state = %v, want FAILED", got.State)
 	}
 }
+
+// TestIsRunningRidesOutMomentaryLocks: a lock held only for an instant
+// (another probe or a claim) is not a running backup, but one held
+// throughout is.
+func TestIsRunningRidesOutMomentaryLocks(t *testing.T) {
+	locks := FileLocker{Dir: t.TempDir()}
+	c := &Coordinator{Locks: locks}
+
+	release, ok, err := locks.TryLock("svc")
+	if err != nil || !ok {
+		t.Fatalf("TryLock: %v, %v", ok, err)
+	}
+	time.AfterFunc(60*time.Millisecond, release)
+	if running, err := c.IsRunning("svc"); err != nil || running {
+		t.Errorf("IsRunning with a lock freed after 60ms = %v, %v; want false", running, err)
+	}
+
+	release, ok, err = locks.TryLock("svc")
+	if err != nil || !ok {
+		t.Fatalf("TryLock: %v, %v", ok, err)
+	}
+	defer release()
+	if running, err := c.IsRunning("svc"); err != nil || !running {
+		t.Errorf("IsRunning with a lock held throughout = %v, %v; want true", running, err)
+	}
+}
+
+// TestIsRunningConcurrentProbesSeeNothing: probes taking the lock for an
+// instant at the same time must not report each other as a backup.
+func TestIsRunningConcurrentProbesSeeNothing(t *testing.T) {
+	c := &Coordinator{Locks: FileLocker{Dir: t.TempDir()}}
+	var wg sync.WaitGroup
+	var mu sync.Mutex
+	var bad int
+	for i := 0; i < 16; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for j := 0; j < 20; j++ {
+				if running, err := c.IsRunning("svc"); err != nil || running {
+					mu.Lock()
+					bad++
+					mu.Unlock()
+				}
+			}
+		}()
+	}
+	wg.Wait()
+	if bad != 0 {
+		t.Errorf("%d probes reported a backup running when nothing was", bad)
+	}
+}
