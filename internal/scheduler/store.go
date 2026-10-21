@@ -10,6 +10,8 @@ import (
 	"fmt"
 	"strings"
 	"time"
+
+	"github.com/springledev/ballast/internal/store"
 )
 
 // SetSchedule upserts and enables the cron expression for service.
@@ -115,6 +117,7 @@ func ScheduleBaseline(db *sql.DB, service string) (time.Time, error) {
 	var fin sql.NullString
 	err = db.QueryRow(`SELECT r.finished_at FROM runs r JOIN jobs j ON j.id = r.job_id
 		WHERE j.service = ? AND r.state IN ('SUCCESS','SUCCESS_UNVERIFIED') AND r.finished_at IS NOT NULL
+		AND `+store.RunsAfterFloorSQL+`
 		ORDER BY r.id DESC LIMIT 1`, service).Scan(&fin)
 	if errors.Is(err, sql.ErrNoRows) || (err == nil && !fin.Valid) {
 		return fired, nil

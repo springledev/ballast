@@ -70,7 +70,7 @@ func UnfinishedServices(db *sql.DB) ([]string, error) {
 	rows, err := db.Query(`
 		SELECT j.service FROM runs r
 		JOIN jobs j ON j.id = r.job_id
-		WHERE r.finished_at IS NULL
+		WHERE r.finished_at IS NULL AND ` + store.RunsAfterFloorSQL + `
 		  AND r.id = (SELECT MAX(r2.id) FROM runs r2
 		              JOIN jobs j2 ON j2.id = r2.job_id
 		              WHERE j2.service = j.service)

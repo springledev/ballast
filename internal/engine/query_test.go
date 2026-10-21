@@ -1,7 +1,10 @@
 package engine
 
 import (
+	"fmt"
 	"testing"
+
+	"github.com/springledev/ballast/internal/store"
 )
 
 // finishRun walks m through the happy path to SUCCESS.
@@ -144,5 +147,28 @@ func TestUnfinishedServices(t *testing.T) {
 	got, err := UnfinishedServices(s.DB())
 	if err != nil || len(got) != 2 || got[0] != "a" || got[1] != "b" {
 		t.Errorf("UnfinishedServices = %v, %v; want [a b]", got, err)
+	}
+}
+
+// TestUnfinishedServicesIgnoresRemovedServiceHistory: a run left unfinished
+// by a service that was since removed sits at or below its history floor,
+// and must not keep wait-idle waiting forever.
+func TestUnfinishedServicesIgnoresRemovedServiceHistory(t *testing.T) {
+	s := openMachineDB(t)
+	m, err := StartRun(s.DB(), "gone")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.DB().Exec(`INSERT INTO meta (key, value) VALUES (?, ?)`, store.HistoryFloorKeyPrefix+"gone", fmt.Sprint(m.Run().ID)); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := UnfinishedServices(s.DB()); err != nil || len(got) != 0 {
+		t.Errorf("UnfinishedServices = %v, %v; want none (run is below the history floor)", got, err)
+	}
+	if _, err := StartRun(s.DB(), "gone"); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := UnfinishedServices(s.DB()); len(got) != 1 {
+		t.Errorf("UnfinishedServices = %v, want the re-added service's new run", got)
 	}
 }

@@ -1069,3 +1069,34 @@ func TestDeleteServiceClearsNameKeyedState(t *testing.T) {
 		t.Errorf("another service's rows = %d, %v; want untouched (2)", n, err)
 	}
 }
+
+// TestDeleteServiceClearsChannelLinks: the links from a service to its
+// notification channels are keyed by name only, so removing the service
+// must remove them; a re-added service must not inherit them.
+func TestDeleteServiceClearsChannelLinks(t *testing.T) {
+	db := openDB(t).DB()
+	if err := PutDestination(db, Destination{Name: "local", Location: "/srv/backups", KeepDaily: 7}); err != nil {
+		t.Fatal(err)
+	}
+	if err := PutService(db, Service{Name: "vault", CatalogEntry: "folder", Destination: "local", Params: map[string]string{"path": "/x"}}); err != nil {
+		t.Fatal(err)
+	}
+	for _, q := range []string{
+		`INSERT INTO notification_channels (id, name, type, url_credential, created_at, updated_at) VALUES (1, 'c', 'ntfy', 'u', 'x', 'x')`,
+		`INSERT INTO service_channels (service, channel_id) VALUES ('vault', 1)`,
+		`INSERT INTO service_channels (service, channel_id) VALUES ('other', 1)`,
+	} {
+		if _, err := db.Exec(q); err != nil {
+			t.Fatalf("%s: %v", q, err)
+		}
+	}
+	if err := DeleteService(db, "vault"); err != nil {
+		t.Fatal(err)
+	}
+	var gone, kept int
+	_ = db.QueryRow(`SELECT COUNT(*) FROM service_channels WHERE service = 'vault'`).Scan(&gone)
+	_ = db.QueryRow(`SELECT COUNT(*) FROM service_channels WHERE service = 'other'`).Scan(&kept)
+	if gone != 0 || kept != 1 {
+		t.Errorf("service_channels rows: removed service %d (want 0), other service %d (want 1)", gone, kept)
+	}
+}

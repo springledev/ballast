@@ -4,6 +4,8 @@ import (
 	"database/sql"
 	"fmt"
 	"time"
+
+	"github.com/springledev/ballast/internal/store"
 )
 
 // VerificationRecord is one checker's result for a run's VERIFYING
@@ -142,7 +144,7 @@ func RecentRuns(db *sql.DB, service string, limit int) ([]Run, error) {
 	rows, err := db.Query(`
 		SELECT r.id, r.job_id, r.state, r.started_at, r.finished_at, r.error, r.snapshot_id
 		FROM runs r JOIN jobs j ON j.id = r.job_id
-		WHERE j.service = ?
+		WHERE j.service = ? AND `+store.RunsAfterFloorSQL+`
 		ORDER BY r.id DESC LIMIT ?`, service, limit)
 	if err != nil {
 		return nil, fmt.Errorf("listing recent runs for %s: %w", service, err)

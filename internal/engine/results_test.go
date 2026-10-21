@@ -1,6 +1,7 @@
 package engine
 
 import (
+	"fmt"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -274,5 +275,26 @@ func TestRecordTargetKeepsTheTier(t *testing.T) {
 	}
 	if len(got) != 2 || got[0].Secondary || !got[1].Secondary || got[1].Detail != "sign in again" {
 		t.Errorf("RunTargets = %+v, want ssd primary and proton secondary", got)
+	}
+}
+
+// TestRecentRunsRespectsHistoryFloor: a re-added service does not show
+// the runs of the service that was removed under the same name.
+func TestRecentRunsRespectsHistoryFloor(t *testing.T) {
+	db := openTestDB(t).DB()
+	old, err := StartRun(db, "immich")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`INSERT INTO meta (key, value) VALUES (?, ?)`, store.HistoryFloorKeyPrefix+"immich", fmt.Sprint(old.Run().ID)); err != nil {
+		t.Fatal(err)
+	}
+	if runs, err := RecentRuns(db, "immich", 10); err != nil || len(runs) != 0 {
+		t.Fatalf("RecentRuns = %v, %v; want none below the floor", runs, err)
+	}
+	fresh, _ := StartRun(db, "immich")
+	runs, err := RecentRuns(db, "immich", 10)
+	if err != nil || len(runs) != 1 || runs[0].ID != fresh.Run().ID {
+		t.Errorf("RecentRuns = %v, %v; want only run %d", runs, err, fresh.Run().ID)
 	}
 }
