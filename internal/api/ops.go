@@ -47,6 +47,9 @@ import (
 // scheduler.ErrAlreadyRunning, scheduler.ErrPreviousRunInterrupted),
 // so callers can map them with errors.Is instead of string matching.
 type Ops struct {
+	// selfMu allows one self-backup at a time (manual or scheduled).
+	selfMu sync.Mutex
+
 	// ListenAddr is where `ballast serve` listens ("" outside serve);
 	// Doctor warns when it is open to the network.
 	ListenAddr string

@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
 	"testing"
 )
 
@@ -58,5 +59,92 @@ func TestSelfBackupErrors(t *testing.T) {
 	h.ops.WorkRoot = t.TempDir()
 	if _, err := h.ops.SelfBackup(context.Background(), "ghost"); err == nil || !strings.Contains(err.Error(), "ghost") {
 		t.Fatalf("unknown destination error = %v", err)
+	}
+}
+
+// TestSelfStagingIsPerRun: two staging folders never share a path, so
+// one self-backup cannot wipe the files another is uploading.
+func TestSelfStagingIsPerRun(t *testing.T) {
+	h := newHarness(t)
+	h.ops.WorkRoot = filepath.Join(t.TempDir(), "work")
+	a, err := h.ops.stageSelf(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer a.remove()
+	b, err := h.ops.stageSelf(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer b.remove()
+	if a.dir == b.dir {
+		t.Fatalf("both staging folders are %s", a.dir)
+	}
+	for _, st := range []*selfStaging{a, b} {
+		if _, err := os.Stat(filepath.Join(st.dir, "ballast.db")); err != nil {
+			t.Errorf("staging %s lost its database copy: %v", st.dir, err)
+		}
+	}
+}
+
+// TestSelfBackupRefusesConcurrentRun: a manual self-backup started
+// while another is uploading is refused with a plain message, and the
+// running one is left untouched and finishes verified.
+func TestSelfBackupRefusesConcurrentRun(t *testing.T) {
+	h := newHarness(t)
+	h.addDestination("local")
+	h.ops.WorkRoot = filepath.Join(t.TempDir(), "work")
+	entered, release := make(chan struct{}), make(chan struct{})
+	var once sync.Once
+	h.ops.HoldRepository = func(context.Context, string, string) (func(), error) {
+		once.Do(func() {
+			close(entered)
+			<-release
+		})
+		return func() {}, nil
+	}
+
+	type outcome struct {
+		res SelfBackupResult
+		err error
+	}
+	first := make(chan outcome, 1)
+	go func() {
+		res, err := h.ops.SelfBackup(context.Background(), "local")
+		first <- outcome{res, err}
+	}()
+	<-entered
+
+	_, err := h.ops.SelfBackup(context.Background(), "local")
+	if err == nil || !strings.Contains(err.Error(), "already running") {
+		t.Fatalf("second self-backup error = %v, want it to say one is already running", err)
+	}
+	entries, _ := os.ReadDir(h.ops.WorkRoot)
+	if len(entries) != 1 {
+		t.Errorf("work folder holds %d entries during the first run, want just its own staging folder", len(entries))
+	}
+	close(release)
+	got := <-first
+	if got.err != nil || !got.res.Verified {
+		t.Fatalf("first self-backup = %+v, %v; want verified", got.res, got.err)
+	}
+	if entries, _ := os.ReadDir(h.ops.WorkRoot); len(entries) != 0 {
+		t.Errorf("staging left behind: %v", entries)
+	}
+}
+
+// TestSelfBackupMustContainDatabase: a snapshot that reads back but
+// lacks ballast.db is not verified.
+func TestSelfBackupMustContainDatabase(t *testing.T) {
+	t.Setenv("STUB_LS_OMIT_DB", "1")
+	h := newHarness(t)
+	h.addDestination("local")
+	h.ops.WorkRoot = filepath.Join(t.TempDir(), "work")
+	res, err := h.ops.SelfBackup(context.Background(), "local")
+	if err == nil || !strings.Contains(err.Error(), "ballast.db") {
+		t.Fatalf("err = %v, want it to name the missing ballast.db", err)
+	}
+	if res.Verified {
+		t.Fatal("a snapshot without the database must not be verified")
 	}
 }

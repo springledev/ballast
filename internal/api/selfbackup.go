@@ -7,6 +7,7 @@ import (
 	"io"
 	"io/fs"
 	"os"
+	"path"
 	"path/filepath"
 	"strings"
 	"time"
@@ -61,6 +62,37 @@ type selfStaging struct {
 
 func (s *selfStaging) remove() { _ = os.RemoveAll(s.dir) }
 
+// selfStagePrefix starts the name of every self-backup staging folder
+// under WorkRoot.
+const selfStagePrefix = "_self"
+
+// errSelfBackupRunning is returned when a self-backup is asked for
+// while another one is in progress.
+var errSelfBackupRunning = errors.New("a self-backup is already running; wait for it to finish, then try again")
+
+// lockSelf makes this the only self-backup in progress and clears
+// staging folders left behind by a crashed one. With wait it queues
+// behind a running one (until ctx ends); without, it refuses. The
+// returned func releases the lock.
+func (o *Ops) lockSelf(ctx context.Context, wait bool) (func(), error) {
+	for !o.selfMu.TryLock() {
+		if !wait {
+			return nil, errSelfBackupRunning
+		}
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-time.After(100 * time.Millisecond):
+		}
+	}
+	if old, err := filepath.Glob(filepath.Join(o.WorkRoot, selfStagePrefix+"*")); err == nil {
+		for _, d := range old {
+			_ = os.RemoveAll(d)
+		}
+	}
+	return o.selfMu.Unlock, nil
+}
+
 // stageSelf assembles what a self-backup saves in a clean private
 // folder: a consistent copy of the status DB (VACUUM INTO), the config
 // file and the user catalog entries. Credential files are left out on
@@ -69,12 +101,14 @@ func (o *Ops) stageSelf(ctx context.Context) (*selfStaging, error) {
 	if o.WorkRoot == "" {
 		return nil, fmt.Errorf("self-backup: no work directory is configured (internal wiring error)")
 	}
-	stage := filepath.Join(o.WorkRoot, "_self")
-	if err := os.RemoveAll(stage); err != nil {
-		return nil, fmt.Errorf("self-backup: clearing %s: %w", stage, err)
+	if err := os.MkdirAll(o.WorkRoot, 0o700); err != nil {
+		return nil, fmt.Errorf("self-backup: creating %s: %w", o.WorkRoot, err)
 	}
-	if err := os.MkdirAll(stage, 0o700); err != nil {
-		return nil, fmt.Errorf("self-backup: creating %s: %w", stage, err)
+	// Every run gets its own folder, so no other run can ever wipe the
+	// files this one is uploading.
+	stage, err := os.MkdirTemp(o.WorkRoot, selfStagePrefix+"*")
+	if err != nil {
+		return nil, fmt.Errorf("self-backup: creating a staging folder in %s: %w", o.WorkRoot, err)
 	}
 	st := &selfStaging{dir: stage}
 	fail := func(err error) (*selfStaging, error) {
@@ -102,7 +136,7 @@ func (o *Ops) stageSelf(ctx context.Context) (*selfStaging, error) {
 	if err := o.stageScripts(stage); err != nil {
 		return fail(err)
 	}
-	err := filepath.WalkDir(stage, func(p string, d fs.DirEntry, werr error) error {
+	err = filepath.WalkDir(stage, func(p string, d fs.DirEntry, werr error) error {
 		if werr == nil && !d.IsDir() {
 			rel, _ := filepath.Rel(stage, p)
 			st.files = append(st.files, rel)
@@ -137,8 +171,21 @@ func (o *Ops) selfReadBack(ctx context.Context, repo *restic.Repository, id stri
 		return err
 	}
 	defer release()
-	_, err = repo.ReadBack(ctx, id)
-	return err
+	if _, err = repo.ReadBack(ctx, id); err != nil {
+		return err
+	}
+	// A snapshot that reads back but lacks the database is not a
+	// self-backup (it would also let retention prune good ones).
+	entries, err := repo.LS(ctx, id, "")
+	if err != nil {
+		return err
+	}
+	for _, e := range entries {
+		if e.Type == "file" && path.Base(e.Path) == "ballast.db" {
+			return nil
+		}
+	}
+	return errors.New("the snapshot does not contain ballast.db, the copy of Ballast's database")
 }
 
 // retainSelf applies the destination's retention policy to the
@@ -215,6 +262,11 @@ func (o *Ops) SelfBackup(ctx context.Context, destination string) (SelfBackupRes
 	if o.WorkRoot == "" {
 		return res, fmt.Errorf("self-backup: no work directory is configured (internal wiring error)")
 	}
+	unlock, err := o.lockSelf(ctx, false)
+	if err != nil {
+		return res, fmt.Errorf("self-backup to %s: %w", destination, err)
+	}
+	defer unlock()
 	dest, err := inventory.GetDestination(o.DB, destination)
 	if err != nil {
 		return res, wrapf("destination "+destination, err)
@@ -308,6 +360,11 @@ func (o *Ops) RunSelfBackup(ctx context.Context) (engine.State, error) {
 	if err != nil {
 		return "", fmt.Errorf("%s: %w", svc, err)
 	}
+	unlock, err := o.lockSelf(ctx, true)
+	if err != nil {
+		return "", fmt.Errorf("%s: %w", svc, err)
+	}
+	defer unlock()
 	m, err := engine.StartRun(o.DB, svc)
 	if err != nil {
 		return "", fmt.Errorf("%s: %w", svc, err)

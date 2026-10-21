@@ -25,6 +25,7 @@ case "$cmd" in
   ls)
     printf '{"message_type":"snapshot","time":"2024-01-01T00:00:00Z","id":"1111111111111111111111111111111111111111111111111111111111111111","short_id":"11111111","hostname":"test","paths":["/stub/data"]}\n'
     printf '{"message_type":"node","name":"sample.txt","type":"file","path":"/stub/data/sample.txt","size":11}\n'
+    printf '{"message_type":"node","name":"ballast.db","type":"file","path":"/stub/data/ballast.db","size":4096}\n'
     ;;
   dump) printf 'sample-content' ;;
   restore) exit 0 ;;
