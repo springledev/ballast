@@ -2,6 +2,9 @@ package api
 
 import (
 	"context"
+	"errors"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"sort"
@@ -285,5 +288,24 @@ func TestSelfBackupClearsStaleStagingOnlyUnderLock(t *testing.T) {
 	}
 	if _, err := os.Stat(stale); !os.IsNotExist(err) {
 		t.Fatalf("stale staging folder not cleared: %v", err)
+	}
+}
+
+// TestSelfBackupHandlerBusyIs409: asking for a self-backup while one is
+// running is a 409 and ErrSelfBackupRunning, not a 500.
+func TestSelfBackupHandlerBusyIs409(t *testing.T) {
+	h := newHarness(t)
+	h.addDestination("local")
+	h.ops.WorkRoot = filepath.Join(t.TempDir(), "work")
+	h.holdRunLock(t, SelfBackupService)
+	if _, err := h.ops.SelfBackup(context.Background(), "local"); !errors.Is(err, ErrSelfBackupRunning) {
+		t.Fatalf("err = %v, want ErrSelfBackupRunning", err)
+	}
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/self-backup", strings.NewReader(`{"destination":"local"}`))
+	req.Header.Set("Authorization", "Bearer "+testAPIToken)
+	rec := httptest.NewRecorder()
+	NewHandler(h.ops, testAPIToken).ServeHTTP(rec, req)
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("status = %d (%s), want 409", rec.Code, rec.Body.String())
 	}
 }

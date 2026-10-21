@@ -83,10 +83,10 @@ func (o *Ops) ReservedNameConflict() error {
 // under WorkRoot.
 const selfStagePrefix = "_self"
 
-// errSelfBackupRunning is returned when a self-backup is asked for
+// ErrSelfBackupRunning is returned when a self-backup is asked for
 // while another one (in this or any other Ballast process) is in
-// progress.
-var errSelfBackupRunning = errors.New("a self-backup is already running; wait for it to finish, then try again")
+// progress. The HTTP API maps it to 409.
+var ErrSelfBackupRunning = errors.New("a self-backup is already running; wait for it to finish, then try again")
 
 // lockSelf takes the self-backup's run lock, the same cross-process
 // flock the scheduler holds for a scheduled self-backup (keyed
@@ -104,7 +104,7 @@ func (o *Ops) lockSelf() (func(), error) {
 		return nil, err
 	}
 	if !ok {
-		return nil, errSelfBackupRunning
+		return nil, ErrSelfBackupRunning
 	}
 	o.clearStaleStaging()
 	return release, nil
