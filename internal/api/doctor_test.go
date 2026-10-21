@@ -1,16 +1,15 @@
 package api
 
 import (
-	"encoding/json"
-	"time"
-
 	"context"
-	"github.com/springledev/ballast/internal/heartbeat"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/springledev/ballast/internal/heartbeat"
 	"github.com/springledev/keel/runner"
 )
 
@@ -153,4 +152,43 @@ func TestDoctorHeartbeatLine(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestDoctorShowsBallastVersion checks that doctor names the running
+// version as its first line, so a support request says what build it is.
+func TestDoctorShowsBallastVersion(t *testing.T) {
+	h := newHarness(t)
+	h.ops.Version = "v0.5-35dad2f"
+	rep, err := h.ops.Doctor(t.Context())
+	if err != nil {
+		t.Fatalf("Doctor: %v", err)
+	}
+	for _, c := range rep.Checks {
+		if c.Area == "ballast" && c.Name == "version" {
+			if c.Status != DoctorOK || c.Detail != "Ballast v0.5-35dad2f is running." {
+				t.Errorf("version check = %+v", c)
+			}
+			return
+		}
+	}
+	t.Fatal("doctor has no ballast version check")
+}
+
+// TestDoctorShowsSchemaVersion checks that doctor reports the database
+// schema version next to the Ballast version (spec §21.5).
+func TestDoctorShowsSchemaVersion(t *testing.T) {
+	h := newHarness(t)
+	rep, err := h.ops.Doctor(t.Context())
+	if err != nil {
+		t.Fatalf("Doctor: %v", err)
+	}
+	for _, c := range rep.Checks {
+		if c.Area == "ballast" && c.Name == "schema" {
+			if c.Status != DoctorOK || c.Detail == "" {
+				t.Errorf("schema check = %+v", c)
+			}
+			return
+		}
+	}
+	t.Fatal("doctor has no ballast schema check")
 }

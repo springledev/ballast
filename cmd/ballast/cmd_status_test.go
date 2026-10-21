@@ -4,9 +4,6 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
-	"github.com/springledev/ballast/internal/engine"
-	"github.com/springledev/ballast/internal/progress"
-	"github.com/springledev/ballast/internal/store"
 	"os"
 	"path/filepath"
 	"strings"
@@ -15,7 +12,10 @@ import (
 	"time"
 
 	"github.com/springledev/ballast/internal/api"
+	"github.com/springledev/ballast/internal/engine"
+	"github.com/springledev/ballast/internal/progress"
 	"github.com/springledev/ballast/internal/scheduler"
+	"github.com/springledev/ballast/internal/store"
 	"github.com/spf13/cobra"
 )
 
@@ -456,5 +456,33 @@ func TestCheckStatusOnlyPendingSelfBackupSaysPending(t *testing.T) {
 	code, text := checkStatus([]api.ServiceStatus{{Service: "ballast-self", Self: true, FirstRunPending: true, FirstRunAt: &first, Tiers: []api.TierStatus{{Tier: "restic", Light: "none"}}}})
 	if code != 1 || !strings.Contains(text, "waiting for its first") || strings.Contains(text, "No services are configured") {
 		t.Fatalf("checkStatus = %d, %q; want code 1 saying ballast-self is waiting for its first run", code, text)
+	}
+}
+
+// TestStatusTakesServicePositionally covers J1.
+func TestStatusTakesServicePositionally(t *testing.T) {
+	cliEnv(t, &spyRunner{})
+	seedTwoServices(t)
+	all, _, err := execCLISplit(t, "status")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(all, "vault") || !strings.Contains(all, "immich") {
+		t.Fatalf("status = %q, want both services", all)
+	}
+	for _, args := range [][]string{{"status", "immich"}, {"status", "--service", "immich"}} {
+		out, _, err := execCLISplit(t, args...)
+		if err != nil {
+			t.Fatalf("%v: %v", args, err)
+		}
+		if !strings.Contains(out, "immich") {
+			t.Errorf("%v = %q, want immich", args, out)
+		}
+		if strings.Contains(out, "vault") {
+			t.Errorf("%v listed every service: %q", args, out)
+		}
+	}
+	if _, _, err := execCLISplit(t, "status", "a", "b"); err == nil {
+		t.Error("status with two services should be refused")
 	}
 }

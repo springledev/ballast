@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io/fs"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"sync"
 	"testing"
@@ -429,5 +430,25 @@ func TestMigration018KeepsServicesAndTargets(t *testing.T) {
 	}
 	if _, err := db.Exec(`INSERT INTO services (name, catalog_entry, created_at, updated_at) VALUES ('g', 'proxmox-guest', 'now', 'now')`); err != nil {
 		t.Errorf("a service with no destination must be allowed: %v", err)
+	}
+}
+
+var rollbackNote = regexp.MustCompile(`(?i)rolling back:`)
+
+// TestEveryMigrationStatesRollback checks each migration says, in a
+// "Rolling back:" comment, whether it can be undone (spec §21.5).
+func TestEveryMigrationStatesRollback(t *testing.T) {
+	entries, err := fs.Glob(migrationsFS, "migrations/*.sql")
+	if err != nil || len(entries) == 0 {
+		t.Fatalf("listing migrations: %v", err)
+	}
+	for _, e := range entries {
+		b, err := migrationsFS.ReadFile(e)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !rollbackNote.Match(b) {
+			t.Errorf("%s has no \"Rolling back:\" note saying whether it can be rolled back", e)
+		}
 	}
 }

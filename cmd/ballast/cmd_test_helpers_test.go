@@ -1,6 +1,8 @@
 package main
 
 import (
+	"bytes"
+	"context"
 	"os"
 	"path/filepath"
 	"strings"
@@ -132,4 +134,34 @@ func withStubRestic(t *testing.T) {
 		t.Fatalf("writing restic stub: %v", err)
 	}
 	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+}
+
+// execCLISplit runs the CLI like execCLI but captures stdout and
+// stderr separately, so a test can tell results from notices.
+func execCLISplit(t *testing.T, args ...string) (stdout, stderr string, err error) {
+	t.Helper()
+	resetCLIFlags()
+	rootCmd.SetContext(context.Background())
+	var o, e bytes.Buffer
+	rootCmd.SetOut(&o)
+	rootCmd.SetErr(&e)
+	rootCmd.SetArgs(args)
+	t.Cleanup(func() { rootCmd.SetArgs(nil) })
+	err = rootCmd.Execute()
+	return o.String(), e.String(), err
+}
+
+// seedTwoServices adds a destination and the services "immich" and
+// "vault" so status has something to show.
+func seedTwoServices(t *testing.T) {
+	t.Helper()
+	withStubRestic(t)
+	if _, err := execCLI(t, "destination", "add", "local", "--location", "/srv/backups"); err != nil {
+		t.Fatalf("destination add: %v", err)
+	}
+	for _, name := range []string{"immich", "vault"} {
+		if _, err := execCLI(t, "service", "add", name, "--catalog", "folder", "--destination", "local", "--param", "path=/tmp"); err != nil {
+			t.Fatalf("service add %s: %v", name, err)
+		}
+	}
 }

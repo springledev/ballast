@@ -767,3 +767,33 @@ func TestDockerHostCreateWithCredentialsNoLeak(t *testing.T) {
 		t.Errorf("response body leaks the SSH private key: %s", rec.Body.String())
 	}
 }
+
+// TestVersionEndpointReportsBuild checks that GET /api/v1/version
+// returns the version the Ops was given, and requires the key like
+// every other protected route (spec §21.5).
+func TestVersionEndpointReportsBuild(t *testing.T) {
+	h := NewHandler(&Ops{Version: "35dad2f"}, "secret")
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/version", nil)
+	req.Header.Set("Authorization", "Bearer secret")
+	h.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", rec.Code)
+	}
+	var got struct {
+		Version string `json:"version"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if got.Version != "35dad2f" {
+		t.Errorf("version = %q, want 35dad2f", got.Version)
+	}
+
+	rec = httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/v1/version", nil))
+	if rec.Code != http.StatusUnauthorized {
+		t.Errorf("without key status = %d, want 401", rec.Code)
+	}
+}

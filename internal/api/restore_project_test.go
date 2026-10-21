@@ -461,3 +461,33 @@ verify:
 		t.Errorf("docker stub log = %q, want a docker run invocation for the volume restore", log)
 	}
 }
+
+func TestRestoreProjectFromDestination(t *testing.T) {
+	h, logs := twoDestinationHarness(t)
+	// A second project member that only has the local destination.
+	if err := inventory.PutService(h.ops.DB, inventory.Service{
+		Name: "localonly", CatalogEntry: "folder", Destination: "local", Project: "stack",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	to := filepath.Join(t.TempDir(), "out")
+	rep, err := h.ops.RestoreProject(context.Background(), RestoreProjectRequest{Project: "stack", From: "offsite", To: to})
+	if err == nil || !strings.Contains(err.Error(), "localonly") || strings.Contains(err.Error(), "svc,") {
+		t.Fatalf("error = %v, want only localonly named", err)
+	}
+	for _, r := range rep.Results {
+		switch r.Service {
+		case "svc":
+			if r.Error != "" || r.SnapshotID != strings.Repeat("b", 8) {
+				t.Errorf("svc result = %+v, want restored from offsite", r)
+			}
+		case "localonly":
+			if r.Error == "" {
+				t.Errorf("localonly should be refused, got %+v", r)
+			}
+		}
+	}
+	if strings.Contains(logOf(t, logs["local"]), "restore") {
+		t.Error("local repository must not be restored from")
+	}
+}
