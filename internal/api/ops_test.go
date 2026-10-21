@@ -1992,7 +1992,8 @@ func TestRunningServices(t *testing.T) {
 		t.Fatalf("StartRun: %v", err)
 	}
 	// A live run's process holds the service's run lock.
-	if _, ok, err := h.locks.TryLock("b"); err != nil || !ok {
+	release, ok, err := h.locks.TryLock("b")
+	if err != nil || !ok {
 		t.Fatalf("taking lock: %v, %v", ok, err)
 	}
 	got, err = h.ops.RunningServices(context.Background())
@@ -2002,6 +2003,7 @@ func TestRunningServices(t *testing.T) {
 	if err := m.Transition(engine.FAILED, "stop"); err != nil {
 		t.Fatalf("Transition: %v", err)
 	}
+	release()
 	got, err = h.ops.RunningServices(context.Background())
 	if err != nil || len(got) != 0 {
 		t.Fatalf("finished RunningServices = %v, %v; want none", got, err)
@@ -2038,5 +2040,49 @@ func TestRunningServicesIgnoresCrashedRuns(t *testing.T) {
 	// Asking must not take a lock away from a later real run.
 	if _, ok, _ := h.locks.TryLock("crashed"); !ok {
 		t.Error("RunningServices left the run lock taken")
+	}
+}
+
+// TestRunningServicesCountsAHeldLockAfterTheRunFinished: retention
+// (restic forget --prune) runs after the run is marked finished but
+// while the process still holds the run lock; an upgrade then would
+// kill it, so the lock, not the run row, decides (spec §21.5).
+func TestRunningServicesCountsAHeldLockAfterTheRunFinished(t *testing.T) {
+	h := newHarness(t)
+	h.addDestination("local")
+	if err := inventory.PutService(h.ops.DB, inventory.Service{Name: "pruning", CatalogEntry: "folder", Destination: "local"}); err != nil {
+		t.Fatalf("PutService: %v", err)
+	}
+	m, err := engine.StartRun(h.ops.DB, "pruning")
+	if err != nil {
+		t.Fatalf("StartRun: %v", err)
+	}
+	for _, st := range []engine.State{engine.PREPARING, engine.DUMPING, engine.UPLOADING, engine.VERIFYING, engine.SUCCESS} {
+		if err := m.Transition(st, "test"); err != nil {
+			t.Fatalf("Transition %s: %v", st, err)
+		}
+	}
+	release, ok, err := h.locks.TryLock("pruning")
+	if err != nil || !ok {
+		t.Fatalf("taking lock: %v, %v", ok, err)
+	}
+	got, err := h.ops.RunningServices(context.Background())
+	if err != nil || len(got) != 1 || got[0] != "pruning" {
+		t.Fatalf("RunningServices during prune = %v, %v; want [pruning]", got, err)
+	}
+	// The settings self-backup has no inventory row but has a lock.
+	selfRelease, ok, err := h.locks.TryLock(SelfBackupService)
+	if err != nil || !ok {
+		t.Fatalf("taking self-backup lock: %v, %v", ok, err)
+	}
+	got, _ = h.ops.RunningServices(context.Background())
+	if len(got) != 2 {
+		t.Errorf("RunningServices = %v, want pruning and the self-backup", got)
+	}
+	selfRelease()
+	release()
+	got, err = h.ops.RunningServices(context.Background())
+	if err != nil || len(got) != 0 {
+		t.Fatalf("after the lock was released RunningServices = %v, %v; want none", got, err)
 	}
 }

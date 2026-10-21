@@ -23,7 +23,7 @@ The paths below are the ones `ballast install` uses (`/var/lib/ballast` for data
    ballast wait-idle --timeout 30m
    ```
 
-   This returns as soon as nothing is running. It exits with an error if something is still running after 30 minutes. To only look, without waiting, use `ballast status --running`: it prints what is running and exits with 1 if anything is, or prints "Nothing is running." and exits with 0.
+   This returns as soon as nothing is running. A backup counts as running until Ballast has finished with it completely, including the tidy-up of old snapshots that follows a finished backup (on a remote destination that can take a while). It exits with an error if something is still running after 30 minutes. To only look, without waiting, use `ballast status --running`: it prints what is running and exits with 1 if anything is, or prints "Nothing is running." and exits with 0.
 
 ## Upgrade
 

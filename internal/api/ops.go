@@ -430,25 +430,55 @@ type ServiceStatus struct {
 // RunningServices returns the names of the services that have a backup
 // in progress right now (spec §21.5), empty when Ballast is idle.
 //
-// An unfinished run record is not proof: after a crash or power loss
-// the record stays unfinished although no process is working on it. So
-// a run counts only while a live process holds its service's run lock,
-// the same truth the scheduler uses to tell an interrupted run from a
-// slow one (scheduler.Coordinator.IsRunning). It is two cheap steps (one
-// query, one lock probe per unfinished run), so it is fine to poll.
+// The run lock is the truth, not the run record. A live process holds
+// its service's lock for the whole job, including work that happens
+// after the run is marked finished (retention's forget --prune can take
+// a long time on a remote repository), and an upgrade must wait for
+// that too. Conversely an unfinished run record proves nothing: after
+// a crash or power loss it stays unfinished although no process is
+// working on it, and the kernel has dropped the lock. So a service
+// counts exactly while a live process holds its lock (the same truth
+// scheduler.Coordinator.IsRunning gives the scheduler). Every service
+// Ballast knows of is asked, plus any with an unfinished run and the
+// settings self-backup, one cheap lock probe each, so it is fine to
+// poll.
 func (o *Ops) RunningServices(ctx context.Context) ([]string, error) {
 	unfinished, err := engine.UnfinishedServices(o.DB)
 	if err != nil {
 		return nil, fmt.Errorf("checking for running backups: %w", err)
 	}
-	var names []string
-	for _, name := range unfinished {
-		if o.Coord == nil || o.Coord.Locks == nil {
-			// Cannot tell; say it is running rather than risk an
-			// upgrade over a live backup.
-			names = append(names, name)
-			continue
+	if o.Coord == nil || o.Coord.Locks == nil {
+		// Cannot tell; say the unfinished ones are running rather than
+		// risk an upgrade over a live backup.
+		return unfinished, nil
+	}
+	seen := map[string]bool{SelfBackupService: true}
+	candidates := []string{SelfBackupService}
+	add := func(names ...string) {
+		for _, n := range names {
+			if !seen[n] {
+				seen[n] = true
+				candidates = append(candidates, n)
+			}
 		}
+	}
+	add(unfinished...)
+	services, err := inventory.ListServices(o.DB)
+	if err != nil {
+		return nil, fmt.Errorf("checking for running backups: %w", err)
+	}
+	for _, svc := range services {
+		add(svc.Name)
+	}
+	schedules, err := scheduler.ListSchedules(o.DB)
+	if err != nil {
+		return nil, fmt.Errorf("checking for running backups: %w", err)
+	}
+	for _, sc := range schedules {
+		add(sc.Service)
+	}
+	var names []string
+	for _, name := range candidates {
 		running, err := o.Coord.IsRunning(name)
 		if err != nil {
 			return nil, fmt.Errorf("checking for running backups: %w", err)
