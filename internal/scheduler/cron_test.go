@@ -541,3 +541,32 @@ func TestScheduleNext(t *testing.T) {
 		t.Fatalf("Next = %v, %v; want %v", got, ok, want)
 	}
 }
+
+func TestSchedulePrev(t *testing.T) {
+	at := func(d, h, m int) time.Time { return time.Date(2026, 10, d, h, m, 0, 0, time.UTC) }
+	tests := []struct {
+		name string
+		expr string
+		from time.Time
+		want time.Time
+	}{
+		{"daily, just after", "0 5 * * *", at(9, 5, 0).Add(15 * time.Second), at(9, 5, 0)},
+		{"daily, exactly on the minute", "0 5 * * *", at(9, 5, 0), at(9, 5, 0)},
+		{"daily, before today's firing", "0 5 * * *", at(9, 2, 5), at(8, 5, 0)},
+		{"mon and thu", "0 5 * * 1,4", at(8, 12, 0), at(8, 5, 0)}, // Thu 8 Oct 2026
+		{"mon and thu, over the weekend", "0 5 * * 1,4", at(11, 12, 0), at(8, 5, 0)},
+		{"uneven hours", "0 0,12,13 * * *", at(9, 12, 30), at(9, 12, 0)},
+		{"monthly", "0 3 1 * *", at(20, 0, 0), at(1, 3, 0)},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			s, err := ParseCron(tt.expr)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got, ok := s.Prev(tt.from); !ok || !got.Equal(tt.want) {
+				t.Fatalf("Prev(%v) = %v, %v; want %v", tt.from, got, ok, tt.want)
+			}
+		})
+	}
+}

@@ -116,14 +116,18 @@ func LastStatus(ch Channel) int {
 	return 0
 }
 
-// AlertGate de-duplicates failure alerts (spec §18.1): one alert, then
-// a reminder per Cooldown while the service keeps failing, and one
+// AlertGate de-duplicates failure alerts (spec §18.1, §21.1): one
+// alert, then one reminder per scheduled failure while the service
+// keeps failing (or per Cooldown when it has no schedule), and one
 // recovery notice when it goes green. State is in the database so the
 // daemon and `run-due` agree.
 type AlertGate struct {
 	DB       *sql.DB
 	Cooldown time.Duration
 	Now      func() time.Time
+	// Location is the time zone the schedules are written in; nil means
+	// the machine's local zone, like the scheduler itself.
+	Location *time.Location
 }
 
 func (g *AlertGate) now() time.Time {
@@ -133,37 +137,39 @@ func (g *AlertGate) now() time.Time {
 	return time.Now().UTC()
 }
 
-func (g *AlertGate) cooldown(service string) time.Duration {
-	cd := DefaultAlertCooldown
+func (g *AlertGate) cooldown() time.Duration {
 	if g.Cooldown > 0 {
-		cd = g.Cooldown
+		return g.Cooldown
 	}
-	// A still-failing scheduled job gets one reminder per scheduled
-	// failure: never wait longer than 90% of the gap between runs, or a
-	// run that finishes a few seconds earlier than yesterday's is held.
-	if gap := g.scheduleGap(service); gap > 0 {
-		if limit := gap * 9 / 10; limit < cd {
-			cd = limit
-		}
-	}
-	return cd
+	return DefaultAlertCooldown
 }
 
-// scheduleGap returns the time between service's scheduled runs, or 0
-// when it has no enabled, readable schedule.
-func (g *AlertGate) scheduleGap(service string) time.Duration {
+func (g *AlertGate) loc() *time.Location {
+	if g.Location != nil {
+		return g.Location
+	}
+	return time.Local
+}
+
+// firing returns the scheduled firing that a run starting at t belongs
+// to (the latest firing at or before t), as a UTC timestamp. It is ""
+// when service has no enabled, readable schedule.
+func (g *AlertGate) firing(service string, t time.Time) string {
 	var expr string
 	var enabled int
 	err := g.DB.QueryRow(`SELECT cron_expr, enabled FROM schedules WHERE service = ?`, service).Scan(&expr, &enabled)
 	if err != nil || enabled == 0 {
-		return 0
+		return ""
 	}
 	sch, err := scheduler.ParseCron(expr)
 	if err != nil {
-		return 0
+		return ""
 	}
-	gap, _ := sch.Gap(g.now())
-	return gap
+	f, ok := sch.Prev(t.In(g.loc()))
+	if !ok {
+		return ""
+	}
+	return f.UTC().Format(time.RFC3339)
 }
 
 // ShouldAlert reports whether a failure alert for service should be
@@ -173,11 +179,23 @@ func (g *AlertGate) ShouldAlert(service string) (bool, error) {
 	return ok, err
 }
 
-// Decide is ShouldAlert plus a plain-English reason when the alert is
-// held back (such as "alerted 23h ago, cool-down 24h").
+// Decide is DecideRun for a run happening right now.
 func (g *AlertGate) Decide(service string) (bool, string, error) {
-	var last string
-	err := g.DB.QueryRow(`SELECT last_alert_at FROM alert_state WHERE service = ?`, service).Scan(&last)
+	return g.DecideRun(service, g.now())
+}
+
+// DecideRun reports whether a failure alert should be sent for a run
+// of service that started at runAt, with a plain-English reason when it
+// is held back.
+//
+// A service with a schedule gets one alert per scheduled firing: a new
+// failed run reminds when it belongs to a later firing than the last
+// alert, and is held (a manual retry, say) when it belongs to the same
+// one. A service without a schedule waits out the cool-down (24 hours
+// by default).
+func (g *AlertGate) DecideRun(service string, runAt time.Time) (bool, string, error) {
+	var last, window string
+	err := g.DB.QueryRow(`SELECT last_alert_at, last_window FROM alert_state WHERE service = ?`, service).Scan(&last, &window)
 	if errors.Is(err, sql.ErrNoRows) {
 		return true, "", nil
 	}
@@ -188,8 +206,19 @@ func (g *AlertGate) Decide(service string) (bool, string, error) {
 	if perr != nil {
 		return true, "", nil
 	}
+	if cur := g.firing(service, runAt); cur != "" {
+		if window == "" {
+			// An alert recorded before windows were kept: work it out
+			// from when it was sent.
+			window = g.firing(service, t)
+		}
+		if cur != window {
+			return true, "", nil
+		}
+		return false, fmt.Sprintf("already alerted for this scheduled run (alerted %s ago)", shortDuration(g.now().Sub(t))), nil
+	}
 	ago := g.now().Sub(t)
-	cd := g.cooldown(service)
+	cd := g.cooldown()
 	if ago >= cd {
 		return true, "", nil
 	}
@@ -206,9 +235,16 @@ func shortDuration(d time.Duration) string {
 
 // RecordAlert notes that an alert was just delivered for service.
 func (g *AlertGate) RecordAlert(service string) error {
-	_, err := g.DB.Exec(`INSERT INTO alert_state (service, last_alert_at) VALUES (?, ?)
-		ON CONFLICT(service) DO UPDATE SET last_alert_at = excluded.last_alert_at`,
-		service, g.now().Format(time.RFC3339Nano))
+	return g.RecordAlertRun(service, g.now())
+}
+
+// RecordAlertRun notes that an alert was just delivered for a run of
+// service that started at runAt, so later failures of the same
+// scheduled firing are held.
+func (g *AlertGate) RecordAlertRun(service string, runAt time.Time) error {
+	_, err := g.DB.Exec(`INSERT INTO alert_state (service, last_alert_at, last_window) VALUES (?, ?, ?)
+		ON CONFLICT(service) DO UPDATE SET last_alert_at = excluded.last_alert_at, last_window = excluded.last_window`,
+		service, g.now().Format(time.RFC3339Nano), g.firing(service, runAt))
 	if err != nil {
 		return fmt.Errorf("service %s: saving alert state: %w", service, err)
 	}

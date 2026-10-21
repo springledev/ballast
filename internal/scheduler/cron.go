@@ -170,6 +170,34 @@ func (s Schedule) Next(from time.Time) (time.Time, bool) {
 	return time.Date(w.Year(), w.Month(), w.Day(), w.Hour(), w.Minute(), 0, 0, from.Location()), true
 }
 
+// Prev returns the latest firing at or before t, in t's location, or
+// false when the schedule has no firing within the search limit. It
+// tells which scheduled firing a moment belongs to (for example, which
+// firing a run that started at t was for).
+func (s Schedule) Prev(t time.Time) (time.Time, bool) {
+	end := wallClock(t)
+	limit := end.AddDate(-nextSearchLimit, 0, 0)
+	// Look back over a window that doubles until it holds a firing, so a
+	// frequent schedule is found at once and a rare one costs a few
+	// extra searches, not one per minute.
+	for span := 25 * time.Hour; ; span *= 2 {
+		start := end.Add(-span)
+		if start.Before(limit) {
+			start = limit
+		}
+		var found time.Time
+		for w, ok := s.nextWall(start.Add(-time.Minute)); ok && !w.After(end); w, ok = s.nextWall(w) {
+			found = w
+		}
+		if !found.IsZero() {
+			return time.Date(found.Year(), found.Month(), found.Day(), found.Hour(), found.Minute(), 0, 0, t.Location()), true
+		}
+		if !start.After(limit) {
+			return time.Time{}, false
+		}
+	}
+}
+
 // Gap returns the time between the first two firings after from, so
 // callers can size things (such as alert reminders) to the schedule.
 // It reports false when the schedule does not fire twice.

@@ -59,12 +59,15 @@ type EngineAdapter struct {
 	// token, topic and password once the channel is built). Delivery
 	// error text is cleaned with it before it is logged or stored.
 	Redact *secret.Set
+	// Location is the time zone schedules are written in; nil means the
+	// machine's local zone.
+	Location *time.Location
 	// Now overrides the clock in tests; nil means the real clock.
 	Now func() time.Time
 }
 
 func (a *EngineAdapter) gate() *AlertGate {
-	return &AlertGate{DB: a.DB, Cooldown: a.Cooldown, Now: a.Now}
+	return &AlertGate{DB: a.DB, Cooldown: a.Cooldown, Now: a.Now, Location: a.Location}
 }
 
 // decide logs and stores one alert decision.
@@ -78,9 +81,10 @@ func (a *EngineAdapter) decide(ev Event, outcome, reason string) {
 // sendAlert delivers a failure event unless the service was already
 // alerted about within the cool-down. The alert is recorded only once
 // delivery succeeded, so an unreachable channel is retried next time.
-func (a *EngineAdapter) sendAlert(ctx context.Context, ev Event) error {
+func (a *EngineAdapter) sendAlert(ctx context.Context, ev Event, runID int64) error {
 	g := a.gate()
-	ok, why, err := g.Decide(ev.Service)
+	runAt := a.runStart(runID)
+	ok, why, err := g.DecideRun(ev.Service, runAt)
 	if err != nil {
 		return err
 	}
@@ -93,7 +97,19 @@ func (a *EngineAdapter) sendAlert(ctx context.Context, ev Event) error {
 		return err
 	}
 	a.decide(ev, OutcomeSent, "")
-	return g.RecordAlert(ev.Service)
+	return g.RecordAlertRun(ev.Service, runAt)
+}
+
+// runStart returns when run runID started, or the current time when the
+// run cannot be found (the run has only just finished, so it is close).
+func (a *EngineAdapter) runStart(runID int64) time.Time {
+	var started string
+	if err := a.DB.QueryRow(`SELECT started_at FROM runs WHERE id = ?`, runID).Scan(&started); err == nil {
+		if t, err := time.Parse(time.RFC3339Nano, started); err == nil {
+			return t
+		}
+	}
+	return a.gate().now()
 }
 
 // NotifyJobFailure delivers a job-failure event (spec §11 "job
@@ -102,7 +118,7 @@ func (a *EngineAdapter) NotifyJobFailure(ctx context.Context, service string, ru
 	if a == nil || a.Notifier == nil {
 		return fmt.Errorf("%s: %w", service, errNoNotifier)
 	}
-	return a.sendAlert(ctx, FormatJobFailure(service, fmt.Sprint(runID), detail))
+	return a.sendAlert(ctx, FormatJobFailure(service, fmt.Sprint(runID), detail), runID)
 }
 
 // NotifyVerificationFailure delivers a verification-failure event,
@@ -114,7 +130,7 @@ func (a *EngineAdapter) NotifyVerificationFailure(ctx context.Context, service s
 	if a == nil || a.Notifier == nil {
 		return fmt.Errorf("%s: %w", service, errNoNotifier)
 	}
-	return a.sendAlert(ctx, FormatVerificationFailure(service, fmt.Sprint(runID), "backup verification", detail))
+	return a.sendAlert(ctx, FormatVerificationFailure(service, fmt.Sprint(runID), "backup verification", detail), runID)
 }
 
 // NotifySuccessHeartbeat delivers a success heartbeat only when the
