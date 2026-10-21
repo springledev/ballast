@@ -477,7 +477,7 @@ func (o *Ops) RunningServices(ctx context.Context) ([]string, error) {
 	}
 	var running []string
 	for _, name := range candidates {
-		busy, err := o.Coord.IsRunning(name)
+		busy, err := o.Coord.IsRunning(ctx, name)
 		if err != nil {
 			return nil, fmt.Errorf("checking for running backups: %w", err)
 		}

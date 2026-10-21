@@ -66,7 +66,7 @@ const DefaultLockWait = 10 * time.Second
 
 // sweepClaimGrace is how long the schedule sweep and crash recovery
 // keep retrying a service's run lock before deciding it is really
-// running. Status, wait-idle and the heartbeat probe a lock by taking
+// running. Status, wait-idle and the heartbeat probe a lock by sharing
 // it for an instant (Coordinator.IsRunning), and a probe that lands
 // just as a sweep claims must not make it skip a due backup or leave a
 // crashed run uncleared. A genuinely running backup costs the sweep
@@ -464,40 +464,32 @@ func (c *Coordinator) StartTrigger(ctx context.Context, service, token string) (
 	return c.Start(ctx, service)
 }
 
-// probeWindow is how long IsRunning keeps checking a held lock before
-// believing a backup is really running. Other probes and claims hold a
-// lock for only an instant, so a lock that stays held this long is a
-// real run; one that frees up in the meantime was only a probe.
-const probeWindow = 300 * time.Millisecond
-
-// probeInterval is how often IsRunning re-checks a held lock.
-const probeInterval = 20 * time.Millisecond
-
 // IsRunning reports whether a live process holds service's run lock,
 // i.e. a backup of it is really in progress. The kernel drops a lock
 // when its process dies, so an unfinished run record with a free lock
 // was left behind by a crash or power loss. It never keeps the lock.
 //
-// A probe is itself an instant lock holder, so two probes at once would
-// each see the other and wrongly report "running". The lock must stay
-// held for probeWindow before the answer is yes.
-func (c *Coordinator) IsRunning(service string) (bool, error) {
-	deadline := time.Now().Add(probeWindow)
-	for {
-		release, ok, err := c.Locks.TryLock(service)
+// With a Prober (FileLocker) the check takes a shared lock, so probes
+// never see each other. Any other Locker is asked with one TryLock.
+func (c *Coordinator) IsRunning(ctx context.Context, service string) (bool, error) {
+	if err := ctx.Err(); err != nil {
+		return false, fmt.Errorf("checking whether %s is running: %w", service, err)
+	}
+	if p, ok := c.Locks.(Prober); ok {
+		held, err := p.Held(service)
 		if err != nil {
 			return false, fmt.Errorf("checking whether %s is running: %w", service, err)
 		}
-		if ok {
-			release()
-			return false, nil
-		}
-		left := time.Until(deadline)
-		if left <= 0 {
-			return true, nil
-		}
-		time.Sleep(min(left, probeInterval))
+		return held, nil
 	}
+	release, ok, err := c.Locks.TryLock(service)
+	if err != nil {
+		return false, fmt.Errorf("checking whether %s is running: %w", service, err)
+	}
+	if ok {
+		release()
+	}
+	return !ok, nil
 }
 
 // Lock takes service's run lock for a caller that runs the work itself

@@ -10,6 +10,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"syscall"
 	"testing"
 	"time"
 
@@ -1082,29 +1083,87 @@ func TestRecoverInterruptedSurvivesAProbeHoldingTheLock(t *testing.T) {
 	}
 }
 
-// TestIsRunningRidesOutMomentaryLocks: a lock held only for an instant
-// (another probe or a claim) is not a running backup, but one held
-// throughout is.
-func TestIsRunningRidesOutMomentaryLocks(t *testing.T) {
+// TestIsRunningHeldExclusiveLockIsRunning: a lock held by a real run is
+// reported running at once, with no waiting.
+func TestIsRunningHeldExclusiveLockIsRunning(t *testing.T) {
 	locks := FileLocker{Dir: t.TempDir()}
 	c := &Coordinator{Locks: locks}
-
+	if running, err := c.IsRunning(context.Background(), "svc"); err != nil || running {
+		t.Fatalf("IsRunning with no lock = %v, %v; want false", running, err)
+	}
 	release, ok, err := locks.TryLock("svc")
 	if err != nil || !ok {
 		t.Fatalf("TryLock: %v, %v", ok, err)
 	}
-	time.AfterFunc(60*time.Millisecond, release)
-	if running, err := c.IsRunning("svc"); err != nil || running {
-		t.Errorf("IsRunning with a lock freed after 60ms = %v, %v; want false", running, err)
-	}
-
-	release, ok, err = locks.TryLock("svc")
-	if err != nil || !ok {
-		t.Fatalf("TryLock: %v, %v", ok, err)
-	}
 	defer release()
-	if running, err := c.IsRunning("svc"); err != nil || !running {
-		t.Errorf("IsRunning with a lock held throughout = %v, %v; want true", running, err)
+	start := time.Now()
+	if running, err := c.IsRunning(context.Background(), "svc"); err != nil || !running {
+		t.Errorf("IsRunning with a lock held = %v, %v; want true", running, err)
+	}
+	if d := time.Since(start); d > 100*time.Millisecond {
+		t.Errorf("IsRunning took %v; a probe must not wait", d)
+	}
+}
+
+// TestIsRunningIgnoresOtherProbes: another probe sitting on the shared
+// lock (however long) is not a running backup.
+func TestIsRunningIgnoresOtherProbes(t *testing.T) {
+	dir := t.TempDir()
+	c := &Coordinator{Locks: FileLocker{Dir: dir}}
+	if _, err := c.IsRunning(context.Background(), "svc"); err != nil {
+		t.Fatal(err)
+	}
+	f, err := os.Open(filepath.Join(dir, "svc.lock"))
+	if err != nil {
+		// no lock file is created by a probe; make one the way a run would
+		release, _, _ := FileLocker{Dir: dir}.TryLock("svc")
+		release()
+		if f, err = os.Open(filepath.Join(dir, "svc.lock")); err != nil {
+			t.Fatal(err)
+		}
+	}
+	defer f.Close()
+	if err := syscall.Flock(int(f.Fd()), syscall.LOCK_SH|syscall.LOCK_NB); err != nil {
+		t.Fatal(err)
+	}
+	if running, err := c.IsRunning(context.Background(), "svc"); err != nil || running {
+		t.Errorf("IsRunning beside another probe = %v, %v; want false", running, err)
+	}
+}
+
+// TestProbeDuringClaimDoesNotSkipRun: a probe holding the shared lock for
+// an instant must not make a due run give up.
+func TestProbeDuringClaimDoesNotSkipRun(t *testing.T) {
+	dir := t.TempDir()
+	locks := FileLocker{Dir: dir}
+	r, ok, err := locks.TryLock("svc")
+	if err != nil || !ok {
+		t.Fatal(err)
+	}
+	r()
+	f, err := os.Open(filepath.Join(dir, "svc.lock"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := syscall.Flock(int(f.Fd()), syscall.LOCK_SH|syscall.LOCK_NB); err != nil {
+		t.Fatal(err)
+	}
+	time.AfterFunc(150*time.Millisecond, func() { f.Close() })
+	c := &Coordinator{Locks: locks, SweepGrace: 2 * time.Second}
+	release, err := c.lock(context.Background(), "svc", c.sweepGrace())
+	if err != nil {
+		t.Fatalf("claim beside a momentary probe: %v", err)
+	}
+	release()
+}
+
+// TestIsRunningHonoursContext: a cancelled context stops the probe.
+func TestIsRunningHonoursContext(t *testing.T) {
+	c := &Coordinator{Locks: FileLocker{Dir: t.TempDir()}}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, err := c.IsRunning(ctx, "svc"); !errors.Is(err, context.Canceled) {
+		t.Errorf("IsRunning with a cancelled ctx = %v, want context.Canceled", err)
 	}
 }
 
@@ -1120,7 +1179,7 @@ func TestIsRunningConcurrentProbesSeeNothing(t *testing.T) {
 		go func() {
 			defer wg.Done()
 			for j := 0; j < 20; j++ {
-				if running, err := c.IsRunning("svc"); err != nil || running {
+				if running, err := c.IsRunning(context.Background(), "svc"); err != nil || running {
 					mu.Lock()
 					bad++
 					mu.Unlock()
