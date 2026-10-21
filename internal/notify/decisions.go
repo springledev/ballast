@@ -6,6 +6,9 @@ import (
 	"log"
 	"regexp"
 	"time"
+	"unicode/utf8"
+
+	"github.com/springledev/keel/secret"
 )
 
 // Alert decision outcomes.
@@ -33,12 +36,21 @@ type AlertDecision struct {
 
 var urlPattern = regexp.MustCompile(`[A-Za-z][A-Za-z0-9+.-]*://\S+`)
 
+// maxReasonBytes is the longest reason kept before it is cut short.
+const maxReasonBytes = 300
+
 // scrubReason removes anything address-like from a reason, and
-// shortens it, before it is logged or stored.
+// shortens it (never in the middle of a character), before it is
+// logged or stored. It is the backstop behind the app's secret
+// redactor, which knows the exact tokens, topics and passwords.
 func scrubReason(s string) string {
 	s = urlPattern.ReplaceAllString(s, "[address hidden]")
-	if len(s) > 300 {
-		s = s[:300] + "…"
+	if len(s) > maxReasonBytes {
+		cut := maxReasonBytes
+		for cut > 0 && !utf8.RuneStart(s[cut]) {
+			cut--
+		}
+		s = s[:cut] + "…"
 	}
 	return s
 }
@@ -47,6 +59,12 @@ func scrubReason(s string) string {
 // last few decisions.
 func RecordAlertDecision(db *sql.DB, d AlertDecision) error {
 	d.Reason = scrubReason(d.Reason)
+	return storeDecision(db, d)
+}
+
+// storeDecision saves d as given; the caller has already cleaned the
+// reason.
+func storeDecision(db *sql.DB, d AlertDecision) error {
 	if _, err := db.Exec(`INSERT INTO alert_decisions (service, at, type, outcome, reason) VALUES (?,?,?,?,?)`,
 		d.Service, d.At.UTC().Format(time.RFC3339Nano), d.Type, d.Outcome, d.Reason); err != nil {
 		return fmt.Errorf("service %s: saving alert decision: %w", d.Service, err)
@@ -83,8 +101,12 @@ func ListAlertDecisions(db *sql.DB, service string, limit int) ([]AlertDecision,
 // logDecision writes the one-line journal entry and stores the
 // decision. Storage problems are logged, never returned: remembering a
 // decision must not change what happens to the alert.
-func logDecision(db *sql.DB, d AlertDecision, dest string) {
-	d.Reason = scrubReason(d.Reason)
+//
+// The reason is cleaned exactly once, here: first by redact (every
+// secret the app knows, including the channels' own tokens, topics and
+// passwords; nil means none), then by the address backstop.
+func logDecision(db *sql.DB, d AlertDecision, dest string, redact *secret.Set) {
+	d.Reason = scrubReason(redact.Redact(d.Reason))
 	switch d.Outcome {
 	case OutcomeSent:
 		log.Printf("ballast: alert: sent %s for %s to %s", d.Type, d.Service, dest)
@@ -93,7 +115,7 @@ func logDecision(db *sql.DB, d AlertDecision, dest string) {
 	default:
 		log.Printf("ballast: alert: failed to send %s for %s: %s", d.Type, d.Service, d.Reason)
 	}
-	if err := RecordAlertDecision(db, d); err != nil {
+	if err := storeDecision(db, d); err != nil {
 		log.Printf("ballast: alert: %v", err)
 	}
 }

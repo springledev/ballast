@@ -141,7 +141,7 @@ func openApp(cfg config.Config, logw io.Writer) (*app, error) {
 	}
 
 	r := &execrunner.Runner{Redact: secrets}
-	adapter := &notify.EngineAdapter{DB: st.DB(), Notifier: notifier}
+	adapter := &notify.EngineAdapter{DB: st.DB(), Notifier: notifier, Redact: secrets}
 
 	uploads := &progress.Tracker{}
 	pl := &pipeline.Pipeline{

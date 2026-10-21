@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/springledev/ballast/internal/engine"
+	"github.com/springledev/keel/secret"
 )
 
 // errNoNotifier is returned by EngineAdapter's notify methods when
@@ -54,6 +55,10 @@ type EngineAdapter struct {
 	// Cooldown is how long a still-failing service stays quiet before a
 	// reminder; zero means DefaultAlertCooldown.
 	Cooldown time.Duration
+	// Redact is the app's shared secret set (it holds every channel's
+	// token, topic and password once the channel is built). Delivery
+	// error text is cleaned with it before it is logged or stored.
+	Redact *secret.Set
 	// Now overrides the clock in tests; nil means the real clock.
 	Now func() time.Time
 }
@@ -67,7 +72,7 @@ func (a *EngineAdapter) decide(ev Event, outcome, reason string) {
 	logDecision(a.DB, AlertDecision{
 		Service: ev.Service, At: a.gate().now(), Type: string(ev.Type),
 		Outcome: outcome, Reason: reason,
-	}, a.Notifier.Destinations(ev.Service))
+	}, a.Notifier.Destinations(ev.Service), a.Redact)
 }
 
 // sendAlert delivers a failure event unless the service was already

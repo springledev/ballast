@@ -3,11 +3,15 @@ package notify
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"log"
 	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
+
+	"github.com/springledev/keel/secret"
 )
 
 // secretErrChannel fails with an error that (wrongly) carries a secret
@@ -116,5 +120,56 @@ func TestAlertDecisions_KeepsOnlyLastFew(t *testing.T) {
 	}
 	if len(ds) != maxAlertDecisions {
 		t.Errorf("kept %d, want %d", len(ds), maxAlertDecisions)
+	}
+}
+
+// bareSecretChannel fails with an error that echoes a token and a bare
+// topic with no scheme in front of them.
+type bareSecretChannel struct{}
+
+func (bareSecretChannel) Send(ctx context.Context, e Event) error {
+	return errors.New("401: invalid token s3cr3t-abc for topic my-bare-topic")
+}
+func (bareSecretChannel) Type() string { return "ntfy" }
+
+func TestAlertDecisions_RedactsChannelSecretsWithoutScheme(t *testing.T) {
+	db := testDB(t)
+	defer db.Close()
+	buf := captureLog(t)
+
+	n := NewNotifier()
+	n.RegisterChannel("svc", bareSecretChannel{})
+	a := &EngineAdapter{
+		DB: db.DB(), Notifier: n,
+		Redact: secret.NewSet("s3cr3t-abc", "my-bare-topic"),
+		Now:    func() time.Time { return time.Date(2026, 10, 20, 5, 0, 0, 0, time.UTC) },
+	}
+	if err := a.NotifyJobFailure(context.Background(), "svc", 1, "bad"); err == nil {
+		t.Fatal("want delivery error")
+	}
+	ds, err := ListAlertDecisions(db.DB(), "svc", 10)
+	if err != nil || len(ds) != 1 {
+		t.Fatalf("decisions = %+v, %v", ds, err)
+	}
+	js, _ := json.Marshal(ds)
+	for name, text := range map[string]string{"log": buf.String(), "db": ds[0].Reason, "api json": string(js)} {
+		for _, s := range []string{"s3cr3t-abc", "my-bare-topic"} {
+			if strings.Contains(text, s) {
+				t.Errorf("%s leaks %q: %s", name, s, text)
+			}
+		}
+	}
+	if !strings.Contains(ds[0].Reason, "401") {
+		t.Errorf("reason lost its useful part: %q", ds[0].Reason)
+	}
+}
+
+func TestScrubReason_CutsOnRuneBoundary(t *testing.T) {
+	got := scrubReason(strings.Repeat("é", 200)) // 400 bytes
+	if !utf8.ValidString(got) {
+		t.Fatalf("cut split a character: %q", got)
+	}
+	if len(got) > 310 {
+		t.Errorf("not shortened: %d bytes", len(got))
 	}
 }
