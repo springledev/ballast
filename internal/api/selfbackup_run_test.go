@@ -336,6 +336,7 @@ func TestStatusSelfBackupFirstRunPending(t *testing.T) {
 	h, _ := selfHarness(t)
 	ctx := context.Background()
 	now := time.Date(2026, 10, 20, 12, 0, 0, 0, time.UTC)
+	h.ops.Now = func() time.Time { return now }
 	if err := h.ops.EnsureSelfBackupSchedule(ctx, now); err != nil {
 		t.Fatal(err)
 	}
@@ -370,5 +371,100 @@ func TestStatusSelfBackupFirstRunPending(t *testing.T) {
 		if s.Self && (s.FirstRunPending || s.FirstRunAt != nil || s.Tiers[0].Light != "green") {
 			t.Errorf("after a run: %+v, want a plain green light", s)
 		}
+	}
+}
+
+// selfStatus returns the self-backup's entry from the full status, or
+// nil when it is not listed.
+func selfStatus(t *testing.T, h *harness) *ServiceStatus {
+	t.Helper()
+	all, err := h.ops.Status(context.Background(), "", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := range all {
+		if all[i].Self {
+			return &all[i]
+		}
+	}
+	return nil
+}
+
+// TestSelfBackupFirstRunPendingHasADeadline: "waiting for the first run"
+// holds only until the first scheduled firing (plus an hour of grace).
+// After that, no run at all is an amber "never ran", not silence, so
+// `status --check` notices a self-backup that never starts.
+func TestSelfBackupFirstRunPendingHasADeadline(t *testing.T) {
+	h, _ := selfHarness(t)
+	ctx := context.Background()
+	created := time.Date(2026, 10, 20, 12, 0, 0, 0, time.UTC)
+	if err := h.ops.EnsureSelfBackupSchedule(ctx, created); err != nil {
+		t.Fatal(err)
+	}
+	// First firing is 04:30 the next morning.
+	tests := []struct {
+		name        string
+		now         time.Time
+		wantPending bool
+		wantLight   string
+	}{
+		{"before the first firing", time.Date(2026, 10, 21, 3, 0, 0, 0, time.UTC), true, "none"},
+		{"inside the grace period", time.Date(2026, 10, 21, 5, 15, 0, 0, time.UTC), true, "none"},
+		{"past the grace period", time.Date(2026, 10, 21, 5, 45, 0, 0, time.UTC), false, "amber"},
+		{"days later", time.Date(2026, 10, 25, 5, 45, 0, 0, time.UTC), false, "amber"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			h.ops.Now = func() time.Time { return tt.now }
+			self := selfStatus(t, h)
+			if self == nil {
+				t.Fatal("self-backup not listed")
+			}
+			if self.FirstRunPending != tt.wantPending || self.Tiers[0].Light != tt.wantLight {
+				t.Fatalf("pending=%v light=%s, want pending=%v light=%s", self.FirstRunPending, self.Tiers[0].Light, tt.wantPending, tt.wantLight)
+			}
+			if !tt.wantPending && !strings.Contains(self.Tiers[0].LastError, "never") {
+				t.Errorf("no explanation that it never ran: %+v", self.Tiers[0])
+			}
+		})
+	}
+}
+
+// TestSelfBackupOptOutIsNotListed: a disabled schedule (the opt-out)
+// means the settings backup is not listed at all.
+func TestSelfBackupOptOutIsNotListed(t *testing.T) {
+	h, _ := selfHarness(t)
+	ctx := context.Background()
+	now := time.Date(2026, 10, 20, 12, 0, 0, 0, time.UTC)
+	h.ops.Now = func() time.Time { return now.AddDate(0, 0, 30) }
+	if err := h.ops.EnsureSelfBackupSchedule(ctx, now); err != nil {
+		t.Fatal(err)
+	}
+	if err := scheduler.SetEnabled(h.ops.DB, SelfBackupService, false); err != nil {
+		t.Fatal(err)
+	}
+	if self := selfStatus(t, h); self != nil {
+		t.Fatalf("opted-out self-backup is listed: %+v", self)
+	}
+}
+
+// TestRunSelfBackupSetupFailureLeavesARedRun: a failure before the
+// destinations are even reached (no work folder) still records a failed
+// run, so the light goes red instead of the failure leaving no trace.
+func TestRunSelfBackupSetupFailureLeavesARedRun(t *testing.T) {
+	h, _ := selfHarness(t)
+	h.ops.WorkRoot = ""
+	h.ops.Log = &strings.Builder{}
+	state, err := h.ops.RunSelfBackup(context.Background())
+	if err == nil || state != engine.FAILED {
+		t.Fatalf("RunSelfBackup = %v, %v; want FAILED", state, err)
+	}
+	last, lerr := engine.LastStartedRun(h.ops.DB, SelfBackupService)
+	if lerr != nil || last.RunID == 0 {
+		t.Fatalf("no run recorded for the failed attempt: %+v, %v", last, lerr)
+	}
+	st := statusOf(t, h, SelfBackupService)
+	if st.Tiers[0].Light != "red" {
+		t.Fatalf("light = %s, want red", st.Tiers[0].Light)
 	}
 }

@@ -132,6 +132,9 @@ func (o *Ops) lockSelf() (func(), error) {
 // clearStaleStaging removes self-backup staging folders under WorkRoot.
 // The caller must hold the self-backup run lock.
 func (o *Ops) clearStaleStaging() {
+	if o.WorkRoot == "" {
+		return
+	}
 	if old, err := filepath.Glob(filepath.Join(o.WorkRoot, selfStagePrefix+"*")); err == nil {
 		for _, d := range old {
 			_ = os.RemoveAll(d)
@@ -405,14 +408,7 @@ func (o *Ops) selfService() (inventory.Service, error) {
 // in any process.
 func (o *Ops) RunSelfBackup(ctx context.Context) (engine.State, error) {
 	const svc = SelfBackupService
-	if o.WorkRoot == "" {
-		return "", fmt.Errorf("%s: no work directory is configured (internal wiring error)", svc)
-	}
 	if err := o.ReservedNameConflict(); err != nil {
-		return "", fmt.Errorf("%s: %w", svc, err)
-	}
-	dests, err := o.selfDestinations()
-	if err != nil {
 		return "", fmt.Errorf("%s: %w", svc, err)
 	}
 	// The scheduler's Coordinator already holds this service's run lock
@@ -461,7 +457,17 @@ func (o *Ops) RunSelfBackup(ctx context.Context) (engine.State, error) {
 		return errors.New(strings.Join(parts, "; "))
 	}
 
+	// Everything from here on, setup problems included, is recorded on
+	// the run, so a failure always leaves a red light and an alert
+	// instead of no trace.
 	if err := m.Transition(engine.PREPARING, "preparing"); err != nil {
+		return fail(err)
+	}
+	if o.WorkRoot == "" {
+		return fail(errors.New("no work directory is configured (internal wiring error)"))
+	}
+	dests, err := o.selfDestinations()
+	if err != nil {
 		return fail(err)
 	}
 	if len(dests) == 0 {

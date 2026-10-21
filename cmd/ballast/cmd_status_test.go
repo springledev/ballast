@@ -326,7 +326,7 @@ func TestCheckStatusExitCode(t *testing.T) {
 		{"red beats amber", []api.ServiceStatus{svc("immich", "red", false), svc("vault", "amber", false)}, 2, "1 red (immich), 1 amber (vault)"},
 		{"self-backup waiting for its first run is ignored", []api.ServiceStatus{svc("vault", "green", false), {Service: "ballast-self", Self: true, FirstRunPending: true, Tiers: []api.TierStatus{{Tier: "restic", Light: "none"}}}}, 0, "1 green"},
 		{"self-backup that ran and failed still counts", []api.ServiceStatus{svc("vault", "green", false), {Service: "ballast-self", Self: true, Tiers: []api.TierStatus{{Tier: "restic", Light: "red"}}}}, 2, "1 red (ballast-self)"},
-		{"only a waiting self-backup confirms nothing", []api.ServiceStatus{{Service: "ballast-self", Self: true, FirstRunPending: true, Tiers: []api.TierStatus{{Tier: "restic", Light: "none"}}}}, 1, "No services are configured"},
+		{"only a waiting self-backup confirms nothing", []api.ServiceStatus{{Service: "ballast-self", Self: true, FirstRunPending: true, Tiers: []api.TierStatus{{Tier: "restic", Light: "none"}}}}, 1, "waiting for its first scheduled run"},
 		{"nothing configured", nil, 1, "No services are configured"},
 	}
 	for _, tt := range tests {
@@ -445,5 +445,16 @@ func TestStatusCheckGreenAfterVerifiedBackup(t *testing.T) {
 	}
 	if !strings.Contains(out, "1 green") {
 		t.Errorf("out = %q, want \"1 green\"", out)
+	}
+}
+
+// TestCheckStatusOnlyPendingSelfBackupSaysPending: asking about just the
+// self-backup while it waits for its first run says so, instead of
+// claiming nothing is configured.
+func TestCheckStatusOnlyPendingSelfBackupSaysPending(t *testing.T) {
+	first := time.Date(2026, 10, 21, 4, 30, 0, 0, time.UTC)
+	code, text := checkStatus([]api.ServiceStatus{{Service: "ballast-self", Self: true, FirstRunPending: true, FirstRunAt: &first, Tiers: []api.TierStatus{{Tier: "restic", Light: "none"}}}})
+	if code != 1 || !strings.Contains(text, "waiting for its first") || strings.Contains(text, "No services are configured") {
+		t.Fatalf("checkStatus = %d, %q; want code 1 saying ballast-self is waiting for its first run", code, text)
 	}
 }

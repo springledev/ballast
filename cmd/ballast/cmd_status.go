@@ -101,12 +101,22 @@ func checkStatus(services []api.ServiceStatus) (int, string) {
 	// The self-backup waiting for its first scheduled run has no light
 	// yet, which is expected, not a problem: leave it out until it runs.
 	confirmable := make([]api.ServiceStatus, 0, len(services))
+	var waiting []api.ServiceStatus
 	for _, s := range services {
-		if !s.FirstRunPending {
+		if s.FirstRunPending {
+			waiting = append(waiting, s)
+		} else {
 			confirmable = append(confirmable, s)
 		}
 	}
 	services = confirmable
+	if len(services) == 0 && len(waiting) > 0 {
+		when := ""
+		if waiting[0].FirstRunAt != nil {
+			when = " (due " + waiting[0].FirstRunAt.Local().Format("Mon 2 Jan 15:04") + ")"
+		}
+		return 1, fmt.Sprintf("%s is waiting for its first scheduled run%s, so there is no backup to confirm yet.", waiting[0].Service, when)
+	}
 	if len(services) == 0 {
 		return 1, "No services are configured, so there is no backup to confirm."
 	}

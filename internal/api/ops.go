@@ -47,6 +47,10 @@ import (
 // scheduler.ErrAlreadyRunning, scheduler.ErrPreviousRunInterrupted),
 // so callers can map them with errors.Is instead of string matching.
 type Ops struct {
+	// Now is the clock for first-run timing of the self-backup; nil
+	// means time.Now. Tests set it.
+	Now func() time.Time
+
 	// ListenAddr is where `ballast serve` listens ("" outside serve);
 	// Doctor warns when it is open to the network.
 	ListenAddr string
@@ -397,11 +401,13 @@ type ServiceStatus struct {
 	// service picker or edited as a service.
 	Self bool `json:"self,omitempty"`
 	// FirstRunPending is true for the self-backup while it is scheduled
-	// but has never run. It has no light yet, and that is not a
-	// problem, so `status --check` ignores it.
+	// and has never run, but only until its first scheduled firing plus
+	// an hour has passed. It has no light yet, and that is not a problem,
+	// so `status --check` ignores it. After that a self-backup that
+	// never ran is amber.
 	FirstRunPending bool `json:"first_run_pending,omitempty"`
-	// FirstRunAt is when a pending first run is due (nil when the
-	// schedule is off or never fires).
+	// FirstRunAt is when the self-backup's first run is (or was) due
+	// (nil when the schedule is off or never fires).
 	FirstRunAt   *time.Time           `json:"first_run_at,omitempty"`
 	CatalogEntry string               `json:"catalog_entry"`
 	Destination  string               `json:"destination"`
@@ -454,6 +460,14 @@ func (o *Ops) RunningServices(ctx context.Context) ([]string, error) {
 	return names, nil
 }
 
+// now returns the current time from the Now clock.
+func (o *Ops) now() time.Time {
+	if o.Now != nil {
+		return o.Now()
+	}
+	return time.Now()
+}
+
 // Status returns the status of the named service, or every configured
 // service when service is "". withVerify adds each service's last
 // run's verification records (spec §7: "shown in GUI and
@@ -494,19 +508,24 @@ func (o *Ops) Status(ctx context.Context, service string, withVerify bool) ([]Se
 	}
 
 	if service == "" && selfActive {
-		// Ballast's own settings backup gets a light of its own once it
-		// is scheduled or has run.
-		_, scheduled := scheduleByService[SelfBackupService]
+		// Ballast's own settings backup gets a light of its own while it
+		// is scheduled (an off schedule is the opt-out: not listed), or
+		// when it has run without any schedule.
+		sc, scheduled := scheduleByService[SelfBackupService]
 		last, err := engine.LastStartedRun(o.DB, SelfBackupService)
 		if err != nil {
 			return nil, err
 		}
-		if scheduled || last.RunID != 0 {
+		if (scheduled && sc.Enabled) || (!scheduled && last.RunID != 0) {
 			s, err := o.selfService()
 			if err != nil {
 				return nil, err
 			}
 			services = append(services, s)
+		}
+	} else if service == SelfBackupService && selfActive {
+		if sc, scheduled := scheduleByService[SelfBackupService]; scheduled && !sc.Enabled {
+			services = nil
 		}
 	}
 
@@ -519,18 +538,71 @@ func (o *Ops) Status(ctx context.Context, service string, withVerify bool) ([]Se
 		}
 		st.Self = selfActive && s.Name == SelfBackupService
 		if st.Self && len(st.Tiers) > 0 && st.Tiers[0].LastRunID == 0 {
-			st.FirstRunPending = true
-			if sc := scheduleByService[s.Name]; sc.Enabled {
-				if sched, perr := scheduler.ParseCron(sc.Cron); perr == nil {
-					if next, ok := sched.Next(time.Now()); ok {
-						st.FirstRunAt = &next
-					}
-				}
+			if err := o.markNeverRan(&st, scheduleByService[s.Name]); err != nil {
+				return nil, err
 			}
 		}
 		out = append(out, st)
 	}
 	return out, nil
+}
+
+// selfFirstRunGrace is how long after its first scheduled firing the
+// self-backup may still be starting up before "no run yet" turns from
+// "waiting" into a warning.
+const selfFirstRunGrace = time.Hour
+
+// markNeverRan fills st, the self-backup's status when it has no run at
+// all. Until its first scheduled firing plus selfFirstRunGrace has passed
+// it is only waiting (FirstRunPending: not a problem yet). After that a
+// self-backup that never ran is amber with a plain explanation, so
+// `status --check` and the dashboard notice it.
+func (o *Ops) markNeverRan(st *ServiceStatus, sc scheduler.ScheduledJob) error {
+	first, ok, err := o.selfFirstFiring(sc)
+	if err != nil {
+		return err
+	}
+	if ok {
+		st.FirstRunAt = &first
+		if o.now().Before(first.Add(selfFirstRunGrace)) {
+			st.FirstRunPending = true
+			return nil
+		}
+	}
+	st.Tiers[0].Light = "amber"
+	st.Tiers[0].LastError = "Ballast's own settings have never been backed up: the scheduled backup has not run. Run `ballast backup ballast-self` and check `ballast doctor`."
+	return nil
+}
+
+// selfFirstFiring returns when the self-backup's schedule first fires:
+// the first firing after the schedule was created (its last-fired mark),
+// or its creation time when it has no mark (a schedule set by hand is due
+// at once). ok is false when the schedule is off or never fires.
+func (o *Ops) selfFirstFiring(sc scheduler.ScheduledJob) (time.Time, bool, error) {
+	if !sc.Enabled {
+		return time.Time{}, false, nil
+	}
+	sched, err := scheduler.ParseCron(sc.Cron)
+	if err != nil {
+		return time.Time{}, false, nil
+	}
+	fired, err := scheduler.LastFired(o.DB, SelfBackupService)
+	if err != nil {
+		return time.Time{}, false, err
+	}
+	if fired.IsZero() {
+		var upd string
+		if err := o.DB.QueryRow(`SELECT updated_at FROM schedules WHERE service = ?`, SelfBackupService).Scan(&upd); err != nil {
+			return time.Time{}, false, fmt.Errorf("looking up when the %s schedule was set: %w", SelfBackupService, err)
+		}
+		t, perr := time.Parse(time.RFC3339Nano, upd)
+		if perr != nil {
+			return time.Time{}, false, nil
+		}
+		return t, true, nil
+	}
+	next, ok := sched.Next(fired)
+	return next, ok, nil
 }
 
 // statusOne builds the status of a single configured service.
