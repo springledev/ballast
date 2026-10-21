@@ -925,7 +925,7 @@ func DeleteService(db *sql.DB, name string) error {
 	if n, _ := res.RowsAffected(); n == 0 {
 		return fmt.Errorf("service %s: %w", name, ErrNotFound)
 	}
-	for _, table := range []string{"schedules", "trigger_tokens", "alert_state", "alert_decisions", "freshness_alerts"} {
+	for _, table := range []string{"schedules", "trigger_tokens", "alert_state", "alert_decisions", "freshness_alerts", "notification_settings"} {
 		if _, err := tx.Exec(`DELETE FROM `+table+` WHERE service = ?`, name); err != nil {
 			return fmt.Errorf("deleting service %s: clearing %s: %w", name, table, err)
 		}

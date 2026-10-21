@@ -1043,6 +1043,7 @@ func TestDeleteServiceClearsNameKeyedState(t *testing.T) {
 		`INSERT INTO alert_state (service, last_alert_at) VALUES ('vault', 'x')`,
 		`INSERT INTO alert_decisions (service, at, type, outcome) VALUES ('vault', 'x', 'failure', 'sent')`,
 		`INSERT INTO freshness_alerts (service, last_checked_at, is_stale) VALUES ('vault', 'x', 1)`,
+		`INSERT INTO notification_settings (service, enabled, updated_at) VALUES ('vault', 0, 'x')`,
 		// Another service's rows must stay.
 		`INSERT INTO schedules (service, cron_expr, enabled, updated_at) VALUES ('other', '* * * * *', 1, 'x')`,
 		`INSERT INTO alert_state (service, last_alert_at) VALUES ('other', 'x')`,
@@ -1054,7 +1055,7 @@ func TestDeleteServiceClearsNameKeyedState(t *testing.T) {
 	if err := DeleteService(db, "vault"); err != nil {
 		t.Fatal(err)
 	}
-	for _, table := range []string{"schedules", "trigger_tokens", "alert_state", "alert_decisions", "freshness_alerts"} {
+	for _, table := range []string{"schedules", "trigger_tokens", "alert_state", "alert_decisions", "freshness_alerts", "notification_settings"} {
 		var n int
 		if err := db.QueryRow(`SELECT COUNT(*) FROM ` + table + ` WHERE service = 'vault'`).Scan(&n); err != nil {
 			t.Fatal(err)
