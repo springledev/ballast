@@ -8,6 +8,8 @@ import (
 	"strings"
 	"sync"
 	"testing"
+
+	"github.com/springledev/ballast/internal/inventory"
 )
 
 func TestSelfBackupStagesAndVerifies(t *testing.T) {
@@ -146,5 +148,54 @@ func TestSelfBackupMustContainDatabase(t *testing.T) {
 	}
 	if res.Verified {
 		t.Fatal("a snapshot without the database must not be verified")
+	}
+}
+
+// legacySelfNamedService stores a service called ballast-self the way
+// v0.5 allowed (PutService now refuses that name).
+func legacySelfNamedService(t *testing.T, h *harness) {
+	t.Helper()
+	h.addDestination("local")
+	if err := inventory.PutService(h.ops.DB, inventory.Service{Name: "old-name", CatalogEntry: "folder", Destination: "local", Params: map[string]string{"path": "/x"}}); err != nil {
+		t.Fatal(err)
+	}
+	// A v0.5 database can hold this row; it has no other table rows to move.
+	if _, err := h.ops.DB.Exec(`DELETE FROM service_targets WHERE service = 'old-name'`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := h.ops.DB.Exec(`UPDATE services SET name = ? WHERE name = 'old-name'`, SelfBackupService); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// TestReservedNameConflict: a service left over from v0.5 that is named
+// like the self-backup is detected, with a plain-English fix; doctor
+// fails on it, and a clean database reports nothing.
+func TestReservedNameConflict(t *testing.T) {
+	h := newHarness(t)
+	if err := h.ops.ReservedNameConflict(); err != nil {
+		t.Fatalf("clean database: %v", err)
+	}
+	legacySelfNamedService(t, h)
+	err := h.ops.ReservedNameConflict()
+	if err == nil || !strings.Contains(err.Error(), "ballast-self") || !strings.Contains(err.Error(), "another name") {
+		t.Fatalf("conflict = %v, want a message naming ballast-self and telling the user to use another name", err)
+	}
+	h.ops.ResticBin = h.resticBin
+	rep, derr := h.ops.Doctor(context.Background())
+	if derr != nil {
+		t.Fatal(derr)
+	}
+	found := false
+	for _, c := range rep.Checks {
+		if c.Name == "ballast-self" && c.Area == "service" {
+			found = true
+			if c.Status != DoctorFail {
+				t.Errorf("doctor status = %s, want fail", c.Status)
+			}
+		}
+	}
+	if !found {
+		t.Fatalf("doctor has no check for the reserved name: %+v", rep.Checks)
 	}
 }

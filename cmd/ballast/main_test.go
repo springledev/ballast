@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"github.com/springledev/ballast/internal/engine"
+	"github.com/springledev/ballast/internal/inventory"
 	"github.com/springledev/ballast/internal/scheduler"
 	"github.com/springledev/ballast/internal/store"
 )
@@ -777,5 +778,38 @@ func TestUntaggedBuildReportsCommit(t *testing.T) {
 	}
 	if !regexp.MustCompile(`^[0-9a-f]{7,}(-dirty)?$|^v\S+$`).MatchString(got) {
 		t.Errorf("version = %q, want a short commit (optionally -dirty) or a tag", got)
+	}
+}
+
+// TestRunDueRefusesReservedServiceName: a service called ballast-self
+// (allowed before v0.6) would be hijacked by the settings backup, so
+// run-due refuses to run anything and says how to fix it.
+func TestRunDueRefusesReservedServiceName(t *testing.T) {
+	r := &spyRunner{}
+	data := cliEnv(t, r)
+	withDB(t, data, func(s *store.Store) {
+		if err := inventory.PutDestination(s.DB(), inventory.Destination{Name: "local", Location: "/x", KeepDaily: 7}); err != nil {
+			t.Fatal(err)
+		}
+		if err := inventory.PutService(s.DB(), inventory.Service{Name: "old-name", CatalogEntry: "folder", Destination: "local", Params: map[string]string{"path": "/x"}}); err != nil {
+			t.Fatal(err)
+		}
+		// A v0.5 database can hold this row; it has no other table rows to move.
+		if _, err := s.DB().Exec(`DELETE FROM service_targets WHERE service = 'old-name'`); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := s.DB().Exec(`UPDATE services SET name = 'ballast-self' WHERE name = 'old-name'`); err != nil {
+			t.Fatal(err)
+		}
+		if err := scheduler.SetSchedule(s.DB(), "ballast-self", "* * * * *"); err != nil {
+			t.Fatal(err)
+		}
+	})
+	out, err := execCLI(t, "run-due")
+	if err == nil || !strings.Contains(err.Error(), "ballast-self") || !strings.Contains(err.Error(), "another name") {
+		t.Fatalf("run-due = %v (output %q), want a refusal naming ballast-self", err, out)
+	}
+	if len(r.ran) != 0 {
+		t.Errorf("ran = %v, want nothing run", r.ran)
 	}
 }

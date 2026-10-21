@@ -62,6 +62,23 @@ type selfStaging struct {
 
 func (s *selfStaging) remove() { _ = os.RemoveAll(s.dir) }
 
+// ReservedNameConflict returns a plain-English error when a service
+// named like the self-backup (SelfBackupService) exists. Ballast before
+// v0.6 allowed that name; now the scheduled settings backup owns it, so
+// the old service would be hijacked and shown twice. Nothing is renamed
+// or deleted automatically: the owner decides. It returns nil when
+// there is no conflict.
+func (o *Ops) ReservedNameConflict() error {
+	_, err := inventory.GetService(o.DB, SelfBackupService)
+	if errors.Is(err, inventory.ErrNotFound) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("checking for a service named %s: %w", SelfBackupService, err)
+	}
+	return fmt.Errorf("a service is named %s, but Ballast now uses that name for backing up its own settings, so that service cannot be backed up. Add the same service again under another name, then remove this one with `ballast service remove %s`. Your existing backups in the destinations are not touched", SelfBackupService, SelfBackupService)
+}
+
 // selfStagePrefix starts the name of every self-backup staging folder
 // under WorkRoot.
 const selfStagePrefix = "_self"

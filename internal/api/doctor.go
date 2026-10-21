@@ -95,6 +95,12 @@ func (o *Ops) Doctor(ctx context.Context) (DoctorReport, error) {
 		add("restic", "restic", DoctorOK, "restic "+pre.ResticVersion+" is installed")
 	}
 
+	if o.DB != nil {
+		if cerr := o.ReservedNameConflict(); cerr != nil {
+			add("service", SelfBackupService, DoctorFail, cerr.Error())
+		}
+	}
+
 	hosts, err := o.ListDockerHosts(ctx)
 	if err != nil {
 		return rep, fmt.Errorf("doctor: listing Docker hosts: %w", err)
