@@ -106,7 +106,7 @@ func TestAlertDecisions_KeepsOnlyLastFew(t *testing.T) {
 	db := testDB(t)
 	defer db.Close()
 	for i := 0; i < maxAlertDecisions+5; i++ {
-		err := RecordAlertDecision(db.DB(), AlertDecision{
+		err := storeDecision(db.DB(), AlertDecision{
 			Service: "svc", At: time.Unix(int64(1000+i), 0).UTC(),
 			Type: "job_failure", Outcome: "sent",
 		})

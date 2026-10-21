@@ -55,13 +55,6 @@ func scrubReason(s string) string {
 	return s
 }
 
-// RecordAlertDecision stores d and trims the service's history to the
-// last few decisions.
-func RecordAlertDecision(db *sql.DB, d AlertDecision) error {
-	d.Reason = scrubReason(d.Reason)
-	return storeDecision(db, d)
-}
-
 // storeDecision saves d as given; the caller has already cleaned the
 // reason.
 func storeDecision(db *sql.DB, d AlertDecision) error {

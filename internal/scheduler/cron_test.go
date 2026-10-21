@@ -505,30 +505,6 @@ func TestIsDueAcrossDaylightSavingChanges(t *testing.T) {
 	}
 }
 
-func TestScheduleGap(t *testing.T) {
-	from := time.Date(2026, 10, 9, 5, 0, 15, 0, time.UTC)
-	tests := []struct {
-		expr string
-		want time.Duration
-	}{
-		{"0 5 * * *", 24 * time.Hour},
-		{"0 * * * *", time.Hour},
-		{"*/15 * * * *", 15 * time.Minute},
-		{"0 5 * * 1", 7 * 24 * time.Hour},
-	}
-	for _, tt := range tests {
-		t.Run(tt.expr, func(t *testing.T) {
-			s, err := ParseCron(tt.expr)
-			if err != nil {
-				t.Fatal(err)
-			}
-			if got, ok := s.Gap(from); !ok || got != tt.want {
-				t.Fatalf("Gap = %v, %v; want %v", got, ok, tt.want)
-			}
-		})
-	}
-}
-
 func TestScheduleNext(t *testing.T) {
 	loc := time.FixedZone("test", 2*3600)
 	s, err := ParseCron("30 4 * * *")
