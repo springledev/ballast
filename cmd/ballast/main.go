@@ -147,6 +147,13 @@ var serveCmd = &cobra.Command{
 			log.Printf("ballast: listening beyond this machine over plain HTTP; put Ballast behind a reverse proxy with HTTPS (or a tailnet) before exposing it")
 		}
 
+		// Runs a crashed or powered-off Ballast left unfinished are failed
+		// now, whether or not the service has a schedule (the sweep only
+		// looks at scheduled ones), so none lingers as "running".
+		if _, err := a.coord.RecoverInterrupted(ctx); err != nil {
+			a.logf("clearing runs left over from the last time Ballast stopped: %v", err)
+		}
+
 		schedDone := make(chan struct{})
 		go func() {
 			defer close(schedDone)

@@ -425,21 +425,33 @@ type ServiceStatus struct {
 }
 
 // RunningServices returns the names of the services that have a backup
-// in progress right now (spec §21.5), empty when Ballast is idle. A run
-// left unfinished by a crash counts until the next run of that service
-// ends it.
+// in progress right now (spec §21.5), empty when Ballast is idle.
+//
+// An unfinished run record is not proof: after a crash or power loss
+// the record stays unfinished although no process is working on it. So
+// a run counts only while a live process holds its service's run lock,
+// the same truth the scheduler uses to tell an interrupted run from a
+// slow one (scheduler.Coordinator.IsRunning). It is two cheap steps (one
+// query, one lock probe per unfinished run), so it is fine to poll.
 func (o *Ops) RunningServices(ctx context.Context) ([]string, error) {
-	st, err := o.Status(ctx, "", false)
+	unfinished, err := engine.UnfinishedServices(o.DB)
 	if err != nil {
 		return nil, fmt.Errorf("checking for running backups: %w", err)
 	}
 	var names []string
-	for _, s := range st {
-		for _, t := range s.Tiers {
-			if t.Light == "running" {
-				names = append(names, s.Service)
-				break
-			}
+	for _, name := range unfinished {
+		if o.Coord == nil || o.Coord.Locks == nil {
+			// Cannot tell; say it is running rather than risk an
+			// upgrade over a live backup.
+			names = append(names, name)
+			continue
+		}
+		running, err := o.Coord.IsRunning(name)
+		if err != nil {
+			return nil, fmt.Errorf("checking for running backups: %w", err)
+		}
+		if running {
+			names = append(names, name)
 		}
 	}
 	return names, nil

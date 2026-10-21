@@ -58,3 +58,36 @@ func LastStartedRun(db *sql.DB, service string) (LatestRun, error) {
 	}
 	return lr, nil
 }
+
+// UnfinishedServices returns, sorted, the services whose most recent
+// run has not finished. It is one cheap query (no status building), so
+// it is safe to poll. Whether such a run is still alive or was left
+// behind by a crash is not recorded here: only the service's run lock
+// can tell (see scheduler.Coordinator.IsRunning).
+func UnfinishedServices(db *sql.DB) ([]string, error) {
+	rows, err := db.Query(`
+		SELECT j.service FROM runs r
+		JOIN jobs j ON j.id = r.job_id
+		WHERE r.finished_at IS NULL
+		  AND r.id = (SELECT MAX(r2.id) FROM runs r2
+		              JOIN jobs j2 ON j2.id = r2.job_id
+		              WHERE j2.service = j.service)
+		GROUP BY j.service
+		ORDER BY j.service`)
+	if err != nil {
+		return nil, fmt.Errorf("looking for unfinished runs: %w", err)
+	}
+	defer rows.Close()
+	var out []string
+	for rows.Next() {
+		var s string
+		if err := rows.Scan(&s); err != nil {
+			return nil, fmt.Errorf("reading unfinished runs: %w", err)
+		}
+		out = append(out, s)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("looking for unfinished runs: %w", err)
+	}
+	return out, nil
+}

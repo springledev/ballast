@@ -1007,3 +1007,28 @@ func TestRunDueSkipsNewScheduleAfterManualBackup(t *testing.T) {
 		t.Errorf("ran = %v, want nothing: backed up an hour ago by hand", f.runner.ran)
 	}
 }
+
+// TestRecoverInterruptedFailsDeadRunsAtStartup: a run a crashed daemon
+// left unfinished is failed at startup even for a service with no
+// schedule (RunDue never looks at those), while a run whose lock is
+// held is left alone.
+func TestRecoverInterruptedFailsDeadRunsAtStartup(t *testing.T) {
+	f := newFixture(t)
+	dead := f.leaveUnfinishedRun(t, "manual-only") // no schedule, no lock
+	f.holdLock(t, "live")
+	live := f.leaveUnfinishedRun(t, "live")
+
+	n, err := f.c.RecoverInterrupted(context.Background())
+	if err != nil || n != 1 {
+		t.Fatalf("RecoverInterrupted = %d, %v; want 1, nil", n, err)
+	}
+	if got := runState(t, f, dead); got.State != engine.FAILED || got.Error != engine.InterruptedDetail {
+		t.Errorf("dead run = %+v, want FAILED as interrupted", got)
+	}
+	if got := runState(t, f, live); got.State != engine.PREPARING {
+		t.Errorf("live run state = %s, want it untouched", got.State)
+	}
+	if n, err := f.c.RecoverInterrupted(context.Background()); err != nil || n != 0 {
+		t.Errorf("second call = %d, %v; want 0, nil", n, err)
+	}
+}

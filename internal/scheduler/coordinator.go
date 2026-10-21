@@ -437,6 +437,55 @@ func (c *Coordinator) StartTrigger(ctx context.Context, service, token string) (
 	return c.Start(ctx, service)
 }
 
+// IsRunning reports whether a live process holds service's run lock,
+// i.e. a backup of it is really in progress. The kernel drops a lock
+// when its process dies, so an unfinished run record with a free lock
+// was left behind by a crash or power loss. It never keeps the lock.
+func (c *Coordinator) IsRunning(service string) (bool, error) {
+	release, ok, err := c.Locks.TryLock(service)
+	if err != nil {
+		return false, fmt.Errorf("checking whether %s is running: %w", service, err)
+	}
+	if ok {
+		release()
+		return false, nil
+	}
+	return true, nil
+}
+
+// RecoverInterrupted fails, right away, every run a previous Ballast
+// process left unfinished, instead of waiting for the next time that
+// service is claimed. RunDue only does so for services that have an
+// enabled schedule, so a manual-only service would otherwise show
+// "running" (and block `wait-idle`) until someone ran it again. Each
+// is reported like any failed run. A service whose lock is held is
+// really running and is left alone. It returns how many it failed.
+func (c *Coordinator) RecoverInterrupted(ctx context.Context) (int, error) {
+	names, err := engine.UnfinishedServices(c.DB)
+	if err != nil {
+		return 0, c.redactErr(err)
+	}
+	var (
+		n    int
+		errs []error
+	)
+	for _, name := range names {
+		release, interrupted, err := c.claim(ctx, name, 0)
+		if errors.Is(err, ErrAlreadyRunning) {
+			continue
+		}
+		if err != nil {
+			errs = append(errs, fmt.Errorf("%s: %w", name, err))
+			continue
+		}
+		release()
+		if interrupted {
+			n++
+		}
+	}
+	return n, c.redactErr(errors.Join(errs...))
+}
+
 // lock takes service's run lock, retrying every lockPollInterval for up
 // to wait while another holder has it.
 func (c *Coordinator) lock(ctx context.Context, service string, wait time.Duration) (func(), error) {

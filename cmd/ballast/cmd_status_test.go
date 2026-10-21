@@ -10,10 +10,12 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/springledev/ballast/internal/api"
+	"github.com/springledev/ballast/internal/scheduler"
 	"github.com/spf13/cobra"
 )
 
@@ -175,6 +177,7 @@ func TestStatusRunningFlag(t *testing.T) {
 			t.Fatalf("StartRun: %v", err)
 		}
 	})
+	holdRunLock(t, data, "vault") // a live run's process holds the lock
 	out, err = execCLI(t, "status", "--running")
 	if err == nil {
 		t.Fatalf("running: want a non-zero exit, got nil (out %q)", out)
@@ -203,12 +206,45 @@ func TestWaitIdleCommand(t *testing.T) {
 			t.Fatalf("StartRun: %v", err)
 		}
 	})
+	holdRunLock(t, data, "vault") // a live run's process holds the lock
 	prev := waitIdleInterval
 	waitIdleInterval = 10 * time.Millisecond
 	t.Cleanup(func() { waitIdleInterval = prev })
 	_, err := execCLI(t, "wait-idle", "--timeout", "50ms")
 	if err == nil || !strings.Contains(err.Error(), "still running") || !strings.Contains(err.Error(), "vault") {
 		t.Fatalf("busy: err = %v, want a timeout naming vault", err)
+	}
+}
+
+// holdRunLock takes service's run lock in data, as a live run's process
+// does, and returns the function that gives it up (also run at cleanup).
+func holdRunLock(t *testing.T, data, service string) func() {
+	t.Helper()
+	release, ok, err := scheduler.FileLocker{Dir: filepath.Join(data, "locks")}.TryLock(service)
+	if err != nil || !ok {
+		t.Fatalf("taking the run lock for %s: ok=%v err=%v", service, ok, err)
+	}
+	var once sync.Once
+	rel := func() { once.Do(release) }
+	t.Cleanup(rel)
+	return rel
+}
+
+// TestWaitIdleIgnoresACrashedRun: a run left unfinished by a crash
+// (nothing holds its lock) must not stall wait-idle or status --running.
+func TestWaitIdleIgnoresACrashedRun(t *testing.T) {
+	data := cliEnv(t, &spyRunner{})
+	seedTwoServices(t)
+	withDB(t, data, func(s *store.Store) {
+		if _, err := engine.StartRun(s.DB(), "vault"); err != nil {
+			t.Fatalf("StartRun: %v", err)
+		}
+	})
+	if out, err := execCLI(t, "wait-idle", "--timeout", "5s"); err != nil || !strings.Contains(out, "Nothing is running") {
+		t.Fatalf("wait-idle with a crashed run: err=%v out=%q", err, out)
+	}
+	if out, err := execCLI(t, "status", "--running"); err != nil {
+		t.Errorf("status --running with a crashed run: err=%v out=%q", err, out)
 	}
 }
 
@@ -233,11 +269,13 @@ func TestWaitIdleSeesRunReachVerifyingThenSuccess(t *testing.T) {
 				t.Fatalf("Transition %s: %v", st, err)
 			}
 		}
+		release := holdRunLock(t, data, "vault") // the live run's lock
 		// Still VERIFYING: not idle.
 		if _, err := execCLI(t, "status", "--running"); err == nil {
 			t.Error("status --running in VERIFYING: want non-zero exit")
 		}
 		go func() {
+			defer release()
 			time.Sleep(150 * time.Millisecond)
 			_ = m.RecordVerification(engine.VerificationRecord{Method: "archive-integrity", Passed: true})
 			_ = m.Transition(engine.SUCCESS, "verified")

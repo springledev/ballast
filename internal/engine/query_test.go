@@ -121,3 +121,28 @@ func TestLastStartedRunErrors(t *testing.T) {
 		}
 	})
 }
+
+func TestUnfinishedServices(t *testing.T) {
+	s := openMachineDB(t)
+	if got, err := UnfinishedServices(s.DB()); err != nil || len(got) != 0 {
+		t.Fatalf("empty = %v, %v; want none", got, err)
+	}
+	done, _ := StartRun(s.DB(), "done")
+	finishRun(t, done)
+	// "retried": an old unfinished run followed by a finished one.
+	if _, err := StartRun(s.DB(), "retried"); err != nil {
+		t.Fatal(err)
+	}
+	r2, _ := StartRun(s.DB(), "retried")
+	finishRun(t, r2)
+	if _, err := StartRun(s.DB(), "b"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := StartRun(s.DB(), "a"); err != nil {
+		t.Fatal(err)
+	}
+	got, err := UnfinishedServices(s.DB())
+	if err != nil || len(got) != 2 || got[0] != "a" || got[1] != "b" {
+		t.Errorf("UnfinishedServices = %v, %v; want [a b]", got, err)
+	}
+}
