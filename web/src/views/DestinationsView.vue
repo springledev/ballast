@@ -5,10 +5,13 @@ import { api } from "@/api/client";
 import type { Destination, DestinationType, ProtonSignIn } from "@/api/types";
 import { buildSettings, credentialKind, destinationTypes, isCopyOnly, typeLabel, type DestinationFormFields } from "@/lib/destinations";
 import { describeRetention } from "@/lib/retention";
+import { askConfirm } from "@/lib/confirm";
+import { revealOnError } from "@/lib/revealError";
 
 const destinations = ref<Destination[]>([]);
 const loading = ref(true);
 const error = ref("");
+revealOnError(error);
 const saving = ref(false);
 const showForm = ref(false);
 const showAdvancedType = ref(false);
@@ -208,12 +211,13 @@ async function initRepo(name: string) {
 }
 
 async function remove(name: string) {
-  if (!confirm(`Forget "${name}"? The backups stored there are not deleted. Anything still backing up to it must be moved first.`)) {
+  if (!(await askConfirm(`Forget "${name}"? The backups stored there are not deleted. Anything still backing up to it must be moved first.`, "Forget"))) {
     return;
   }
   error.value = "";
   try {
     await api.deleteDestination(name);
+    if (created.value?.name === name) created.value = null;
     await load();
   } catch (e) {
     error.value = (e as Error).message;

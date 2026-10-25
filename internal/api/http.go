@@ -148,6 +148,10 @@ type handler struct{ ops *Ops }
 
 // --- response/request helpers -----------------------------------------
 
+// ErrServiceExists is returned when a new service is given the name of one
+// that already exists.
+var ErrServiceExists = errors.New("a backup with that name already exists; choose another name, or edit the existing one")
+
 func writeJSON(w http.ResponseWriter, status int, v any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
@@ -167,7 +171,7 @@ func (h *handler) writeErr(w http.ResponseWriter, err error, defaultStatus int) 
 	switch {
 	case errors.Is(err, inventory.ErrNotFound):
 		status = http.StatusNotFound
-	case errors.Is(err, inventory.ErrInUse), errors.Is(err, scheduler.ErrAlreadyRunning), errors.Is(err, repohealth.ErrBusy), errors.Is(err, ErrSelfBackupRunning), errors.Is(err, ErrReservedName), errors.Is(err, inventory.ErrReservedName):
+	case errors.Is(err, inventory.ErrInUse), errors.Is(err, scheduler.ErrAlreadyRunning), errors.Is(err, repohealth.ErrBusy), errors.Is(err, ErrSelfBackupRunning), errors.Is(err, ErrReservedName), errors.Is(err, inventory.ErrReservedName), errors.Is(err, ErrServiceExists):
 		status = http.StatusConflict
 	case errors.Is(err, ErrValidation):
 		status = http.StatusBadRequest
@@ -282,6 +286,15 @@ func (h *handler) createService(w http.ResponseWriter, r *http.Request) {
 	}
 	if s.DockerHost == "" {
 		s.DockerHost = dockerhost.LocalName
+	}
+	// POST adds; PUT /services/{name} is how an existing one is changed.
+	// PutService would otherwise quietly replace the existing settings.
+	if _, err := h.ops.GetService(r.Context(), s.Name); err == nil {
+		h.writeErr(w, fmt.Errorf("service %s: %w", s.Name, ErrServiceExists), http.StatusConflict)
+		return
+	} else if !errors.Is(err, inventory.ErrNotFound) {
+		h.writeErr(w, err, http.StatusInternalServerError)
+		return
 	}
 	if err := h.ops.PutService(r.Context(), s); err != nil {
 		h.writeErr(w, err, http.StatusInternalServerError)

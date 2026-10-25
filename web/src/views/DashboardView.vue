@@ -10,7 +10,7 @@ import { anyServiceVerified, checklistComplete, firstRunChecklist } from "@/lib/
 import { describeUpload, formatAgeSeconds, formatDateTime, formatRelative } from "@/lib/format";
 import { emptyProgress, parseProgress, scriptSteps, type ScriptProgress } from "@/lib/replaceScript";
 import { describeSchedule } from "@/lib/schedule";
-import { countLights, emptyQuery, filterEntries, groupEntries, lightShares, needsTools, type ListEntry, type ListQuery } from "@/lib/listView";
+import { COLLAPSE_SAFE_FROM, collapsesGroup, countLights, emptyQuery, filterEntries, groupEntries, lightShares, needsTools, type ListEntry, type ListQuery } from "@/lib/listView";
 import { usePref } from "@/lib/prefs";
 import { describeTier, lightLabel, shortStatus, summarize, worstLight } from "@/lib/status";
 
@@ -127,6 +127,10 @@ const counts = computed(() => countLights(services.value, entry));
 const shares = computed(() => lightShares(services.value, entry));
 const filtered = computed(() => filterEntries(services.value, entry, effectiveQuery.value));
 const groups = computed(() => groupEntries(filtered.value, entry, effectiveQuery.value.group));
+
+// A long healthy group stays folded until asked for.
+const safeOpen = ref(false);
+const folded = (g: { key: string; items: unknown[] }) => collapsesGroup(g, effectiveQuery.value, safeOpen.value);
 
 function showOnly(light: ListQuery["light"]) {
   if (!showTools.value) return;
@@ -329,8 +333,12 @@ onUnmounted(() => clearInterval(timer));
 
       <section v-for="g in groups" :key="g.key" class="group" :aria-label="g.label || undefined">
         <h3 v-if="g.label" class="group-head">{{ g.label }} <span class="muted">{{ g.items.length }}</span></h3>
+        <p v-if="folded(g)" class="group-folded">
+          <button class="btn btn-quiet" type="button" @click="safeOpen = true">Show all {{ g.items.length }} safe backups</button>
+        </p>
+        <button v-else-if="g.key === 'green' && safeOpen && g.items.length > COLLAPSE_SAFE_FROM" class="btn btn-quiet btn-small group-fold" type="button" @click="safeOpen = false">Hide safe backups</button>
 
-        <ul v-if="compact" class="rows">
+        <ul v-if="!folded(g) && compact" class="rows">
           <li v-for="s in g.items" :key="s.service" class="row signal" :class="`signal--${worstLight(s)}`">
             <label class="row-check">
               <input
@@ -342,7 +350,7 @@ onUnmounted(() => clearInterval(timer));
               />
             </label>
             <div class="row-main">
-              <span class="item-title">{{ s.service }}</span>
+              <router-link class="item-title row-link" :to="{ path: '/services', query: { q: s.service } }">{{ s.service }}</router-link>
               <span class="item-sub">{{ shortStatus(s) }}</span>
             </div>
             <span class="row-meta item-sub">{{ s.catalog_entry }}, {{ s.destination }}</span>
@@ -352,7 +360,7 @@ onUnmounted(() => clearInterval(timer));
           </li>
         </ul>
 
-        <ul v-else class="cards">
+        <ul v-else-if="!folded(g)" class="cards">
           <li v-for="s in g.items" :key="s.service" class="card signal" :class="`signal--${worstLight(s)}`">
             <div class="item-head">
               <div class="item-name">

@@ -38,6 +38,15 @@ var ErrNotFound = errors.New("not found")
 // references it.
 var ErrInUse = errors.New("still in use")
 
+// backupCount words how many backups use something, with the pronoun that
+// goes with it: "1 backup" and "it", or "45 backups" and "them".
+func backupCount(n int) (what, them string) {
+	if n == 1 {
+		return "1 backup", "it"
+	}
+	return fmt.Sprintf("%d backups", n), "them"
+}
+
 // ErrReservedName is wrapped by PutService's error for the name
 // Ballast keeps for backing up its own settings (SelfBackupService).
 var ErrReservedName = errors.New("reserved name")
@@ -332,7 +341,8 @@ func DeleteDestination(db *sql.DB, name string) (err error) {
 		return fmt.Errorf("checking destination %s usage: %w", name, err)
 	}
 	if count > 0 {
-		return fmt.Errorf("destination %s: %w (used by %d service(s))", name, ErrInUse, count)
+		what, them := backupCount(count)
+		return fmt.Errorf("destination %s: %w by %s. Move %s to another destination first", name, ErrInUse, what, them)
 	}
 	res, err := tx.Exec(`DELETE FROM destinations WHERE name = ?`, name)
 	if err != nil {

@@ -30,7 +30,8 @@ export function describeTier(t: TierStatus): string {
     case "red":
       return t.last_finished_at ? `The last backup failed (${when}).` : "The last backup failed.";
     case "running":
-      return t.waiting ? `Backing up now, ${t.waiting}…` : "Backing up now…";
+      if (t.waiting) return `Backing up now, ${t.waiting}…`;
+      return t.phase ? `Backing up now: ${t.phase}…` : "Backing up now…";
     default:
       return "Hasn't been backed up yet.";
   }
@@ -94,7 +95,9 @@ export function shortStatus(s: ServiceStatus): string {
   const light = worstLight(s);
   if (light === "running") {
     const up = (s.targets ?? []).find((t) => t.upload && t.upload.total_bytes > 0)?.upload;
-    return up ? `Uploading, ${Math.floor(up.percent)}%` : "Backing up now";
+    if (up) return `Uploading, ${Math.floor(up.percent)}%`;
+    const phase = s.tiers.find((t) => t.light === "running")?.phase;
+    return phase ? `Backing up now, ${phase}` : "Backing up now";
   }
   if (light === "none") return lightLabel.none;
   const finished = s.tiers

@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  collapsesGroup,
   countLights,
   emptyQuery,
   filterEntries,
@@ -107,4 +108,23 @@ describe("lightShares", () => {
   it("is empty for an empty list", () => {
     expect(lightShares([], id)).toEqual([]);
   });
+});
+
+describe("collapsesGroup", () => {
+  const safe = (n: number) => ({ key: "green", items: new Array(n).fill(0) });
+  const byStatus = { ...emptyQuery(), group: "status" as const };
+  const cases = [
+    { name: "folds a long safe group", g: safe(20), q: byStatus, open: false, want: true },
+    { name: "keeps a short safe group open", g: safe(12), q: byStatus, open: false, want: false },
+    { name: "stays open once asked for", g: safe(20), q: byStatus, open: true, want: false },
+    { name: "never folds a problem group", g: { key: "red", items: new Array(30).fill(0) }, q: byStatus, open: false, want: false },
+    { name: "does not fold ungrouped lists", g: safe(20), q: emptyQuery(), open: false, want: false },
+    { name: "shows safe backups when searching", g: safe(20), q: { ...byStatus, text: "app" }, open: false, want: false },
+    { name: "shows safe backups when the Safe filter is on", g: safe(20), q: { ...byStatus, light: "green" as const }, open: false, want: false },
+  ];
+  for (const c of cases) {
+    it(c.name, () => {
+      expect(collapsesGroup(c.g, c.q, c.open)).toBe(c.want);
+    });
+  }
 });

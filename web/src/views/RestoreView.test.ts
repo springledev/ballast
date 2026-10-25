@@ -173,3 +173,52 @@ describe("restore picker", () => {
     unmount();
   });
 });
+
+describe("restore picker with many backups", () => {
+  beforeEach(() => localStorage.clear());
+  afterEach(() => vi.unstubAllGlobals());
+
+  const many: Service[] = Array.from({ length: 10 }, (_, i) => ({
+    name: `app-${String(i).padStart(2, "0")}`,
+    catalog_entry: "folder",
+    destination: "nas",
+  }));
+
+  function stubMany() {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn((url: string) => Promise.resolve(json(url.endsWith("/services") ? many : url.endsWith("/destinations") ? [{ name: "nas" }] : []))),
+    );
+  }
+
+  function optionNames(el: HTMLElement): string[] {
+    return [...el.querySelectorAll<HTMLOptionElement>("#restore-service option")].map((o) => o.value).filter(Boolean);
+  }
+
+  it("has no filter box for a handful of backups", async () => {
+    installFetch();
+    const { el, unmount } = await mount();
+    expect(el.querySelector(".restore-filter")).toBeNull();
+    unmount();
+  });
+
+  it("narrows the list as you type, and keeps the chosen backup in it", async () => {
+    stubMany();
+    const { el, unmount } = await mount();
+    const filter = el.querySelector<HTMLInputElement>(".restore-filter")!;
+    expect(optionNames(el)).toHaveLength(10);
+
+    filter.value = "app-03";
+    filter.dispatchEvent(new Event("input"));
+    await nextTick();
+    expect(optionNames(el)).toEqual(["app-03"]);
+
+    pick(el, "#restore-service", "app-03");
+    await flush();
+    filter.value = "app-07";
+    filter.dispatchEvent(new Event("input"));
+    await nextTick();
+    expect(optionNames(el)).toEqual(["app-03", "app-07"]);
+    unmount();
+  });
+});

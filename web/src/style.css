@@ -1024,6 +1024,15 @@ details.panel--fold[open] > summary h3::before {
   white-space: nowrap;
 }
 
+.row-main a.row-link {
+  color: inherit;
+  text-decoration: none;
+}
+
+.row-main a.row-link:hover {
+  text-decoration: underline;
+}
+
 .row-meta {
   display: none;
 }
@@ -1734,4 +1743,36 @@ th {
   flex: 1 1 14rem;
   width: auto;
   max-width: 22rem;
+}
+
+/* Confirmation dialog (components/ConfirmDialog.vue). */
+dialog.confirm {
+  width: min(28rem, calc(100vw - 2rem));
+  padding: 1.25rem;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius);
+  background: var(--surface);
+  color: var(--ink);
+}
+
+dialog.confirm::backdrop {
+  background: rgb(0 0 0 / 0.55);
+}
+
+.confirm-message {
+  margin: 0 0 1.25rem;
+  line-height: 1.5;
+}
+
+/* Overview: the folded "Safe" group and the Restore picker's filter box. */
+.group-folded {
+  margin: 0 0 1rem;
+}
+
+.group-fold {
+  margin: 0 0 0.6rem;
+}
+
+.restore-filter {
+  margin-bottom: 0.5rem;
 }

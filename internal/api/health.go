@@ -57,10 +57,10 @@ func (o *Ops) Health(ctx context.Context) (HealthReport, error) {
 	}
 	switch {
 	case last == nil:
-		add("self-backup", DoctorWarn, "Ballast has never backed up its own settings. Run a self-backup (ballast self-backup <destination>) so you can rebuild Ballast if this machine is lost.")
+		add("self-backup", DoctorWarn, "Ballast hasn't saved a copy of its own settings yet. If this machine is lost you would have to set everything up again. To fix that, run `ballast self-backup <destination>` on the server.")
 	case time.Since(*last) > SelfBackupMaxAge:
 		rep.LastSelfBackupAt = last
-		add("self-backup", DoctorWarn, fmt.Sprintf("Ballast's own settings were last backed up %s ago. Run a self-backup (ballast self-backup <destination>).", humanAge(time.Since(*last))))
+		add("self-backup", DoctorWarn, fmt.Sprintf("Ballast's own settings were last saved %s ago. To save them again, run `ballast self-backup <destination>` on the server.", humanAge(time.Since(*last))))
 	default:
 		rep.LastSelfBackupAt = last
 		add("self-backup", DoctorOK, fmt.Sprintf("Ballast's own settings were backed up %s ago", humanAge(time.Since(*last))))

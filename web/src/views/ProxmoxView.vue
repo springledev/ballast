@@ -3,10 +3,13 @@ import { reactive, ref } from "vue";
 
 import { api } from "@/api/client";
 import type { ProxmoxConnection, ProxmoxGuest } from "@/api/types";
+import { askConfirm } from "@/lib/confirm";
+import { revealOnError } from "@/lib/revealError";
 
 const connection = ref<ProxmoxConnection | null>(null);
 const loading = ref(true);
 const error = ref("");
+revealOnError(error);
 const saving = ref(false);
 const testResult = ref("");
 const testing = ref(false);
@@ -106,7 +109,7 @@ async function test() {
 }
 
 async function remove() {
-  if (!confirm("Remove the Proxmox connection? Any service attached to a guest will keep its attachment, but Ballast won't be able to reach the host anymore.")) {
+  if (!(await askConfirm("Remove the Proxmox connection? Any service attached to a guest will keep its attachment, but Ballast won't be able to reach the host anymore.", "Remove connection"))) {
     return;
   }
   error.value = "";

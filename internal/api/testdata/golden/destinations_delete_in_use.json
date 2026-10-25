@@ -1,6 +1,6 @@
 {
   "status": 409,
   "body": {
-    "error": "destination local: still in use (used by 1 service(s))"
+    "error": "destination local: still in use by 1 backup. Move it to another destination first"
   }
 }

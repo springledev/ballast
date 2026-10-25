@@ -3,6 +3,7 @@ import { onMounted, ref, watch } from "vue";
 import { useRoute } from "vue-router";
 
 import AppIcon from "@/components/AppIcon.vue";
+import ConfirmDialog from "@/components/ConfirmDialog.vue";
 import ConnectGate from "@/components/ConnectGate.vue";
 import { api } from "@/api/client";
 import { markSignedIn, markSignedOut, session } from "@/api/auth";
@@ -112,6 +113,8 @@ onMounted(checkSession);
       </button>
       <button class="nav-quiet" type="button" @click="signOut"><AppIcon name="signout" :size="18" /> Sign out</button>
     </nav>
+
+    <ConfirmDialog />
 
     <main class="main">
       <div class="page">

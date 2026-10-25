@@ -60,8 +60,15 @@ describe("overview at different sizes", () => {
     vi.stubGlobal("fetch", vi.fn(routes(status(40))));
     const { el, unmount } = await mount();
     expect(el.querySelector(".list-tools")).not.toBeNull();
-    expect(el.querySelectorAll(".rows > li")).toHaveLength(40);
+    // The one failing backup is on show; the 39 safe ones start folded.
+    expect(el.querySelectorAll(".rows > li")).toHaveLength(1);
     expect(el.querySelector(".group-head")?.textContent).toContain("Failed");
+    const showSafe = [...el.querySelectorAll<HTMLButtonElement>(".group-folded button")].find((b) => b.textContent?.includes("Show all 39 safe backups"))!;
+    expect(showSafe).toBeDefined();
+    showSafe.click();
+    await nextTick();
+    expect(el.querySelectorAll(".rows > li")).toHaveLength(40);
+    expect(el.querySelector(".group-fold")?.textContent).toContain("Hide safe backups");
 
     const search = el.querySelector<HTMLInputElement>('input[type="search"]')!;
     search.value = "svc-3";
@@ -84,6 +91,8 @@ describe("overview at different sizes", () => {
     const fetchMock = vi.fn(routes(status(30)));
     vi.stubGlobal("fetch", fetchMock);
     const { el, unmount } = await mount();
+    el.querySelector<HTMLButtonElement>(".group-folded button")?.click();
+    await nextTick();
     const boxes = el.querySelectorAll<HTMLInputElement>(".row-check input");
     for (const b of [boxes[0], boxes[1]]) {
       b.checked = true;

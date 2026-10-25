@@ -861,3 +861,28 @@ func TestPutReservedServiceNameIsNotA500(t *testing.T) {
 		t.Errorf("secret on a leftover service = %d %s, want 409", rec.Code, rec.Body.String())
 	}
 }
+
+// TestCreateServiceRefusesAnExistingName: adding a service under a name that
+// is taken is a conflict (409) that leaves the existing one untouched; it
+// used to quietly replace the existing service's settings.
+func TestCreateServiceRefusesAnExistingName(t *testing.T) {
+	h := newHarness(t)
+	h.addDestination("local")
+	first := inventory.Service{Name: "svc", CatalogEntry: "folder", Destination: "local", Params: map[string]string{"path": "/x"}}
+	if rec := serveAs(t, h, http.MethodPost, "/api/v1/services", first); rec.Code != http.StatusCreated {
+		t.Fatalf("first POST = %d %s, want 201", rec.Code, rec.Body.String())
+	}
+	second := first
+	second.Params = map[string]string{"path": "/other"}
+	rec := serveAs(t, h, http.MethodPost, "/api/v1/services", second)
+	if rec.Code != http.StatusConflict || !strings.Contains(rec.Body.String(), "already exists") {
+		t.Errorf("second POST = %d %s, want 409 saying the name already exists", rec.Code, rec.Body.String())
+	}
+	got, err := h.ops.GetService(context.Background(), "svc")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Params["path"] != "/x" {
+		t.Errorf("path after the refused POST = %q, want /x (unchanged)", got.Params["path"])
+	}
+}

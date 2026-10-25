@@ -32,6 +32,12 @@ describe("describeTier", () => {
     );
   });
 
+  it("says which step a running backup is on", () => {
+    expect(describeTier({ tier: "restic", light: "running", phase: "checking the backup can be restored" })).toBe(
+      "Backing up now: checking the backup can be restored…",
+    );
+  });
+
   it("covers failure and no backup yet", () => {
     expect(describeTier({ tier: "restic", light: "red" })).toBe("The last backup failed.");
     expect(describeTier({ tier: "restic", light: "none" })).toBe("Hasn't been backed up yet.");
@@ -86,6 +92,11 @@ describe("shortStatus", () => {
   it.each<[string, ServiceStatus, string]>([
     ["never backed up", svc("none"), "No backup yet"],
     ["running without progress", svc("running"), "Backing up now"],
+    [
+      "running with a step",
+      { ...svc("running"), tiers: [{ tier: "restic", light: "running", phase: "making the backup copy" }] },
+      "Backing up now, making the backup copy",
+    ],
     [
       "running with an upload",
       {

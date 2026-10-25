@@ -5,6 +5,8 @@ import { api } from "@/api/client";
 import type { CatalogSummary, EnvSourceProposal, Destination, DetectResult, DockerComposeProject, DockerHost, DockerVolume, PreflightResult, ServiceStatus } from "@/api/types";
 import { schedulePresets } from "@/lib/schedule";
 import { describeCheck, describeTier } from "@/lib/status";
+import { checkParam } from "@/lib/params";
+import { revealOnError } from "@/lib/revealError";
 
 type Step = "what" | "where" | "when" | "review" | "running" | "done";
 const stepOrder: { id: Step; label: string }[] = [
@@ -16,6 +18,7 @@ const stepOrder: { id: Step; label: string }[] = [
 
 const step = ref<Step>("what");
 const error = ref("");
+revealOnError(error);
 const loading = ref(true);
 
 const preflight = ref<PreflightResult | null>(null);
@@ -202,8 +205,9 @@ function next() {
       return;
     }
     for (const p of selectedEntry.value?.parameters ?? []) {
-      if (p.required && !params[p.name]) {
-        error.value = `Fill in "${p.prompt || p.name}".`;
+      const problem = checkParam(p, params[p.name]);
+      if (problem) {
+        error.value = problem;
         return;
       }
     }
@@ -486,6 +490,12 @@ const resultLight = computed(() => {
       <dl class="kv" style="margin-bottom: 1.25rem">
         <dt>Back up</dt>
         <dd>{{ selectedEntry?.name }}, as <strong>{{ serviceName }}</strong></dd>
+        <template v-for="p in selectedEntry?.parameters ?? []" :key="p.name">
+          <template v-if="params[p.name]">
+            <dt style="text-transform: capitalize">{{ p.name.replace(/[_-]/g, " ") }}</dt>
+            <dd>{{ params[p.name] }}</dd>
+          </template>
+        </template>
         <dt>Keep backups in</dt>
         <dd>{{ destMode === "new" ? destLocation : destLabel }}</dd>
         <dt>Runs</dt>

@@ -1,18 +1,33 @@
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref, watch } from "vue";
+import { useRoute } from "vue-router";
 
 import { api } from "@/api/client";
 import type { CatalogSummary, Destination, DockerComposeProject, ExcludePreview, ServicePreview, DockerHost, DockerVolume, ProxmoxGuest, Retention, Service, ServiceTarget, Snapshot } from "@/api/types";
 import { formatBytes, formatDateTime, formatRelative } from "@/lib/format";
 import { describeServiceRetention } from "@/lib/retention";
 import ListTools from "@/components/ListTools.vue";
-import { emptyQuery, filterEntries, groupEntries, needsTools, type ListEntry, type ListQuery } from "@/lib/listView";
+import { COLLAPSE_SAFE_FROM, collapsesGroup, countLights, emptyQuery, filterEntries, groupEntries, needsTools, type ListEntry, type ListQuery } from "@/lib/listView";
+import { worstLight, type Light } from "@/lib/status";
+import TrafficLight from "@/components/TrafficLight.vue";
+import { checkParam } from "@/lib/params";
+import { askConfirm } from "@/lib/confirm";
+import { revealOnError } from "@/lib/revealError";
 
 const services = ref<Service[]>([]);
 
 // Search and grouping, shown only once the list is long.
-const query = ref<ListQuery>(emptyQuery());
-const listEntry = (s: Service): ListEntry => ({ name: s.name, type: s.catalog_entry, destination: s.destination });
+// The Overview links here with ?q=name to show one backup's details.
+const linkedSearch = useRoute().query.q;
+const query = ref<ListQuery>({ ...emptyQuery(), text: typeof linkedSearch === "string" ? linkedSearch : "" });
+// Each backup's traffic light, so a long list can be sorted by what needs attention.
+// A failed status read only hides the lights; the list itself still works.
+const lights = ref<Record<string, Light>>({});
+const listEntry = (s: Service): ListEntry => ({ name: s.name, type: s.catalog_entry, destination: s.destination, light: lights.value[s.name] });
+const counts = computed(() => countLights(services.value, listEntry));
+// A long healthy group stays folded until asked for, as on the Overview.
+const safeOpen = ref(false);
+const folded = (g: { key: string; items: unknown[] }) => collapsesGroup(g, showTools.value ? query.value : emptyQuery(), safeOpen.value);
 const showTools = computed(() => needsTools(services.value.length));
 const shownServices = computed(() => (showTools.value ? filterEntries(services.value, listEntry, query.value) : services.value));
 const serviceGroups = computed(() =>
@@ -23,6 +38,7 @@ const destinations = ref<Destination[]>([]);
 const dockerHosts = ref<DockerHost[]>([]);
 const loading = ref(true);
 const error = ref("");
+revealOnError(error);
 const saved = ref("");
 const saving = ref(false);
 const showForm = ref(false);
@@ -388,6 +404,7 @@ const selectedGuestKey = computed({
   },
 });
 
+let groupedOnce = false;
 async function load() {
   loading.value = true;
   error.value = "";
@@ -398,6 +415,17 @@ async function load() {
       api.listDestinations(),
       api.listDockerHosts(),
     ]);
+    api
+      .status()
+      .then((list) => {
+        lights.value = Object.fromEntries(list.map((st) => [st.service, worstLight(st)]));
+        // A long list opens with problems on top, like the Overview.
+        if (!groupedOnce && needsTools(services.value.length) && query.value.group === "none") {
+          groupedOnce = true;
+          query.value = { ...query.value, group: "status" };
+        }
+      })
+      .catch(() => {});
   } catch (e) {
     error.value = (e as Error).message;
   } finally {
@@ -463,7 +491,8 @@ async function submit() {
   if (!form.name) return void (error.value = "Give it a name.");
   if (!form.destination) return void (error.value = "Choose where the backups should go.");
   for (const p of selectedEntry.value?.parameters ?? []) {
-    if (p.required && !form.params[p.name]) return void (error.value = `Fill in "${p.prompt || p.name}".`);
+    const problem = checkParam(p, form.params[p.name]);
+    if (problem) return void (error.value = problem);
   }
   saving.value = true;
   const payload: Service = {
@@ -507,7 +536,7 @@ async function makeMain(name: string, destination: string) {
 }
 
 async function remove(name: string) {
-  if (!confirm(`Stop backing up "${name}"? Backups already made are kept; Ballast just stops making new ones.`)) {
+  if (!(await askConfirm(`Stop backing up "${name}"? Backups already made are kept; Ballast just stops making new ones.`, "Stop backing up"))) {
     return;
   }
   error.value = "";
@@ -545,7 +574,8 @@ onMounted(load);
     <ListTools
       v-if="showTools"
       v-model="query"
-      :groups="['none', 'type', 'destination']"
+      :counts="Object.keys(lights).length ? counts : undefined"
+      :groups="Object.keys(lights).length ? ['none', 'status', 'type', 'destination'] : ['none', 'type', 'destination']"
       :shown="shownServices.length"
       :total="services.length"
       label="backups"
@@ -556,7 +586,11 @@ onMounted(load);
 
     <section v-for="g in services.length ? serviceGroups : []" :key="g.key" class="group" :aria-label="g.label || undefined">
     <h3 v-if="g.label" class="group-head">{{ g.label }} <span class="muted">{{ g.items.length }}</span></h3>
-    <ul v-if="g.items.length" class="list">
+    <p v-if="folded(g)" class="group-folded">
+      <button class="btn btn-quiet" type="button" @click="safeOpen = true">Show all {{ g.items.length }} safe backups</button>
+    </p>
+    <button v-else-if="g.key === 'green' && safeOpen && g.items.length > COLLAPSE_SAFE_FROM" class="btn btn-quiet btn-small group-fold" type="button" @click="safeOpen = false">Hide safe backups</button>
+    <ul v-if="g.items.length && !folded(g)" class="list">
       <li v-for="s in g.items" :key="s.name">
         <div class="item-head">
           <div>
@@ -568,6 +602,7 @@ onMounted(load);
             </div>
           </div>
           <div class="actions">
+            <TrafficLight v-if="lights[s.name]" :light="lights[s.name]" />
             <button class="btn" type="button" @click="toggleBackups(s.name)">
               {{ stateFor(s.name).open ? "Hide backups" : "Backups" }}
             </button>

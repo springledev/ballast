@@ -4,7 +4,7 @@ import { computed, onMounted, reactive, ref, watch } from "vue";
 import { api } from "@/api/client";
 import type { RestoreProjectReport, Service, Snapshot } from "@/api/types";
 import { formatDateTime, formatRelative } from "@/lib/format";
-import { groupEntries, needsTools } from "@/lib/listView";
+import { groupEntries, matchesText, needsTools } from "@/lib/listView";
 
 const services = ref<Service[]>([]);
 const selectedService = ref("");
@@ -27,9 +27,16 @@ const serviceDestinations = computed(() => {
 
 // Newest first, so the default choice is the most recent backup.
 // A long list of services is split by kind so the picker stays usable.
+const serviceFilter = ref("");
 const serviceGroups = computed(() =>
   groupEntries(
-    [...services.value].sort((a, b) => a.name.localeCompare(b.name)),
+    [...services.value]
+      .filter(
+        (s) =>
+          s.name === selectedService.value ||
+          matchesText({ name: s.name, type: s.catalog_entry, destination: s.destination }, serviceFilter.value),
+      )
+      .sort((a, b) => a.name.localeCompare(b.name)),
     (s) => ({ name: s.name, type: s.catalog_entry, destination: s.destination }),
     needsTools(services.value.length) ? "type" : "none",
   ),
@@ -174,6 +181,15 @@ async function restore() {
   <form class="panel" @submit.prevent="restore">
     <div class="field">
       <label for="restore-service">What do you want to restore?</label>
+      <input
+        v-if="needsTools(services.length)"
+        v-model="serviceFilter"
+        type="search"
+        class="restore-filter"
+        placeholder="Type to narrow the list…"
+        aria-label="Narrow the list of backups"
+        autocomplete="off"
+      />
       <select id="restore-service" v-model="selectedService">
         <option value="" disabled>Choose…</option>
         <template v-for="g in serviceGroups" :key="g.key">

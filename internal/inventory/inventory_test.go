@@ -1118,3 +1118,21 @@ func TestServiceNames(t *testing.T) {
 		t.Errorf("ServiceNames = %v, %v; want [a b]", got, err)
 	}
 }
+
+func TestBackupCount(t *testing.T) {
+	tests := []struct {
+		n        int
+		wantWhat string
+		wantThem string
+	}{
+		{1, "1 backup", "it"},
+		{2, "2 backups", "them"},
+		{45, "45 backups", "them"},
+	}
+	for _, tt := range tests {
+		what, them := backupCount(tt.n)
+		if what != tt.wantWhat || them != tt.wantThem {
+			t.Errorf("backupCount(%d) = %q, %q; want %q, %q", tt.n, what, them, tt.wantWhat, tt.wantThem)
+		}
+	}
+}

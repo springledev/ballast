@@ -4,10 +4,13 @@ import { computed, reactive, ref } from "vue";
 import { api } from "@/api/client";
 import type { DockerHost, DockerHostKind } from "@/api/types";
 import { addressHelp, addressPlaceholder, buildCredentials, credentialKind, dockerHostKinds, kindLabel, type DockerHostFormFields } from "@/lib/dockerhosts";
+import { askConfirm } from "@/lib/confirm";
+import { revealOnError } from "@/lib/revealError";
 
 const hosts = ref<DockerHost[]>([]);
 const loading = ref(true);
 const error = ref("");
+revealOnError(error);
 const saving = ref(false);
 const showForm = ref(false);
 const created = ref<DockerHost | null>(null);
@@ -111,7 +114,7 @@ async function check(name: string) {
 }
 
 async function remove(name: string) {
-  if (!confirm(`Forget "${name}"? Any backup still using it must be moved to another Docker host first.`)) {
+  if (!(await askConfirm(`Forget "${name}"? Any backup still using it must be moved to another Docker host first.`, "Forget"))) {
     return;
   }
   error.value = "";

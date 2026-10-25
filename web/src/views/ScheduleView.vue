@@ -7,10 +7,12 @@ import ListTools from "@/components/ListTools.vue";
 import { countLights, emptyQuery, filterEntries, groupEntries, needsTools, type ListEntry, type ListQuery } from "@/lib/listView";
 import { describeSchedule, presetFor, schedulePresets } from "@/lib/schedule";
 import { worstLight } from "@/lib/status";
+import { revealOnError } from "@/lib/revealError";
 
 const services = ref<ServiceStatus[]>([]);
 const loading = ref(true);
 const error = ref("");
+revealOnError(error);
 const saved = ref("");
 // choice is a preset id, "none", or "custom"; custom holds the cron text.
 const choice = reactive<Record<string, string>>({});

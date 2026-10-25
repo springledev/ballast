@@ -3,6 +3,7 @@ import { onBeforeUnmount, ref, watch } from "vue";
 
 import { api } from "@/api/client";
 import type { CatalogInstallResult, CatalogTemplate, CatalogValidation } from "@/api/types";
+import { revealOnError } from "@/lib/revealError";
 
 const templates = ref<CatalogTemplate[]>([]);
 const chosen = ref("");
@@ -12,6 +13,7 @@ const checking = ref(false);
 const installing = ref(false);
 const installed = ref<CatalogInstallResult | null>(null);
 const error = ref("");
+revealOnError(error);
 
 async function loadTemplates() {
   try {

@@ -131,6 +131,25 @@ export function groupEntries<T>(
   return groups;
 }
 
+/** A "Safe" group longer than this starts collapsed so problems stay in view. */
+export const COLLAPSE_SAFE_FROM = 12;
+
+/**
+ * Whether a group's rows are hidden behind a "Show" button: only the
+ * long, healthy group of a status-grouped list, and only while nothing is
+ * being searched or filtered (someone who asks for Safe backups gets them).
+ */
+export function collapsesGroup(group: { key: string; items: unknown[] }, q: ListQuery, open: boolean): boolean {
+  return (
+    !open &&
+    q.group === "status" &&
+    group.key === "green" &&
+    group.items.length > COLLAPSE_SAFE_FROM &&
+    q.light === "all" &&
+    q.text.trim() === ""
+  );
+}
+
 /**
  * The share of each light in a list, for the overview's status strip.
  * Problems come first so they are never squeezed out of sight; empty

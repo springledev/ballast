@@ -5,6 +5,8 @@ import { api } from "@/api/client";
 import { channelEvents } from "@/api/types";
 import type { ChannelType, ChannelView, NotificationSettings, Service } from "@/api/types";
 import { buildChannelInput, defaultNtfyUrl } from "@/lib/channels";
+import { askConfirm } from "@/lib/confirm";
+import { revealOnError } from "@/lib/revealError";
 
 // --- Notification Channels ---
 const channels = ref<ChannelView[]>([]);
@@ -66,6 +68,7 @@ const settings = reactive<Record<string, NotificationSettings>>({});
 const maxAgeInput = reactive<Record<string, string>>({});
 const loading = ref(true);
 const error = ref("");
+revealOnError(error);
 const saving = ref<Set<string>>(new Set());
 const saved = ref<Set<string>>(new Set());
 
@@ -204,7 +207,7 @@ async function sendDigestNow() {
 }
 
 async function deleteChannel(name: string) {
-  if (!confirm(`Delete the "${name}" notification channel? Any service using it will lose notifications.`)) {
+  if (!(await askConfirm(`Delete the "${name}" notification channel? Any service using it will lose notifications.`, "Delete channel"))) {
     return;
   }
   channelError.value = "";

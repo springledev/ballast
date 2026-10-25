@@ -104,7 +104,8 @@ func DeleteDockerHost(db *sql.DB, name string) (err error) {
 		return fmt.Errorf("checking docker host %s usage: %w", name, err)
 	}
 	if count > 0 {
-		return fmt.Errorf("docker host %s: %w (used by %d service(s))", name, ErrInUse, count)
+		what, them := backupCount(count)
+		return fmt.Errorf("docker host %s: %w by %s. Move %s to another Docker host first", name, ErrInUse, what, them)
 	}
 	res, err := tx.Exec(`DELETE FROM docker_hosts WHERE name = ?`, name)
 	if err != nil {
