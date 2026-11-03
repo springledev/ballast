@@ -770,6 +770,26 @@
 
  78. Support bundle (J16, §21.7): `ballast support-bundle [--output file]` writes one archive for bug reports and for asking someone else for help — version, `doctor --json`, status, recent alert decisions, schema version, restic/docker versions and catalog entry names — with every secret absent (the existing redaction harness in `cmd/ballast/redaction_test.go` is extended with seeded secrets across the new files). Nothing is sent anywhere.
 
+ **v0.7 extension (steps 79–87, §22: findings from a QA and UX review of v0.6) — design rationale and the evidence for each finding in `PLAN-v0.7.md`; this list is the normative order. Its step A (commit the fixes from a seeded-instance QA pass, listed in §22.1) is already done in commit 833984b and has no number here.**
+
+ 79. Server-side folder path validation (K3, §22.2): the service layer, not only the web UI, trims the path, requires it to be absolute and refuses a relative one; a path that does not exist is saved with a warning, not refused, because the folder may be on a mount that is not up yet. The CLI and API get the same behaviour. Test: a relative path and a path with a trailing space (trimmed) through the API and the CLI, and a missing absolute path saved with a warning.
+
+ 80. Fast `GET /api/v1/status` (K5, §22.3): the cause is not known (indexes exist), so profile first. Build a 60-service, 3,200-run fixture and a `go test -bench` benchmark that fails above 200 ms, confirm where the time goes, then fix that cost. Observed: about 1.0 to 1.2 s before the fix.
+
+ 81. Saving a schedule keeps its paused state (K7, §22.4): saving never re-enables a paused schedule unless the user turns it on; the API returns `next_run`, and the Schedules page confirms "Saved. Next run: Tue 03:00." and shows the next run time. Test: save a paused schedule and it stays paused; save an enabled one and `next_run` is returned.
+
+ 82. Run history API (K1, §22.5): `GET /api/v1/services/{name}/runs` (paged, newest first) and `GET /api/v1/runs/{id}` with state, duration, size, verification result and log tail. Secrets never appear in a log tail or any field (rule 2); a test seeds secrets and asserts none comes back. Same shape for the CLI where it already lists runs.
+
+ 83. History view (K1, §22.5): a History tab on the service page lists past runs and opens one to show its verification detail and log tail, so a failed run can be understood from the UI. Depends on step 82. No API changes.
+
+ 84. Cancel a running backup (K2, §22.6): `POST /api/v1/runs/{id}/cancel`, `ballast cancel <service>` and a Cancel button on a running card, using the existing CANCELLED state. A cancelled run is CANCELLED, never SUCCESS (rule 1), the restic repository is left unlocked, and a stop-start container is restarted. Test with a fake slow job: cancel mid-run, assert the state, the unlocked repository and the restarted container. Largest step of v0.7.
+
+ 85. Behaviour and wording (K6, K4, K9, §22.7): removing a service while it backs up shows "Waiting for the running backup to finish…" in the dialog and the refusal path is tested with a fake slow job (K6); restore errors drop the internal "service notes: invalid input:" prefix and "restore into a path" restores relative to the backup root instead of nesting the full absolute path (K4); a service older than half its expected interval shows its age in amber text without changing its light (K9). Failing tests first for K4 and K9.
+
+ 86. Accessibility and tall pages (K10, §22.8): a skip-to-content link; touch targets of about 44 px for the status legend buttons and checkboxes; the wizard's raw restic version warning moves behind "Details"; "Stop backing up" is renamed "Remove" and says what is kept; Notifications and Schedules get the same search, grouping and folding as Backups. Web only; must not touch `internal/`.
+
+ 87. Sessions across restarts (K8, §22.9): sessions live in memory, so every server restart signs the browser out. First decide whether that is by design; this needs the maintainer's decision. If it is not by design, persist session hashes (never raw tokens) in SQLite. Do not implement before the decision is recorded in PLAN.md.
+
 
 
  ## 15. Acceptance checklist (v0.1 "done")
@@ -1351,3 +1371,100 @@
  - [ ] A stopped daemon stops the heartbeat; the support bundle contains no seeded secret
 
  - [ ] Secrets never in DB, logs or API responses — re-asserted for alert decisions, the heartbeat URL and the support bundle
+
+
+ ## 22. v0.7 extension: findings from a QA and UX review of v0.6 (normative)
+
+
+
+ **Goal:** fix what a browser QA and UX pass of v0.6 on a seeded instance (60 "Any folder" services, two destinations, about 3,200 runs over 90 days) turned up: no run history and no way to cancel, a server that accepts bad paths, a slow status route, a schedule save that undoes a pause, and a set of accessibility and wording problems. The evidence, confidence tags (observed / inferred / expected) and wording of each finding (K1–K10) are in `PLAN-v0.7.md`. No mobile *backup* code (rule 6); the `exec` strategy and `ballast trigger --token` interfaces are untouched.
+
+
+
+ ### 22.1 Already fixed (context, step A, commit 833984b)
+
+ - `POST /services` no longer silently replaces an existing service: a duplicate name is a 409.
+
+ - "Still in use" errors for destinations and Docker hosts name the count and say what to do; the self-backup banner explains why it matters and gives the exact command.
+
+ - Wizard and form errors scroll into view; relative paths are caught on the wizard step; a styled confirm dialog replaces the native one.
+
+ - Overview and Backups rows link to the backup, with a status light, counts, grouping and a folded Safe group at 12 or more; the restore picker has a filter; schedules read "Weekdays at 4:15"; a running backup shows its step.
+
+ - These are not redone by steps 79 to 87.
+
+
+
+ ### 22.2 Server validation
+
+ - The service layer trims a folder path and requires it to be absolute, for the CLI and API as well as the web UI. A missing path is saved with a warning, not refused, because the folder may be on a mount that is not up yet (K3).
+
+
+
+ ### 22.3 Performance
+
+ - `GET /api/v1/status` answers in under 200 ms with 60 services and 3,200 runs. The cause is unknown, so the work starts with a benchmark and a profile, and the benchmark stays so it cannot regress (K5).
+
+
+
+ ### 22.4 Schedules
+
+ - Saving a schedule keeps its paused state unless the user turns it on. The API returns `next_run` and the page confirms the save with the next run time (K7).
+
+
+
+ ### 22.5 Run history
+
+ - A service's past runs can be listed (paged, newest first) and one run opened, with state, duration, size, verification result and log tail, in the API and in a History tab. Secrets never appear in a log tail or any field (rule 2) (K1).
+
+
+
+ ### 22.6 Cancelling a backup
+
+ - A running backup can be cancelled from the API, the CLI and the UI. The run ends CANCELLED and never SUCCESS (rule 1), the repository is left unlocked and any stopped container is restarted (K2).
+
+
+
+ ### 22.7 Behaviour and wording
+
+ - Removing a service during a backup says it is waiting for the backup to finish, and the refusal is tested (K6). Restore errors read in plain English without internal prefixes, and restoring "into a path" is relative to the backup root (K4). A service past half its expected interval shows its age in amber text; the light itself does not change (K9).
+
+
+
+ ### 22.8 Accessibility and tall pages
+
+ - A skip-to-content link; touch targets of about 44 px; a beginner-friendly wizard (the restic version warning behind "Details"); "Stop backing up" renamed "Remove" and saying what is kept; Notifications and Schedules searchable, grouped and folded like Backups (K10).
+
+
+
+ ### 22.9 Sessions
+
+ - Whether a server restart should sign the browser out is a decision for the maintainer (K8). If it should not, session hashes (never raw tokens) are kept in SQLite.
+
+
+
+ ### 22.10 Out of scope (v0.7)
+
+ Phone backup (§12); rclone providers; multi-user auth/RBAC, OIDC, TLS/ACME; `ballast install --upgrade`; a push stream for progress; the review's untested areas (the LIVE instance, a real phone, the 1440 px layout).
+
+
+
+ ### 22.11 Acceptance checklist (v0.7 "done")
+
+ - [ ] The CLI and API refuse a relative folder path and trim a trailing space; a missing absolute path is saved with a warning
+
+ - [ ] `GET /api/v1/status` stays under 200 ms with 60 services and 3,200 runs (benchmark in the tests)
+
+ - [ ] Saving a paused schedule leaves it paused and shows the next run time
+
+ - [ ] A failed run's verification detail and log tail can be opened from a History tab, and no seeded secret appears in them
+
+ - [ ] A cancelled backup ends CANCELLED, never SUCCESS, with the repository unlocked and any stopped container restarted
+
+ - [ ] Removing a service during a backup explains the wait; restore errors are plain English; a weekly service shows an amber age cue while its light stays green
+
+ - [ ] Skip link, 44 px touch targets, "Remove" wording and folded Notifications and Schedules pages are in place
+
+ - [ ] The maintainer has decided whether sessions survive a restart, and the decision is recorded in PLAN.md
+
+ - [ ] Secrets never in DB, logs or API responses; re-asserted for run logs and sessions
