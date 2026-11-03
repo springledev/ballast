@@ -24,6 +24,8 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/springledev/ballast/internal/scheduler"
@@ -543,10 +545,10 @@ func FormatSuccessHeartbeat(service string, backupAge time.Duration) Event {
 // real cadence, causing a false freshness alarm every time that gap
 // was crossed). A full year plus a bit guarantees every month is
 // represented at least once, so any recurring monthly-or-sparser
-// schedule's largest gap is fully captured. This stays cheap to scan
-// minute by minute: at most cronGapWindow/time.Minute (~576,000)
-// Schedule.Matches calls, each a handful of map lookups — well under
-// a millisecond in aggregate (see BenchmarkMaxFiringGap).
+// schedule's largest gap is fully captured. maxFiringGap jumps from one
+// firing to the next rather than testing every minute of the window
+// (that scan cost ~13 ms per service and made GET /api/v1/status slow,
+// spec §22.3); see BenchmarkMaxFiringGap.
 const cronGapWindow = 400 * 24 * time.Hour
 
 // cronGapReference is the fixed anchor DefaultMaxAge scans forward
@@ -580,7 +582,34 @@ var cronGapReference = time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)
 // An expression ParseCron cannot parse falls back to
 // DefaultMaxAgeNightly: the conservative choice on bad input is to
 // check often, not to go quiet.
+//
+// The result depends on nothing but cronExpr (the window is fixed), so
+// it is remembered per expression: status pages ask for every service's
+// max age on each load (spec §22.3).
 func DefaultMaxAge(cronExpr string) time.Duration {
+	if d, ok := defaultMaxAgeMemo.Load(cronExpr); ok {
+		return d.(time.Duration)
+	}
+	d := defaultMaxAge(cronExpr)
+	if defaultMaxAgeMemoSize.Add(1) <= defaultMaxAgeMemoLimit {
+		defaultMaxAgeMemo.Store(cronExpr, d)
+	}
+	return d
+}
+
+// defaultMaxAgeMemo maps a cron expression to its DefaultMaxAge. It
+// never goes stale: the answer is a pure function of the expression.
+// defaultMaxAgeMemoLimit bounds it, since expressions come from user
+// input; past it, answers are simply computed every time.
+var (
+	defaultMaxAgeMemo     sync.Map
+	defaultMaxAgeMemoSize atomic.Int64
+)
+
+const defaultMaxAgeMemoLimit = 4096
+
+// defaultMaxAge computes DefaultMaxAge without the memo.
+func defaultMaxAge(cronExpr string) time.Duration {
 	sched, err := scheduler.ParseCron(cronExpr)
 	if err != nil {
 		return DefaultMaxAgeNightly
@@ -602,18 +631,17 @@ func DefaultMaxAge(cronExpr string) time.Duration {
 	}
 }
 
-// maxFiringGap scans the cronGapReference window minute by minute and
-// returns the largest gap between consecutive firings of sched. ok is
-// false when fewer than two firings occurred in the window, in which
-// case gap is not meaningful.
+// maxFiringGap walks the firings of sched in the cronGapReference
+// window (both ends included) and returns the largest gap between
+// consecutive ones. ok is false when fewer than two firings occurred in
+// the window, in which case gap is not meaningful. The window is UTC,
+// so Schedule.Next visits exactly the minutes Schedule.Matches accepts,
+// skipping whole months, days and hours that cannot fire.
 func maxFiringGap(sched scheduler.Schedule) (gap time.Duration, ok bool) {
 	var last time.Time
 	count := 0
 	end := cronGapReference.Add(cronGapWindow)
-	for t := cronGapReference; !t.After(end); t = t.Add(time.Minute) {
-		if !sched.Matches(t) {
-			continue
-		}
+	for t, more := sched.Next(cronGapReference.Add(-time.Minute)); more && !t.After(end); t, more = sched.Next(t) {
 		count++
 		if count > 1 {
 			if d := t.Sub(last); d > gap {
