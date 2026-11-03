@@ -110,7 +110,7 @@ func runWizard(cmd *cobra.Command, args []string) error {
 			return err
 		}
 
-		if err := a.ops.PutService(ctx, inventory.Service{
+		if err := putServiceWarn(ctx, a, os.Stderr, inventory.Service{
 			Name: serviceName, CatalogEntry: entry.Service, Destination: destName, Params: params, Secrets: secrets,
 		}); err != nil {
 			return fmt.Errorf("saving %s: %w", serviceName, err)

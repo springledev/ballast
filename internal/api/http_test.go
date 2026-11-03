@@ -886,3 +886,71 @@ func TestCreateServiceRefusesAnExistingName(t *testing.T) {
 		t.Errorf("path after the refused POST = %q, want /x (unchanged)", got.Params["path"])
 	}
 }
+
+// TestCreateService_PathValidation: a relative folder is a 400 with
+// plain advice (not a 500), and a padded one is stored trimmed.
+func TestCreateService_PathValidation(t *testing.T) {
+	dir := t.TempDir()
+	tests := []struct {
+		name     string
+		path     string
+		wantCode int
+		wantPath string
+	}{
+		{name: "relative", path: "data", wantCode: http.StatusBadRequest},
+		{name: "empty", path: " ", wantCode: http.StatusBadRequest},
+		{name: "trimmed", path: dir + " ", wantCode: http.StatusCreated, wantPath: dir},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			h := newHarness(t)
+			h.addDestination("local")
+			rec := serveAs(t, h, http.MethodPost, "/api/v1/services", inventory.Service{
+				Name: "docs", CatalogEntry: "folder", Destination: "local", Params: map[string]string{"path": tt.path},
+			})
+			if rec.Code != tt.wantCode {
+				t.Fatalf("POST = %d %s, want %d", rec.Code, rec.Body.String(), tt.wantCode)
+			}
+			if tt.wantPath == "" {
+				return
+			}
+			var body struct {
+				Params   map[string]string `json:"params"`
+				Warnings []string          `json:"warnings"`
+			}
+			if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+				t.Fatal(err)
+			}
+			if body.Params["path"] != tt.wantPath || len(body.Warnings) != 0 {
+				t.Errorf("body = %+v, want trimmed path and no warnings", body)
+			}
+		})
+	}
+}
+
+// TestPutService_PathWarning: a folder that does not exist yet is
+// saved, and the response carries a warning.
+func TestPutService_PathWarning(t *testing.T) {
+	h := newHarness(t)
+	withService(t, h)
+	missing := filepath.Join(t.TempDir(), "unmounted")
+	rec := serveAs(t, h, http.MethodPut, "/api/v1/services/svc", inventory.Service{
+		CatalogEntry: "folder", Destination: "local", Params: map[string]string{"path": missing},
+	})
+	if rec.Code != http.StatusOK {
+		t.Fatalf("PUT = %d %s", rec.Code, rec.Body.String())
+	}
+	var body struct {
+		Warnings []string `json:"warnings"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	if len(body.Warnings) != 1 || !strings.Contains(body.Warnings[0], missing) {
+		t.Errorf("warnings = %v, want one naming %s", body.Warnings, missing)
+	}
+	got, err := inventory.GetService(h.ops.DB, "svc")
+	if err != nil || got.Params["path"] != missing {
+		t.Errorf("stored = %v, %v; want saved anyway", got.Params, err)
+	}
+}

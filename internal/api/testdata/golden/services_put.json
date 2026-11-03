@@ -7,6 +7,9 @@
     "name": "svc",
     "params": {
       "path": "/y"
-    }
+    },
+    "warnings": [
+      "/y does not exist yet; it is saved, but backups fail until it does (is the drive mounted?)"
+    ]
   }
 }

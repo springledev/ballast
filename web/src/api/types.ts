@@ -12,6 +12,9 @@ export interface CatalogParameter {
   /** "docker-volume" / "compose-project": show a picker of the service's
    * Docker host's volumes / Compose projects. */
   picker?: string;
+  /** "path": a folder on the service's machine; the server trims it and
+   * requires a full path. */
+  kind?: string;
 }
 
 export interface CatalogSummary {
@@ -85,6 +88,10 @@ export interface ProtonSignIn {
   done: boolean;
   error?: string;
 }
+
+/** A service as the server saved it (paths trimmed), plus plain-English
+ * warnings such as a folder that does not exist yet. */
+export type SavedService = Service & { warnings?: string[] };
 
 export interface Service {
   name: string;

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -218,5 +219,55 @@ func TestServiceListGuestJobWithoutDestination(t *testing.T) {
 	}
 	if !strings.Contains(out, "pve-vm100") || !strings.Contains(out, "runs on Proxmox, no restic destination") {
 		t.Errorf("list output = %q, want the guest job with its explanation", out)
+	}
+}
+
+func TestServiceAdd_RelativePathRefused(t *testing.T) {
+	withStubRestic(t)
+	cliEnv(t, &spyRunner{})
+	addLocalDestination(t)
+	out, err := execCLI(t, "service", "add", "docs", "--catalog", "folder", "--destination", "local", "--param", "path=data")
+	if err == nil {
+		t.Fatalf("service add with a relative path succeeded; output %q", out)
+	}
+	if !strings.Contains(err.Error(), "full path") {
+		t.Errorf("error = %v, want plain advice about a full path", err)
+	}
+	if list, _ := execCLI(t, "service", "list"); strings.Contains(list, "docs") {
+		t.Errorf("service was saved anyway: %q", list)
+	}
+}
+
+func TestServiceAdd_TrailingSpaceTrimmed(t *testing.T) {
+	withStubRestic(t)
+	cliEnv(t, &spyRunner{})
+	addLocalDestination(t)
+	dir := t.TempDir()
+	stdout, stderr, err := execCLISplit(t, "service", "add", "docs", "--catalog", "folder", "--destination", "local", "--param", "path="+dir+" ")
+	if err != nil {
+		t.Fatalf("service add: %v", err)
+	}
+	if stderr != "" {
+		t.Errorf("stderr = %q, want no warning for an existing folder", stderr)
+	}
+	if !strings.Contains(stdout, "docs") {
+		t.Errorf("stdout = %q", stdout)
+	}
+}
+
+func TestServiceAdd_MissingPathWarnsOnStderr(t *testing.T) {
+	withStubRestic(t)
+	cliEnv(t, &spyRunner{})
+	addLocalDestination(t)
+	missing := filepath.Join(t.TempDir(), "unmounted")
+	stdout, stderr, err := execCLISplit(t, "service", "add", "docs", "--catalog", "folder", "--destination", "local", "--param", "path="+missing)
+	if err != nil {
+		t.Fatalf("service add: %v", err)
+	}
+	if want := "warning: " + missing + " does not exist yet; it is saved, but backups fail until it does (is the drive mounted?)"; !strings.Contains(stderr, want) {
+		t.Errorf("stderr = %q, want %q", stderr, want)
+	}
+	if strings.Contains(stdout, "warning") || !strings.Contains(stdout, "configured") {
+		t.Errorf("stdout = %q, want the usual line with no warning", stdout)
 	}
 }

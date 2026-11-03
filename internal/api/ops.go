@@ -16,6 +16,7 @@ import (
 	"github.com/springledev/ballast/internal/progress"
 	"github.com/springledev/keel/dockerhost"
 	"io"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"sort"
@@ -1071,11 +1072,78 @@ func (o *Ops) GetService(ctx context.Context, name string) (inventory.Service, e
 	return s, nil
 }
 
-// PutService configures a service: the catalog entry must exist, and
+// PutService is PutServiceChecked without the warnings, for callers
+// that have nowhere to show them.
+func (o *Ops) PutService(ctx context.Context, s inventory.Service) error {
+	_, _, err := o.PutServiceChecked(ctx, s)
+	return err
+}
+
+// PutServiceChecked saves a service like putService, after cleaning its
+// folder-path parameters (catalog parameters with kind "path"): each is
+// trimmed and must be a full path starting with "/", else the result is
+// ErrValidation and nothing is saved. A full path that does not exist on
+// this machine is still saved, with a plain-English warning, because the
+// folder may be on a drive that is not mounted yet. It returns the
+// service as saved (trimmed values) and the warnings. Warnings name only
+// path values, never secrets.
+func (o *Ops) PutServiceChecked(ctx context.Context, s inventory.Service) (inventory.Service, []string, error) {
+	var paths []string
+	hostSide := false
+	if !s.IsGuestJob() && !s.IsConfigSnapshot() {
+		if entry, ok := o.Catalog.Get(s.CatalogEntry); ok {
+			hostSide = len(entry.Backup.HostPaths) > 0
+			params := make(map[string]string, len(s.Params))
+			for k, v := range s.Params {
+				params[k] = v
+			}
+			for _, p := range entry.Parameters {
+				if p.Kind != catalog.KindPath {
+					continue
+				}
+				v, present := params[p.Name]
+				if !present {
+					continue
+				}
+				v = strings.TrimSpace(v)
+				switch {
+				case v == "" && p.Required:
+					return s, nil, fmt.Errorf("service %s: %w: fill in the folder for %q", s.Name, ErrValidation, p.Name)
+				case v == "":
+				case !strings.HasPrefix(v, "/"):
+					return s, nil, fmt.Errorf("service %s: %w: use a full path that starts with /, like /srv/data (%q is relative)", s.Name, ErrValidation, v)
+				default:
+					paths = append(paths, v)
+				}
+				params[p.Name] = v
+			}
+			s.Params = params
+		}
+	}
+	if err := o.putService(ctx, s); err != nil {
+		return s, nil, err
+	}
+	var warnings []string
+	// Folders from a kind: path parameter feed backup.files, which are
+	// always read on the Ballast machine whatever the Docker host, so
+	// they are checked here for every host. Only a path that fed hostPaths
+	// (checked on the Docker host by preflight) would be skipped; no
+	// catalog entry does that today.
+	if !hostSide {
+		for _, p := range paths {
+			if _, err := os.Stat(p); errors.Is(err, fs.ErrNotExist) {
+				warnings = append(warnings, o.redact(fmt.Sprintf("%s does not exist yet; it is saved, but backups fail until it does (is the drive mounted?)", p)))
+			}
+		}
+	}
+	return s, warnings, nil
+}
+
+// putService configures a service: the catalog entry must exist, and
 // Resolve must succeed against a copy of it with s's params/
 // containers, so a missing required parameter fails loudly at add
 // time rather than at the first scheduled run.
-func (o *Ops) PutService(ctx context.Context, s inventory.Service) error {
+func (o *Ops) putService(ctx context.Context, s inventory.Service) error {
 	if s.IsGuestJob() {
 		return o.putGuestJob(ctx, s)
 	}

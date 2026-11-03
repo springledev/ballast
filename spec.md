@@ -1398,6 +1398,7 @@
  ### 22.2 Server validation
 
  - The service layer trims a folder path and requires it to be absolute, for the CLI and API as well as the web UI. A missing path is saved with a warning, not refused, because the folder may be on a mount that is not up yet (K3).
+ - Which parameters count as folder paths is data, not code: a catalog parameter with `kind: path` is checked (the only `kind` value), so new entries opt in without Go changes.
 
 
 

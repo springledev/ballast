@@ -134,7 +134,7 @@ the main one, keeping the service's run history and verification record.`,
 				}
 				before := s.EffectiveTargets()
 				s.Targets = targets
-				if err := a.ops.PutService(cmd.Context(), s); err != nil {
+				if err := putServiceWarn(cmd.Context(), a, cmd.ErrOrStderr(), s); err != nil {
 					return err
 				}
 				if err := offerDropCleanup(cmd, a, s.Name, before, targets); err != nil {

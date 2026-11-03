@@ -24,6 +24,7 @@ import (
 	"github.com/springledev/ballast/internal/restic"
 	"github.com/springledev/ballast/internal/scheduler"
 	"github.com/springledev/ballast/internal/store"
+	"github.com/springledev/keel/dockerhost"
 	"github.com/springledev/keel/runner"
 	secretpkg "github.com/springledev/keel/secret"
 )
@@ -147,6 +148,7 @@ service: folder
 version: 1
 parameters:
   - name: path
+    kind: path
     required: true
 backup:
   strategy: files
@@ -2084,5 +2086,100 @@ func TestRunningServicesCountsAHeldLockAfterTheRunFinished(t *testing.T) {
 	got, err = h.ops.RunningServices(context.Background())
 	if err != nil || len(got) != 0 {
 		t.Fatalf("after the lock was released RunningServices = %v, %v; want none", got, err)
+	}
+}
+
+// TestPutService_FolderPath checks that the service layer trims a path
+// parameter, refuses an empty or relative one, and saves (with a
+// warning) an absolute folder that does not exist yet.
+func TestPutService_FolderPath(t *testing.T) {
+	existing := t.TempDir()
+	missing := filepath.Join(existing, "not-mounted-yet")
+	tests := []struct {
+		name         string
+		path         string
+		wantErr      bool
+		wantPath     string
+		wantWarnings int
+	}{
+		{name: "relative", path: "data", wantErr: true},
+		{name: "dot relative", path: "./x", wantErr: true},
+		{name: "empty after trim", path: "   ", wantErr: true},
+		{name: "trailing space trimmed", path: existing + " ", wantPath: existing},
+		{name: "missing absolute path warns", path: missing, wantPath: missing, wantWarnings: 1},
+		{name: "existing path no warning", path: existing, wantPath: existing},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			h := newHarness(t)
+			h.addDestination("local")
+			saved, warnings, err := h.ops.PutServiceChecked(context.Background(), inventory.Service{
+				Name: "docs", CatalogEntry: "folder", Destination: "local", Params: map[string]string{"path": tt.path},
+			})
+			if tt.wantErr {
+				if !errors.Is(err, ErrValidation) {
+					t.Fatalf("err = %v, want ErrValidation", err)
+				}
+				if _, gerr := inventory.GetService(h.ops.DB, "docs"); gerr == nil {
+					t.Error("service was saved despite the bad path")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("PutServiceChecked: %v", err)
+			}
+			if saved.Params["path"] != tt.wantPath {
+				t.Errorf("returned path = %q, want %q", saved.Params["path"], tt.wantPath)
+			}
+			got, err := inventory.GetService(h.ops.DB, "docs")
+			if err != nil || got.Params["path"] != tt.wantPath {
+				t.Errorf("stored path = %q (%v), want %q", got.Params["path"], err, tt.wantPath)
+			}
+			if len(warnings) != tt.wantWarnings {
+				t.Fatalf("warnings = %v, want %d", warnings, tt.wantWarnings)
+			}
+			if tt.wantWarnings == 1 && !strings.Contains(warnings[0], tt.wantPath) {
+				t.Errorf("warning %q should name %q", warnings[0], tt.wantPath)
+			}
+		})
+	}
+}
+
+// TestPutService_NonPathParamUntouched: a parameter without kind: path
+// keeps its value exactly (no trimming, no checks).
+func TestPutService_NonPathParamUntouched(t *testing.T) {
+	h := newHarness(t)
+	h.addDestination("local")
+	yaml := strings.Replace(folderEntryYAML, "    kind: path\n", "", 1)
+	fsys := fstest.MapFS{"folder.yaml": &fstest.MapFile{Data: []byte(yaml)}}
+	reg, err := catalog.LoadRegistry(fsys, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	h.ops.Catalog = reg
+	saved, warnings, err := h.ops.PutServiceChecked(context.Background(), inventory.Service{
+		Name: "docs", CatalogEntry: "folder", Destination: "local", Params: map[string]string{"path": "rel "},
+	})
+	if err != nil || len(warnings) != 0 || saved.Params["path"] != "rel " {
+		t.Fatalf("got %q, %v, %v; want untouched value, no warnings", saved.Params["path"], warnings, err)
+	}
+}
+
+// TestPutService_RemoteHostPathWarns: files paths are read on the
+// Ballast machine whatever the Docker host, so a missing folder warns
+// for a remote-host service too.
+func TestPutService_RemoteHostPathWarns(t *testing.T) {
+	h := newHarness(t)
+	h.addDestination("local")
+	if _, err := inventory.PutDockerHost(h.ops.DB, dockerhost.Host{Name: "nas", Kind: dockerhost.RemoteSSH, Address: "me@nas"}); err != nil {
+		t.Fatal(err)
+	}
+	h.ops.DockerHosts = sshHostResolver(t, writeDockerStub(t, versionDockerStub))
+	missing := filepath.Join(t.TempDir(), "nfs-not-mounted")
+	_, warnings, err := h.ops.PutServiceChecked(context.Background(), inventory.Service{
+		Name: "docs", CatalogEntry: "folder", Destination: "local", DockerHost: "nas", Params: map[string]string{"path": missing},
+	})
+	if err != nil || len(warnings) != 1 {
+		t.Fatalf("warnings = %v, err = %v; want 1 warning", warnings, err)
 	}
 }

@@ -10,7 +10,7 @@ import ListTools from "@/components/ListTools.vue";
 import { COLLAPSE_SAFE_FROM, collapsesGroup, countLights, emptyQuery, filterEntries, groupEntries, needsTools, type ListEntry, type ListQuery } from "@/lib/listView";
 import { worstLight, type Light } from "@/lib/status";
 import TrafficLight from "@/components/TrafficLight.vue";
-import { checkParam } from "@/lib/params";
+import { checkParam, warningsNote } from "@/lib/params";
 import { askConfirm } from "@/lib/confirm";
 import { revealOnError } from "@/lib/revealError";
 
@@ -509,11 +509,11 @@ async function submit() {
   };
   try {
     if (editingName.value) {
-      await api.updateService(editingName.value, payload);
-      saved.value = `Saved changes to ${form.name}.`;
+      const res = await api.updateService(editingName.value, payload);
+      saved.value = [`Saved changes to ${form.name}.`, warningsNote(res.warnings)].filter(Boolean).join(" ");
     } else {
-      await api.createService(payload);
-      saved.value = `Added ${form.name}. Set when it runs on the "When it runs" page, or back it up now from the Overview.`;
+      const res = await api.createService(payload);
+      saved.value = `Added ${form.name}. Set when it runs on the "When it runs" page, or back it up now from the Overview.` + (warningsNote(res.warnings) ? ` ${warningsNote(res.warnings)}` : "");
     }
     closeForm();
     await load();

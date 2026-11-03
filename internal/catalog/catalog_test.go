@@ -854,3 +854,35 @@ func TestHostPathsSchemaAndResolve(t *testing.T) {
 		})
 	}
 }
+
+// TestParameterKindValidated: kind "path" loads; any other kind is
+// rejected by the schema.
+func TestParameterKindValidated(t *testing.T) {
+	t.Parallel()
+	entry := func(kind string) string {
+		return `apiVersion: ballast.dev/v1
+service: f
+version: 1
+parameters:
+  - name: path
+    kind: ` + kind + `
+    required: true
+backup:
+  strategy: files
+  files:
+    - path: "{{ .Params.path }}"
+verify:
+  method: archive-integrity
+`
+	}
+	got, err := Load([]byte(entry("path")))
+	if err != nil {
+		t.Fatalf("Load(kind path): %v", err)
+	}
+	if got.Parameters[0].Kind != "path" {
+		t.Errorf("Kind = %q, want path", got.Parameters[0].Kind)
+	}
+	if _, err := Load([]byte(entry("folder"))); err == nil {
+		t.Error("Load(kind folder) = nil error, want rejection")
+	}
+}

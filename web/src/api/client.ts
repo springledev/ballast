@@ -33,6 +33,7 @@ import type {
   Service,
   ServiceStatus,
   Snapshot,
+  SavedService,
 } from "./types";
 
 // ApiError carries the HTTP status so callers can special-case 401
@@ -146,10 +147,10 @@ export const api = {
   getService(name: string): Promise<Service> {
     return request("GET", `${base}/services/${encodeURIComponent(name)}`);
   },
-  createService(s: Service): Promise<Service> {
+  createService(s: Service): Promise<SavedService> {
     return request("POST", `${base}/services`, s);
   },
-  updateService(name: string, s: Service): Promise<Service> {
+  updateService(name: string, s: Service): Promise<SavedService> {
     return request("PUT", `${base}/services/${encodeURIComponent(name)}`, s);
   },
   servicePreview(name: string): Promise<ServicePreview> {

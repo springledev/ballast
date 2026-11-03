@@ -58,7 +58,8 @@
           "required": { "type": "boolean" },
           "prompt": { "type": "string" },
           "default": { "type": "string" },
-          "picker": { "enum": ["docker-volume", "compose-project"] }
+          "picker": { "enum": ["docker-volume", "compose-project"] },
+          "kind": { "enum": ["path"] }
         }
       }
     },

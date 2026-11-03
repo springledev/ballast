@@ -13,6 +13,7 @@ display:
   description: Back up any folder on this machine directly, no database involved
 parameters:
   - name: path
+    kind: path
     required: true
     prompt: "Absolute path to the folder you want backed up"
 backup:

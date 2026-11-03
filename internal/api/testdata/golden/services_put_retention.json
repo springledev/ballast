@@ -12,6 +12,9 @@
       "keep_daily": 3,
       "keep_monthly": 0,
       "keep_weekly": 0
-    }
+    },
+    "warnings": [
+      "/y does not exist yet; it is saved, but backups fail until it does (is the drive mounted?)"
+    ]
   }
 }

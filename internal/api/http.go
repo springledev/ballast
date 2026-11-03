@@ -278,6 +278,21 @@ func (h *handler) listServices(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, list)
 }
 
+// serviceSaved is the body of a successful service POST/PUT: the
+// service as stored (paths trimmed) plus plain-English warnings, such as
+// a folder that does not exist yet. Warnings is always a list.
+type serviceSaved struct {
+	inventory.Service
+	Warnings []string `json:"warnings"`
+}
+
+func nonNil(w []string) []string {
+	if w == nil {
+		return []string{}
+	}
+	return w
+}
+
 func (h *handler) createService(w http.ResponseWriter, r *http.Request) {
 	var s inventory.Service
 	if err := decodeJSON(r, &s); err != nil {
@@ -296,11 +311,12 @@ func (h *handler) createService(w http.ResponseWriter, r *http.Request) {
 		h.writeErr(w, err, http.StatusInternalServerError)
 		return
 	}
-	if err := h.ops.PutService(r.Context(), s); err != nil {
+	saved, warnings, err := h.ops.PutServiceChecked(r.Context(), s)
+	if err != nil {
 		h.writeErr(w, err, http.StatusInternalServerError)
 		return
 	}
-	writeJSON(w, http.StatusCreated, s)
+	writeJSON(w, http.StatusCreated, serviceSaved{Service: saved, Warnings: nonNil(warnings)})
 }
 
 func (h *handler) getService(w http.ResponseWriter, r *http.Request) {
@@ -322,11 +338,12 @@ func (h *handler) putService(w http.ResponseWriter, r *http.Request) {
 	if s.DockerHost == "" {
 		s.DockerHost = dockerhost.LocalName
 	}
-	if err := h.ops.PutService(r.Context(), s); err != nil {
+	saved, warnings, err := h.ops.PutServiceChecked(r.Context(), s)
+	if err != nil {
 		h.writeErr(w, err, http.StatusInternalServerError)
 		return
 	}
-	writeJSON(w, http.StatusOK, s)
+	writeJSON(w, http.StatusOK, serviceSaved{Service: saved, Warnings: nonNil(warnings)})
 }
 
 func (h *handler) deleteService(w http.ResponseWriter, r *http.Request) {
