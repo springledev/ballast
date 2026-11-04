@@ -269,6 +269,8 @@ export interface TierStatus {
 }
 
 export interface VerificationRecord {
+  /** The destination this check belongs to; absent means the whole backup. */
+  target?: string;
   method: string;
   passed: boolean;
   warning?: string;
@@ -572,4 +574,57 @@ export interface CatalogValidation {
 export interface CatalogInstallResult {
   service: string;
   path: string;
+}
+
+/** Counts of one run's verification checks. */
+export interface RunVerificationSummary {
+  checks: number;
+  passed: number;
+  failed: number;
+  warnings: number;
+}
+
+/** One destination's result within a past run. */
+export interface RunTarget {
+  destination: string;
+  state: string;
+  light: TierStatus["light"];
+  snapshot_id?: string;
+  detail?: string;
+  secondary?: boolean;
+}
+
+/** One past run, as listed in a service's history. */
+export interface RunSummary {
+  id: number;
+  service: string;
+  state: string;
+  light: TierStatus["light"];
+  started_at: string;
+  finished_at?: string;
+  duration_seconds?: number;
+  snapshot_id?: string;
+  error?: string;
+  verification: RunVerificationSummary;
+  targets: RunTarget[];
+}
+
+/** One page of a service's run history, newest first. */
+export interface RunPage {
+  runs: RunSummary[];
+  /** Pass as `before` to get the next page; absent when there are no older runs. */
+  next_before?: number;
+}
+
+/** One line of a run's log. */
+export interface RunLogLine {
+  at: string;
+  text: string;
+}
+
+/** One run in full. */
+export interface RunDetail extends RunSummary {
+  verification_results: VerificationRecord[];
+  log_tail: RunLogLine[];
+  log_truncated?: boolean;
 }

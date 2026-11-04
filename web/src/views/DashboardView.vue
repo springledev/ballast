@@ -354,6 +354,7 @@ onUnmounted(() => clearInterval(timer));
               <span class="item-sub">{{ shortStatus(s) }}</span>
             </div>
             <span class="row-meta item-sub">{{ s.catalog_entry }}, {{ s.destination }}</span>
+            <router-link class="btn btn-small btn-quiet" :to="`/history/${encodeURIComponent(s.service)}`">History</router-link>
             <button class="btn btn-small" type="button" :disabled="starting.has(s.service) || isRunning(s)" @click="backupNow(s.service)">
               {{ starting.has(s.service) ? "Starting…" : "Back up" }}
             </button>
@@ -419,6 +420,7 @@ onUnmounted(() => clearInterval(timer));
                   </dl>
                 </div>
               </details>
+              <router-link class="btn btn-quiet" :to="`/history/${encodeURIComponent(s.service)}`">History</router-link>
               <button class="btn" type="button" :disabled="starting.has(s.service) || isRunning(s)" @click="backupNow(s.service)">
                 {{ starting.has(s.service) ? "Starting…" : "Back up now" }}
               </button>

@@ -13,6 +13,8 @@ import type {
   CreateDockerHostResponse,
   Destination,
   ProtonSignIn,
+  RunDetail,
+  RunPage,
   DetectResult,
   DigestSendResult,
   DockerComposeProject,
@@ -92,6 +94,18 @@ async function request<T>(method: string, path: string, body?: unknown): Promise
 const base = "/api/v1";
 
 export const api = {
+  // --- run history ---
+  listRuns(name: string, limit?: number, before?: number): Promise<RunPage> {
+    const params = new URLSearchParams();
+    if (limit) params.set("limit", String(limit));
+    if (before) params.set("before", String(before));
+    const qs = params.toString();
+    return request("GET", `${base}/services/${encodeURIComponent(name)}/runs${qs ? `?${qs}` : ""}`);
+  },
+  getRun(id: number): Promise<RunDetail> {
+    return request("GET", `${base}/runs/${id}`);
+  },
+
   // --- status & catalog ---
   status(service?: string, withVerify?: boolean): Promise<ServiceStatus[]> {
     const params = new URLSearchParams();

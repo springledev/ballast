@@ -9,6 +9,7 @@ const router = createRouter({
   routes: [
     { path: "/", redirect: "/dashboard" },
     { path: "/dashboard", name: "dashboard", component: () => import("./views/DashboardView.vue") },
+    { path: "/history/:service", name: "history", component: () => import("./views/HistoryView.vue") },
     { path: "/services", name: "services", component: () => import("./views/ServicesView.vue") },
     { path: "/custom-services", name: "custom-services", component: () => import("./views/CustomServicesView.vue") },
     { path: "/destinations", name: "destinations", component: () => import("./views/DestinationsView.vue") },
