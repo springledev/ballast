@@ -1,6 +1,39 @@
 package main
 
-import "github.com/spf13/cobra"
+import (
+	"time"
+
+	"github.com/spf13/cobra"
+
+	"github.com/springledev/ballast/internal/api"
+)
+
+// nextRunText is how the CLI says when a schedule runs next, in loc:
+// "paused", "Next run: Tue 2026-11-03 03:00", or, when a missed slot
+// makes the next check back up at once, "Runs at the next check, then
+// Wed 2026-11-04 01:00".
+func nextRunText(info api.ScheduleInfo, loc *time.Location) string {
+	if !info.Enabled {
+		return "paused"
+	}
+	if info.NextRun == nil {
+		return "never runs"
+	}
+	at := info.NextRun.In(loc).Format("Mon 2006-01-02 15:04")
+	if info.DueNow {
+		return "Runs at the next check, then " + at
+	}
+	return "Next run: " + at
+}
+
+// surpriseNotice tells the user, accurately, whether the next check
+// will start a backup.
+func surpriseNotice(info api.ScheduleInfo) string {
+	if info.Enabled && info.DueNow {
+		return "A backup is due, so the next check (run-due, or the running service) will back this up straight away, then follow the schedule. To back up right now, run `ballast backup`."
+	}
+	return "Saving a schedule never starts a backup by surprise: it first runs at its next slot. To back up right now, run `ballast backup`."
+}
 
 // scheduleSetCmd is `ballast schedule set <service> "<cron>"` (spec
 // §14 step 11: schedule management is a documented gap in spec §9's
@@ -16,11 +49,16 @@ var scheduleSetCmd = &cobra.Command{
 			return err
 		}
 		return withApp(cfg, cmd.ErrOrStderr(), func(a *app) error {
-			if err := a.ops.SetSchedule(cmd.Context(), args[0], args[1]); err != nil {
+			info, err := a.ops.SetSchedule(cmd.Context(), args[0], args[1], nil)
+			if err != nil {
 				return err
 			}
-			cmd.Printf("%s: scheduled %q\n", args[0], args[1])
-			cmd.Println("A new schedule never starts a backup by surprise. It first runs at its next slot, unless this has never been backed up at all, which runs on the next check. To back up right now, run `ballast backup`.")
+			if info.Enabled {
+				cmd.Printf("%s: scheduled %q. %s\n", args[0], args[1], nextRunText(info, time.Local))
+			} else {
+				cmd.Printf("%s: saved %q. The schedule is paused, so it will not run. Turn it on with `ballast schedule enable %s`.\n", args[0], args[1], args[0])
+			}
+			cmd.Println(surpriseNotice(info))
 			return nil
 		})
 	},
@@ -85,7 +123,7 @@ var scheduleListCmd = &cobra.Command{
 				if s.Enabled {
 					state = "enabled"
 				}
-				cmd.Printf("%s\t%s\t%s\n", s.Service, s.Cron, state)
+				cmd.Printf("%s\t%s\t%s\t%s\n", s.Service, s.Cron, state, nextRunText(s, time.Local))
 			}
 			return nil
 		})

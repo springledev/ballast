@@ -1880,34 +1880,85 @@ func (o *Ops) TestDestination(ctx context.Context, name string) error {
 
 // --- Schedules -------------------------------------------------------
 
-// ListSchedules lists every configured schedule.
-func (o *Ops) ListSchedules(ctx context.Context) ([]scheduler.ScheduledJob, error) {
-	return scheduler.ListSchedules(o.DB)
+// ScheduleInfo is a configured schedule plus when it will next run.
+type ScheduleInfo struct {
+	scheduler.ScheduledJob
+	// NextRun is the next time the schedule fires. It is nil when the
+	// schedule is paused or its expression never fires.
+	NextRun *time.Time `json:"next_run,omitempty"`
+	// DueNow is true when an enabled schedule has a slot it missed (for
+	// example while paused), so the next check runs a backup straight
+	// away. NextRun is then the slot after that.
+	DueNow bool `json:"due_now,omitempty"`
+}
+
+// scheduleInfo decorates j with its next run, counted from the Ops clock.
+func (o *Ops) scheduleInfo(j scheduler.ScheduledJob) ScheduleInfo {
+	info := ScheduleInfo{ScheduledJob: j}
+	if !j.Enabled {
+		return info
+	}
+	sched, err := scheduler.ParseCron(j.Cron)
+	if err != nil {
+		return info
+	}
+	now := o.now()
+	if next, ok := sched.Next(now); ok {
+		info.NextRun = &next
+	}
+	if base, err := scheduler.ScheduleBaseline(o.DB, j.Service); err == nil {
+		info.DueNow = sched.IsDue(now, base)
+	}
+	return info
+}
+
+// ListSchedules lists every configured schedule with its next run.
+func (o *Ops) ListSchedules(ctx context.Context) ([]ScheduleInfo, error) {
+	jobs, err := scheduler.ListSchedules(o.DB)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]ScheduleInfo, 0, len(jobs))
+	for _, j := range jobs {
+		out = append(out, o.scheduleInfo(j))
+	}
+	return out, nil
 }
 
 // GetSchedule returns the named service's configured schedule, or
 // inventory.ErrNotFound wrapped if it has none.
-func (o *Ops) GetSchedule(ctx context.Context, service string) (scheduler.ScheduledJob, error) {
+func (o *Ops) GetSchedule(ctx context.Context, service string) (ScheduleInfo, error) {
 	list, err := scheduler.ListSchedules(o.DB)
 	if err != nil {
-		return scheduler.ScheduledJob{}, err
+		return ScheduleInfo{}, err
 	}
 	for _, s := range list {
 		if s.Service == service {
-			return s, nil
+			return o.scheduleInfo(s), nil
 		}
 	}
-	return scheduler.ScheduledJob{}, fmt.Errorf("service %s: no schedule configured: %w", service, inventory.ErrNotFound)
+	return ScheduleInfo{}, fmt.Errorf("service %s: no schedule configured: %w", service, inventory.ErrNotFound)
 }
 
-// SetSchedule sets service's cron schedule, enabling it. The
-// expression is validated before it is stored (spec: invalid
-// schedules must be rejected loudly, not silently skipped later).
-func (o *Ops) SetSchedule(ctx context.Context, service, cronExpr string) error {
+// SetSchedule sets service's cron schedule and returns the saved
+// schedule with its next run. A new schedule starts enabled; an
+// existing one keeps its paused or enabled state unless enabled is
+// non-nil, which explicitly turns it on or off. The expression is
+// validated before it is stored (spec: invalid schedules must be
+// rejected loudly, not silently skipped later).
+func (o *Ops) SetSchedule(ctx context.Context, service, cronExpr string, enabled *bool) (ScheduleInfo, error) {
 	if _, err := scheduler.ParseCron(cronExpr); err != nil {
-		return fmt.Errorf("service %s: %w: %w", service, ErrValidation, err)
+		return ScheduleInfo{}, fmt.Errorf("service %s: %w: %w", service, ErrValidation, err)
 	}
-	return scheduler.SetSchedule(o.DB, service, cronExpr)
+	if err := scheduler.SetSchedule(o.DB, service, cronExpr); err != nil {
+		return ScheduleInfo{}, err
+	}
+	if enabled != nil {
+		if err := scheduler.SetEnabled(o.DB, service, *enabled); err != nil {
+			return ScheduleInfo{}, fmt.Errorf("service %s: %w", service, err)
+		}
+	}
+	return o.GetSchedule(ctx, service)
 }
 
 // SetScheduleEnabled enables or disables service's existing schedule

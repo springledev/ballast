@@ -362,10 +362,39 @@ func TestHTTPGolden(t *testing.T) {
 			},
 		},
 		{
+			name: "schedule_put_paused_stays_paused",
+			arrange: func(t *testing.T, h *harness) {
+				withService(t, h)
+				if _, err := h.ops.SetSchedule(context.Background(), "svc", "0 4 * * *", nil); err != nil {
+					t.Fatalf("SetSchedule: %v", err)
+				}
+				if err := h.ops.SetScheduleEnabled(context.Background(), "svc", false); err != nil {
+					t.Fatalf("SetScheduleEnabled: %v", err)
+				}
+			},
+			req: func(h *harness) *http.Request {
+				r := httptest.NewRequest(http.MethodPut, "/api/v1/services/svc/schedule", jsonBody(t, scheduleRequestBody{Cron: "0 3 * * *"}))
+				r.Header.Set("Content-Type", "application/json")
+				return r
+			},
+		},
+		{
+			name: "schedule_put_next_run",
+			arrange: func(t *testing.T, h *harness) {
+				withService(t, h)
+				h.ops.Now = func() time.Time { return time.Date(2026, 11, 2, 12, 0, 0, 0, time.UTC) }
+			},
+			req: func(h *harness) *http.Request {
+				r := httptest.NewRequest(http.MethodPut, "/api/v1/services/svc/schedule", jsonBody(t, scheduleRequestBody{Cron: "0 3 * * *"}))
+				r.Header.Set("Content-Type", "application/json")
+				return r
+			},
+		},
+		{
 			name: "schedule_get",
 			arrange: func(t *testing.T, h *harness) {
 				withService(t, h)
-				if err := h.ops.SetSchedule(context.Background(), "svc", "0 3 * * *"); err != nil {
+				if _, err := h.ops.SetSchedule(context.Background(), "svc", "0 3 * * *", nil); err != nil {
 					t.Fatalf("SetSchedule: %v", err)
 				}
 			},
@@ -377,7 +406,7 @@ func TestHTTPGolden(t *testing.T) {
 			name: "schedule_enabled_put",
 			arrange: func(t *testing.T, h *harness) {
 				withService(t, h)
-				if err := h.ops.SetSchedule(context.Background(), "svc", "0 3 * * *"); err != nil {
+				if _, err := h.ops.SetSchedule(context.Background(), "svc", "0 3 * * *", nil); err != nil {
 					t.Fatalf("SetSchedule: %v", err)
 				}
 			},

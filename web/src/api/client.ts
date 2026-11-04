@@ -187,8 +187,9 @@ export const api = {
   getSchedule(name: string): Promise<ScheduledJob> {
     return request("GET", `${base}/services/${encodeURIComponent(name)}/schedule`);
   },
-  setSchedule(name: string, cron: string): Promise<ScheduledJob> {
-    return request("PUT", `${base}/services/${encodeURIComponent(name)}/schedule`, { cron });
+  /** Saves the cron; `enabled` is sent only to explicitly turn it on or off. */
+  setSchedule(name: string, cron: string, enabled?: boolean): Promise<ScheduledJob> {
+    return request("PUT", `${base}/services/${encodeURIComponent(name)}/schedule`, enabled === undefined ? { cron } : { cron, enabled });
   },
   setScheduleEnabled(name: string, enabled: boolean): Promise<{ enabled: boolean }> {
     return request("PUT", `${base}/services/${encodeURIComponent(name)}/schedule/enabled`, { enabled });

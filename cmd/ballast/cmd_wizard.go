@@ -360,7 +360,7 @@ func configureSchedule(ctx context.Context, a *app, in *bufio.Reader, out io.Wri
 	if preset, ok := schedulePresets[strings.ToLower(choice)]; ok {
 		cron = preset
 	}
-	if err := a.ops.SetSchedule(ctx, service, cron); err != nil {
+	if _, err := a.ops.SetSchedule(ctx, service, cron, nil); err != nil {
 		return fmt.Errorf("setting the schedule: %w", err)
 	}
 	fmt.Fprintf(out, "  Scheduled (%s).\n", cron)

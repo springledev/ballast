@@ -392,3 +392,40 @@ func TestScheduleBaselineRespectsHistoryFloor(t *testing.T) {
 		t.Errorf("baseline = %v, %v; want zero (old backup is below the floor)", b, err)
 	}
 }
+
+func TestSetSchedulePreservesEnabled(t *testing.T) {
+	tests := []struct {
+		name        string
+		pauseFirst  bool
+		wantEnabled bool
+	}{
+		{"new row is created enabled", false, true},
+		{"enabled stays enabled", false, true},
+		{"paused stays paused", true, false},
+	}
+	for i, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			s := openTestDB(t)
+			if i > 0 {
+				if err := SetSchedule(s.DB(), "immich", "0 3 * * *"); err != nil {
+					t.Fatalf("SetSchedule: %v", err)
+				}
+				if tc.pauseFirst {
+					if err := SetEnabled(s.DB(), "immich", false); err != nil {
+						t.Fatalf("SetEnabled: %v", err)
+					}
+				}
+			}
+			if err := SetSchedule(s.DB(), "immich", "30 2 * * *"); err != nil {
+				t.Fatalf("SetSchedule: %v", err)
+			}
+			jobs, err := ListSchedules(s.DB())
+			if err != nil || len(jobs) != 1 {
+				t.Fatalf("ListSchedules = %v, %v", jobs, err)
+			}
+			if jobs[0].Enabled != tc.wantEnabled || jobs[0].Cron != "30 2 * * *" {
+				t.Errorf("schedule = %+v, want enabled=%v and the new cron", jobs[0], tc.wantEnabled)
+			}
+		})
+	}
+}

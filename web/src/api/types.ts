@@ -243,6 +243,10 @@ export interface ScheduledJob {
   service: string;
   cron: string;
   enabled: boolean;
+  /** When it runs next; absent while paused. */
+  next_run?: string;
+  /** True when a missed slot makes the next check run a backup at once. */
+  due_now?: boolean;
 }
 
 export interface TierStatus {

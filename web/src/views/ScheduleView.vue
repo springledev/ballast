@@ -5,7 +5,7 @@ import { api } from "@/api/client";
 import type { ServiceStatus } from "@/api/types";
 import ListTools from "@/components/ListTools.vue";
 import { countLights, emptyQuery, filterEntries, groupEntries, needsTools, type ListEntry, type ListQuery } from "@/lib/listView";
-import { describeSchedule, presetFor, schedulePresets } from "@/lib/schedule";
+import { describeSchedule, enabledToSend, nextRunSentence, presetFor, savedMessage, schedulePresets } from "@/lib/schedule";
 import { worstLight } from "@/lib/status";
 import { revealOnError } from "@/lib/revealError";
 
@@ -14,9 +14,12 @@ const loading = ref(true);
 const error = ref("");
 revealOnError(error);
 const saved = ref("");
-// choice is a preset id, "none", or "custom"; custom holds the cron text.
+// choice is a preset id, "none", "paused", or "custom"; custom holds the cron text.
+// While paused, `cronChoice` remembers which timing the schedule keeps.
 const choice = reactive<Record<string, string>>({});
 const custom = reactive<Record<string, string>>({});
+// When each enabled schedule runs next, as the server works it out.
+const nextRun = reactive<Record<string, string>>({});
 const saving = ref<Set<string>>(new Set());
 
 async function load() {
@@ -26,9 +29,22 @@ async function load() {
     services.value = await api.status();
     for (const s of services.value) {
       const preset = presetFor(s.schedule?.cron);
-      choice[s.service] = !s.schedule ? "none" : (preset?.id ?? "custom");
+      choice[s.service] = !s.schedule ? "none" : !s.schedule.enabled ? "paused" : (preset?.id ?? "custom");
+      delete nextRun[s.service];
       custom[s.service] = s.schedule?.cron ?? "0 3 * * *";
     }
+    await Promise.all(
+      services.value
+        .filter((s) => s.schedule?.enabled)
+        .map(async (s) => {
+          try {
+            const j = await api.getSchedule(s.service);
+            nextRun[s.service] = nextRunSentence(j);
+          } catch {
+            // The next run is a nicety; the page works without it.
+          }
+        }),
+    );
   } catch (e) {
     error.value = (e as Error).message;
   } finally {
@@ -36,16 +52,33 @@ async function load() {
   }
 }
 
-// apply sets one service's schedule to a preset id, "none" or "custom".
-async function apply(s: ServiceStatus, c: string, cronText: string) {
+// typedCron switches to "custom" when a cron is typed, unless the
+// schedule is being kept paused.
+function typedCron(name: string) {
+  if (choice[name] !== "paused") choice[name] = "custom";
+}
+
+// apply sets one service's schedule to a preset id, "none", "paused" or
+// "custom" and returns the sentence to show. `enabled` is sent to the
+// server only when the user explicitly switched between paused and
+// running; otherwise saving a new timing leaves a paused schedule paused.
+async function apply(s: ServiceStatus, c: string, cronText: string, bulk = false): Promise<string> {
   const name = s.service;
-  if (c === "none") {
+  const wasPaused = !!s.schedule && !s.schedule.enabled;
+  if (c === "none" || (c === "paused" && !s.schedule)) {
     if (s.schedule?.enabled) await api.setScheduleEnabled(name, false);
-  } else {
-    const cron = c === "custom" ? cronText : schedulePresets.find((p) => p.id === c)!.cron;
-    await api.setSchedule(name, cron);
-    if (s.schedule && !s.schedule.enabled) await api.setScheduleEnabled(name, true);
+    return "Saved. It will only run when you start it.";
   }
+  if (c === "paused") {
+    // Keep (or edit) the timing, and make sure it is paused.
+    const cron = cronText.trim() || s.schedule!.cron;
+    await api.setSchedule(name, cron, wasPaused ? undefined : false);
+    return "Saved. Paused, so it will not run.";
+  }
+  const cron = c === "custom" ? cronText : schedulePresets.find((p) => p.id === c)!.cron;
+  // Choosing a timing for a paused schedule means the user wants it back on.
+  const res = await api.setSchedule(name, cron, enabledToSend(wasPaused, bulk));
+  return savedMessage(res);
 }
 
 async function save(s: ServiceStatus) {
@@ -54,8 +87,7 @@ async function save(s: ServiceStatus) {
   error.value = "";
   saved.value = "";
   try {
-    await apply(s, choice[name], custom[name]);
-    saved.value = `Saved the schedule for ${name}.`;
+    saved.value = await apply(s, choice[name], custom[name]);
     await load();
   } catch (e) {
     error.value = `${name}: ${(e as Error).message}`;
@@ -86,16 +118,20 @@ async function applyToSelected() {
   error.value = "";
   saved.value = "";
   const failed: string[] = [];
+  let stayedPaused = 0;
   const picked = services.value.filter((s) => selected.value.has(s.service));
   for (const s of picked) {
     try {
-      await apply(s, bulkChoice.value, custom[s.service]);
+      if (s.schedule && !s.schedule.enabled && bulkChoice.value !== "none" && bulkChoice.value !== "paused") stayedPaused++;
+      await apply(s, bulkChoice.value, custom[s.service] ?? "", true);
     } catch (e) {
       failed.push(`${s.service} (${(e as Error).message})`);
     }
   }
   if (failed.length) error.value = `Couldn't change: ${failed.join(", ")}`;
-  saved.value = `Saved the schedule for ${picked.length - failed.length} of ${picked.length}.`;
+  saved.value =
+    `Saved the schedule for ${picked.length - failed.length} of ${picked.length}.` +
+    (stayedPaused ? ` ${stayedPaused} stayed paused. Pick a single backup to turn it back on.` : "");
   selected.value = new Set();
   bulkBusy.value = false;
   await load();
@@ -136,6 +172,7 @@ onMounted(load);
         <select v-model="bulkChoice" style="width: auto" aria-label="New schedule for the selected backups">
           <option v-for="p in schedulePresets" :key="p.id" :value="p.id">{{ p.label }}</option>
           <option value="none">Only when I start it</option>
+          <option value="paused">Paused</option>
         </select>
         <button class="btn btn-primary" type="button" :disabled="bulkBusy" @click="applyToSelected">
           {{ bulkBusy ? "Saving…" : `Apply to ${selected.size}` }}
@@ -166,13 +203,16 @@ onMounted(load);
             </label>
             <div style="flex: 1">
               <div class="item-title">{{ s.service }}</div>
-              <div class="item-sub">Now: {{ describeSchedule(s.schedule) }}</div>
+              <div class="item-sub">
+                Now: {{ describeSchedule(s.schedule) }}<template v-if="nextRun[s.service]"> · {{ nextRun[s.service] }}</template>
+              </div>
             </div>
           </div>
           <div class="actions" style="margin-top: 0.75rem">
             <select v-model="choice[s.service]" class="schedule-select" :aria-label="`How often to back up ${s.service}`">
               <option v-for="p in schedulePresets" :key="p.id" :value="p.id">{{ p.label }}</option>
               <option value="none">Only when I start it</option>
+              <option value="paused">Paused</option>
               <option value="custom">Custom…</option>
             </select>
             <button class="btn btn-primary" type="submit" :disabled="saving.has(s.service)">
@@ -188,7 +228,7 @@ onMounted(load);
                   :id="`cron-${s.service}`"
                   v-model="custom[s.service]"
                   placeholder="30 2 * * *"
-                  @input="choice[s.service] = 'custom'"
+                  @input="typedCron(s.service)"
                 />
               </div>
               <p class="hint">

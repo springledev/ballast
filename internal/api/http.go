@@ -537,6 +537,9 @@ func (h *handler) getSchedule(w http.ResponseWriter, r *http.Request) {
 
 type scheduleRequestBody struct {
 	Cron string `json:"cron"`
+	// Enabled, when present, explicitly turns the schedule on or off;
+	// when absent the schedule keeps its current state.
+	Enabled *bool `json:"enabled,omitempty"`
 }
 
 func (h *handler) putSchedule(w http.ResponseWriter, r *http.Request) {
@@ -546,11 +549,12 @@ func (h *handler) putSchedule(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	name := pathName(r)
-	if err := h.ops.SetSchedule(r.Context(), name, body.Cron); err != nil {
+	info, err := h.ops.SetSchedule(r.Context(), name, body.Cron, body.Enabled)
+	if err != nil {
 		h.writeErr(w, err, http.StatusInternalServerError)
 		return
 	}
-	writeJSON(w, http.StatusOK, scheduler.ScheduledJob{Service: name, Cron: body.Cron, Enabled: true})
+	writeJSON(w, http.StatusOK, info)
 }
 
 type scheduleEnabledBody struct {

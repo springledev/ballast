@@ -20,6 +20,16 @@ import (
 // startup under load; this leaves comfortable headroom.
 const defaultReadyTimeout = 90 * time.Second
 
+// cleanupTimeout bounds removing the throwaway container and its
+// volume, including the repeat removals after an interrupted start.
+const cleanupTimeout = 30 * time.Second
+
+// interruptedStartRemovals is how long cleanup waits before each repeat
+// removal after `docker run` was killed mid-flight. A real daemon was
+// seen finishing the create about 200 ms after the first removal, under
+// load; the later passes leave room for a much busier host.
+var interruptedStartRemovals = []time.Duration{500 * time.Millisecond, time.Second, 2 * time.Second}
+
 // ContainerRestore implements the throwaway-container restore of
 // spec §7.2: a database dump is fed into a fresh container of the
 // entry's verify.image, stderr is filtered whitelist-style (only the
@@ -56,7 +66,9 @@ const defaultReadyTimeout = 90 * time.Second
 //     less, e.g. an Immich restore into a postgres build without
 //     pgvector/vchord).
 //   - Cleanup uses a detached context so cancellation of the job can
-//     never leave a throwaway container behind.
+//     never leave a throwaway container behind. It also removes the
+//     anonymous volume Docker creates for the image's declared data
+//     directory, which would otherwise stay on disk after every drill.
 //   - The stderr filter is whitelist-style: patterns match by
 //     substring, and anything not whitelisted fails the check.
 type ContainerRestore struct {
@@ -110,19 +122,26 @@ func (c *ContainerRestore) Check(ctx context.Context, req Request) (res Result) 
 	}
 
 	// Guaranteed cleanup (spec §7.2): every exit path destroys the
-	// container. It runs on a detached context so job cancellation
-	// cannot skip it, and the deferred mutation of the named return
-	// attaches any cleanup failure to the result's warnings.
+	// container and its anonymous volume. It runs on a detached
+	// context so job cancellation cannot skip it, and the deferred
+	// mutation of the named return attaches any cleanup failure to the
+	// result's warnings, leaving the verdict as it was.
+	startInterrupted := false
 	defer func() {
-		cleanCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		cleanCtx, cancel := context.WithTimeout(context.Background(), cleanupTimeout)
 		defer cancel()
-		if err := c.removeContainer(cleanCtx, name, req.Env); err != nil {
+		if err := c.cleanup(cleanCtx, name, req.Env, startInterrupted); err != nil {
 			res.Warning = joinWarning(res.Warning,
-				"throwaway container "+name+" could not be removed: "+err.Error())
+				"throwaway container "+name+" and its temporary data could not be removed, so they may still be using disk space. To remove them yourself, run: docker rm --force --volumes "+name+" ("+err.Error()+")")
+			return
+		}
+		if res.Passed {
+			res.Detail += " and destroyed it"
 		}
 	}()
 
 	if err := c.startContainer(ctx, name, image, dialect, req.Env); err != nil {
+		startInterrupted = ctx.Err() != nil
 		res.Detail = "service " + service + ": the restore drill could not start the test container " + name + " (the backup itself was made): " + err.Error()
 		res.Duration = time.Since(start)
 		return res
@@ -156,7 +175,7 @@ func (c *ContainerRestore) Check(ctx context.Context, req Request) (res Result) 
 	}
 
 	res.Passed = true
-	res.Detail = fmt.Sprintf("service %s: restored %d dump artifact(s) into throwaway container %s and destroyed it", service, len(dumps), name)
+	res.Detail = fmt.Sprintf("service %s: restored %d dump artifact(s) into throwaway container %s", service, len(dumps), name)
 	res.Output = strings.Join(output, "\n")
 	res.Duration = time.Since(start)
 	return res
@@ -361,13 +380,36 @@ func (c *ContainerRestore) restoreOne(ctx context.Context, name string, d restor
 	return benign, nil, "", nil
 }
 
-// removeContainer destroys the throwaway container. It runs on a
-// caller-provided (detached) context so cleanup survives job
-// cancellation.
+// cleanup removes the throwaway container and its anonymous volume.
+//
+// When the job was cancelled while `docker run` was in flight, killing
+// the docker CLI does not stop the daemon: it can finish creating the
+// container a moment after a first removal found nothing and reported
+// success (confirmed against a real daemon). startInterrupted removes
+// the name again over interruptedStartRemovals to catch that container.
+func (c *ContainerRestore) cleanup(ctx context.Context, name string, env []string, startInterrupted bool) error {
+	err := c.removeContainer(ctx, name, env)
+	if !startInterrupted {
+		return err
+	}
+	for _, wait := range interruptedStartRemovals {
+		if sleepErr := sleepOrDone(ctx, wait); sleepErr != nil {
+			return fmt.Errorf("removing container %s after an interrupted start: %w", name, sleepErr)
+		}
+		err = c.removeContainer(ctx, name, env)
+	}
+	return err
+}
+
+// removeContainer destroys the throwaway container and its anonymous
+// volumes. --volumes never touches named volumes, and the drill mounts
+// none. It runs on a caller-provided (detached) context so cleanup
+// survives job cancellation. A container that does not exist is not an
+// error: docker rm --force exits 0.
 func (c *ContainerRestore) removeContainer(ctx context.Context, name string, env []string) error {
-	_, err := c.opts.Runner.Run(ctx, nil, nil, c.opts.Docker.Command(env, "rm", "--force", name))
+	_, err := c.opts.Runner.Run(ctx, nil, nil, c.opts.Docker.Command(env, "rm", "--force", "--volumes", name))
 	if err != nil {
-		return fmt.Errorf("docker rm --force %s: %w", name, err)
+		return fmt.Errorf("docker rm --force --volumes %s: %w", name, err)
 	}
 	return nil
 }

@@ -1,7 +1,9 @@
 package strategy
 
 import (
+	"bytes"
 	"context"
+	"log"
 	"os"
 	"path/filepath"
 	"strings"
@@ -276,6 +278,41 @@ func TestRestoreVolume(t *testing.T) {
 			}
 			if got, _ := os.ReadFile(stdin); string(got) != "ARCHIVE" {
 				t.Errorf("helper stdin = %q, want the archive", got)
+			}
+		})
+	}
+}
+
+// TestRemoveHelper: removing a helper by hand bypasses --rm's own volume
+// cleanup, so it must ask for the volumes too; a failed removal is
+// logged, never returned over the caller's original failure.
+func TestRemoveHelper(t *testing.T) {
+	tests := []struct {
+		name    string
+		helper  string
+		wantLog string
+	}{
+		{name: "removes the anonymous volumes too", helper: "ballast-volume-x"},
+		{name: "failed removal is logged", helper: "fail-rm", wantLog: "docker rm -f --volumes fail-rm"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			opts, logPath := volumeStub(t, "TARBYTES")
+			var buf bytes.Buffer
+			log.SetOutput(&buf)
+			defer log.SetOutput(os.Stderr)
+
+			opts.removeHelper(tt.helper)
+
+			want := "rm -f --volumes " + tt.helper
+			if stub := readStubLog(t, logPath); len(stub) != 1 || stub[0] != want {
+				t.Errorf("docker commands = %v, want %q", stub, want)
+			}
+			if tt.wantLog == "" && buf.Len() != 0 {
+				t.Errorf("log = %q, want nothing on success", buf.String())
+			}
+			if !strings.Contains(buf.String(), tt.wantLog) {
+				t.Errorf("log = %q, want it to contain %q", buf.String(), tt.wantLog)
 			}
 		})
 	}

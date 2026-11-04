@@ -1044,10 +1044,10 @@ func TestOpsRestoreCrossServiceSnapshotRejected(t *testing.T) {
 
 func TestOpsSchedules(t *testing.T) {
 	h := newHarness(t)
-	if err := h.ops.SetSchedule(context.Background(), "svc", "not a cron"); !errors.Is(err, ErrValidation) {
+	if _, err := h.ops.SetSchedule(context.Background(), "svc", "not a cron", nil); !errors.Is(err, ErrValidation) {
 		t.Errorf("SetSchedule with a bad cron = %v, want ErrValidation", err)
 	}
-	if err := h.ops.SetSchedule(context.Background(), "svc", "0 3 * * *"); err != nil {
+	if _, err := h.ops.SetSchedule(context.Background(), "svc", "0 3 * * *", nil); err != nil {
 		t.Fatalf("SetSchedule: %v", err)
 	}
 	list, err := h.ops.ListSchedules(context.Background())
@@ -2183,3 +2183,109 @@ func TestPutService_RemoteHostPathWarns(t *testing.T) {
 		t.Fatalf("warnings = %v, err = %v; want 1 warning", warnings, err)
 	}
 }
+
+func TestOpsSetScheduleNextRun(t *testing.T) {
+	// Monday 2026-11-02 12:00 UTC; "0 3 * * *" next fires Tuesday 03:00.
+	now := time.Date(2026, 11, 2, 12, 0, 0, 0, time.UTC)
+	yes, no := true, false
+	tests := []struct {
+		name        string
+		pauseFirst  bool
+		enabled     *bool
+		wantEnabled bool
+		wantNext    bool
+	}{
+		{"new schedule is enabled with a next run", false, nil, true, true},
+		{"paused stays paused, no next run", true, nil, false, false},
+		{"explicit true turns a paused one on", true, &yes, true, true},
+		{"explicit false pauses an enabled one", false, &no, false, false},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			h := newHarness(t)
+			h.ops.Now = func() time.Time { return now }
+			ctx := context.Background()
+			if tc.pauseFirst {
+				if _, err := h.ops.SetSchedule(ctx, "svc", "0 4 * * *", nil); err != nil {
+					t.Fatalf("SetSchedule: %v", err)
+				}
+				if err := h.ops.SetScheduleEnabled(ctx, "svc", false); err != nil {
+					t.Fatalf("SetScheduleEnabled: %v", err)
+				}
+			}
+			got, err := h.ops.SetSchedule(ctx, "svc", "0 3 * * *", tc.enabled)
+			if err != nil {
+				t.Fatalf("SetSchedule: %v", err)
+			}
+			if got.Enabled != tc.wantEnabled || got.Cron != "0 3 * * *" || got.Service != "svc" {
+				t.Errorf("SetSchedule = %+v, want enabled=%v", got, tc.wantEnabled)
+			}
+			want := time.Date(2026, 11, 3, 3, 0, 0, 0, time.UTC)
+			switch {
+			case tc.wantNext && (got.NextRun == nil || !got.NextRun.Equal(want)):
+				t.Errorf("NextRun = %v, want %v", got.NextRun, want)
+			case !tc.wantNext && got.NextRun != nil:
+				t.Errorf("NextRun = %v, want nil while paused", got.NextRun)
+			}
+			g, err := h.ops.GetSchedule(ctx, "svc")
+			if err != nil || g.Enabled != tc.wantEnabled || (g.NextRun != nil) != tc.wantNext {
+				t.Errorf("GetSchedule = %+v, %v; want enabled=%v, next run present=%v", g, err, tc.wantEnabled, tc.wantNext)
+			}
+			l, err := h.ops.ListSchedules(ctx)
+			if err != nil || len(l) != 1 || (l[0].NextRun != nil) != tc.wantNext {
+				t.Errorf("ListSchedules = %+v, %v; want next run present=%v", l, err, tc.wantNext)
+			}
+		})
+	}
+}
+
+func TestOpsSetScheduleDueNow(t *testing.T) {
+	loc := time.UTC
+	tue12 := time.Date(2026, 11, 3, 12, 0, 0, 0, loc)
+	tue02 := time.Date(2026, 11, 3, 2, 0, 0, 0, loc)
+	tests := []struct {
+		name    string
+		now     time.Time
+		fired   time.Time
+		first   string
+		pause   bool
+		cron    string
+		enabled *bool
+		wantDue bool
+	}{
+		{"paused over a missed slot, then enabled", tue12, time.Date(2026, 10, 31, 3, 0, 0, 0, loc), "0 3 * * *", true, "0 3 * * *", ptrBool(true), true},
+		{"moved earlier over a slot already passed", tue02, time.Date(2026, 11, 2, 3, 0, 0, 0, loc), "0 3 * * *", false, "0 1 * * *", nil, true},
+		{"just fired, not due", tue12, time.Date(2026, 11, 3, 3, 0, 0, 0, loc), "0 3 * * *", false, "0 3 * * *", nil, false},
+		{"paused is never due", tue12, time.Date(2026, 10, 31, 3, 0, 0, 0, loc), "0 3 * * *", true, "0 3 * * *", nil, false},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			h := newHarness(t)
+			h.ops.Now = func() time.Time { return tc.now }
+			ctx := context.Background()
+			if _, err := h.ops.SetSchedule(ctx, "svc", tc.first, nil); err != nil {
+				t.Fatal(err)
+			}
+			if err := scheduler.MarkFired(h.ops.DB, "svc", tc.fired); err != nil {
+				t.Fatal(err)
+			}
+			if tc.pause {
+				if err := h.ops.SetScheduleEnabled(ctx, "svc", false); err != nil {
+					t.Fatal(err)
+				}
+			}
+			got, err := h.ops.SetSchedule(ctx, "svc", tc.cron, tc.enabled)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got.DueNow != tc.wantDue {
+				t.Errorf("DueNow = %v, want %v (%+v)", got.DueNow, tc.wantDue, got)
+			}
+			if !tc.wantDue && got.DueNow {
+				t.Errorf("unexpected DueNow")
+			}
+		})
+	}
+}
+
+func ptrBool(b bool) *bool { return &b }
