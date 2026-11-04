@@ -1,0 +1,25 @@
+{
+  "status": 200,
+  "body": {
+    "next_before": 2,
+    "runs": [
+      {
+        "duration_seconds": 0,
+        "error": "step FAILED",
+        "finished_at": "\u003ctime\u003e",
+        "id": 2,
+        "light": "red",
+        "service": "svc",
+        "started_at": "\u003ctime\u003e",
+        "state": "FAILED",
+        "targets": [],
+        "verification": {
+          "checks": 0,
+          "failed": 0,
+          "passed": 0,
+          "warnings": 0
+        }
+      }
+    ]
+  }
+}

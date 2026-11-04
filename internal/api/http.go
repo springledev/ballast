@@ -70,6 +70,8 @@ func NewAuthedHandler(ops *Ops, auth *Auth) http.Handler {
 	protected.HandleFunc("GET /api/v1/services/{name}/preview", h.previewService)
 	protected.HandleFunc("POST /api/v1/services/{name}/backup", h.startBackup)
 	protected.HandleFunc("GET /api/v1/services/{name}/snapshots", h.snapshots)
+	protected.HandleFunc("GET /api/v1/services/{name}/runs", h.listRuns)
+	protected.HandleFunc("GET /api/v1/runs/{id}", h.getRun)
 	protected.HandleFunc("POST /api/v1/services/{name}/verify", h.verifyService)
 	protected.HandleFunc("POST /api/v1/services/{name}/restore", h.restore)
 	protected.HandleFunc("GET /api/v1/services/{name}/schedule", h.getSchedule)
@@ -400,6 +402,54 @@ func (h *handler) snapshots(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, snaps)
+}
+
+// listRuns handles GET /api/v1/services/{name}/runs?limit=&before=.
+func (h *handler) listRuns(w http.ResponseWriter, r *http.Request) {
+	q := r.URL.Query()
+	limit, err := queryInt(q.Get("limit"), "limit")
+	if err != nil {
+		h.writeErr(w, err, http.StatusBadRequest)
+		return
+	}
+	before, err := queryInt(q.Get("before"), "before")
+	if err != nil {
+		h.writeErr(w, err, http.StatusBadRequest)
+		return
+	}
+	page, err := h.ops.ListRuns(pathName(r), int(limit), before)
+	if err != nil {
+		h.writeErr(w, err, http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, http.StatusOK, page)
+}
+
+// getRun handles GET /api/v1/runs/{id}.
+func (h *handler) getRun(w http.ResponseWriter, r *http.Request) {
+	id, err := queryInt(r.PathValue("id"), "run id")
+	if err != nil || id <= 0 {
+		h.writeErr(w, fmt.Errorf("%w: the run id must be a positive number", ErrValidation), http.StatusBadRequest)
+		return
+	}
+	d, err := h.ops.GetRun(id)
+	if err != nil {
+		h.writeErr(w, err, http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, http.StatusOK, d)
+}
+
+// queryInt parses an optional whole-number parameter; "" means 0.
+func queryInt(s, name string) (int64, error) {
+	if s == "" {
+		return 0, nil
+	}
+	n, err := strconv.ParseInt(s, 10, 64)
+	if err != nil {
+		return 0, fmt.Errorf("%w: %s must be a whole number", ErrValidation, name)
+	}
+	return n, nil
 }
 
 type restoreRequestBody struct {

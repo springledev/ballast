@@ -1,0 +1,35 @@
+{
+  "status": 200,
+  "body": {
+    "duration_seconds": 0,
+    "error": "step FAILED",
+    "finished_at": "\u003ctime\u003e",
+    "id": 2,
+    "light": "red",
+    "log_tail": [
+      {
+        "at": "\u003ctime\u003e",
+        "text": "PENDING -\u003e PENDING: run started"
+      },
+      {
+        "at": "\u003ctime\u003e",
+        "text": "PENDING -\u003e PREPARING: step PREPARING"
+      },
+      {
+        "at": "\u003ctime\u003e",
+        "text": "PREPARING -\u003e FAILED: step FAILED"
+      }
+    ],
+    "service": "svc",
+    "started_at": "\u003ctime\u003e",
+    "state": "FAILED",
+    "targets": [],
+    "verification": {
+      "checks": 0,
+      "failed": 0,
+      "passed": 0,
+      "warnings": 0
+    },
+    "verification_results": []
+  }
+}

@@ -1,0 +1,40 @@
+{
+  "status": 200,
+  "body": {
+    "runs": [
+      {
+        "duration_seconds": 0,
+        "error": "step FAILED",
+        "finished_at": "\u003ctime\u003e",
+        "id": 2,
+        "light": "red",
+        "service": "svc",
+        "started_at": "\u003ctime\u003e",
+        "state": "FAILED",
+        "targets": [],
+        "verification": {
+          "checks": 0,
+          "failed": 0,
+          "passed": 0,
+          "warnings": 0
+        }
+      },
+      {
+        "duration_seconds": 0,
+        "finished_at": "\u003ctime\u003e",
+        "id": 1,
+        "light": "green",
+        "service": "svc",
+        "started_at": "\u003ctime\u003e",
+        "state": "SUCCESS",
+        "targets": [],
+        "verification": {
+          "checks": 0,
+          "failed": 0,
+          "passed": 0,
+          "warnings": 0
+        }
+      }
+    ]
+  }
+}

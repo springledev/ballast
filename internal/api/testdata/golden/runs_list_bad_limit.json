@@ -1,0 +1,6 @@
+{
+  "status": 400,
+  "body": {
+    "error": "invalid input: limit must be a whole number"
+  }
+}
