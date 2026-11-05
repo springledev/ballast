@@ -1010,7 +1010,7 @@ func TestDeleteServiceWaitsForASlowBackupThenRefuses(t *testing.T) {
 			timer := time.AfterFunc(tt.holdFor, release)
 			defer timer.Stop()
 			rec := serveAs(t, h, http.MethodDelete, "/api/v1/services/svc", nil)
-			if rec.Code != tt.wantCode && !(tt.wantCode == http.StatusOK && rec.Code < 300) {
+			if rec.Code != tt.wantCode && (tt.wantCode != http.StatusOK || rec.Code >= 300) {
 				t.Fatalf("DELETE = %d %s, want %d", rec.Code, rec.Body.String(), tt.wantCode)
 			}
 			if tt.wantCode == http.StatusConflict {

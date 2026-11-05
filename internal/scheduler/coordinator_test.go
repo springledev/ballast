@@ -1021,7 +1021,9 @@ func TestRunDueSkipsNewScheduleAfterManualBackup(t *testing.T) {
 	f.schedule(t, "immich", "0 3 * * *")
 	db := f.c.DB
 	ts := nightly.Add(8 * time.Hour).Format(time.RFC3339Nano)
-	db.Exec(`INSERT INTO jobs (service, created_at) VALUES ('immich', ?)`, ts)
+	if _, err := db.Exec(`INSERT INTO jobs (service, created_at) VALUES ('immich', ?)`, ts); err != nil {
+		t.Fatal(err)
+	}
 	if _, err := db.Exec(`INSERT INTO runs (job_id, state, started_at, finished_at)
 		SELECT id, 'SUCCESS', ?, ? FROM jobs WHERE service='immich'`, ts, ts); err != nil {
 		t.Fatal(err)

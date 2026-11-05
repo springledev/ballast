@@ -20,8 +20,8 @@ func TestLoginWriteExtractsLinkAndCode(t *testing.T) {
 			l := &Login{}
 			// Written in two chunks, like a real stream.
 			half := len(tc.out) / 2
-			l.Write([]byte(tc.out[:half]))
-			l.Write([]byte(tc.out[half:]))
+			_, _ = l.Write([]byte(tc.out[:half]))
+			_, _ = l.Write([]byte(tc.out[half:]))
 			l.finish(nil)
 			if i := l.Info(); i.Link != tc.link || i.Code != tc.code {
 				t.Errorf("Info() = %+v, want link %q code %q", i, tc.link, tc.code)
@@ -72,11 +72,11 @@ func TestStartLoginMissingTool(t *testing.T) {
 
 func TestLoginDoesNotTakeAHalfWrittenLink(t *testing.T) {
 	l := &Login{}
-	l.Write([]byte("Open https://account.proton.me/de"))
+	_, _ = l.Write([]byte("Open https://account.proton.me/de"))
 	if got := l.Info().Link; got != "" {
 		t.Errorf("Link = %q while the line was still arriving, want none", got)
 	}
-	l.Write([]byte("vice now\n"))
+	_, _ = l.Write([]byte("vice now\n"))
 	if got := l.Info().Link; got != "https://account.proton.me/device" {
 		t.Errorf("Link = %q once the line was complete", got)
 	}

@@ -26,6 +26,8 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/spf13/cobra"
+	"github.com/spf13/pflag"
 	"github.com/springledev/ballast/internal/api"
 	"github.com/springledev/ballast/internal/buildinfo"
 	"github.com/springledev/ballast/internal/config"
@@ -33,8 +35,6 @@ import (
 	"github.com/springledev/ballast/internal/scheduler"
 	"github.com/springledev/ballast/internal/store"
 	"github.com/springledev/ballast/web"
-	"github.com/spf13/cobra"
-	"github.com/spf13/pflag"
 	execrunner "github.com/springledev/keel/runner"
 )
 

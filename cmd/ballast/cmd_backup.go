@@ -6,8 +6,8 @@ import (
 	"net/url"
 	"strings"
 
-	"github.com/springledev/ballast/internal/api"
 	"github.com/spf13/cobra"
+	"github.com/springledev/ballast/internal/api"
 )
 
 // backupCmd is `ballast backup <service>` (spec §9). It runs

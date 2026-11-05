@@ -20,9 +20,9 @@ func fakeProxmoxServer(t *testing.T, wantAuth string) *httptest.Server {
 		}
 		switch r.URL.Path {
 		case "/api2/json/version":
-			w.Write([]byte(`{"data":{"version":"8.2.1"}}`))
+			_, _ = w.Write([]byte(`{"data":{"version":"8.2.1"}}`))
 		case "/api2/json/cluster/resources":
-			w.Write([]byte(`{"data":[{"node":"pve1","vmid":100,"name":"immich","status":"running","type":"lxc"}]}`))
+			_, _ = w.Write([]byte(`{"data":[{"node":"pve1","vmid":100,"name":"immich","status":"running","type":"lxc"}]}`))
 		default:
 			w.WriteHeader(http.StatusNotFound)
 		}

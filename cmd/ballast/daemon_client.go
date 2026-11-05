@@ -14,8 +14,8 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/springledev/ballast/internal/config"
 	"github.com/spf13/cobra"
+	"github.com/springledev/ballast/internal/config"
 )
 
 // daemonURL is the --url flag: the address of a running `ballast serve`

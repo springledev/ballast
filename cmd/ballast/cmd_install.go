@@ -15,10 +15,10 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/spf13/cobra"
 	"github.com/springledev/ballast/deploy"
 	"github.com/springledev/ballast/internal/api"
 	"github.com/springledev/ballast/internal/config"
-	"github.com/spf13/cobra"
 )
 
 // installPlan holds everything `ballast install` touches, so tests can

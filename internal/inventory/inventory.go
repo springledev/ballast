@@ -953,7 +953,7 @@ func DeleteService(db *sql.DB, name string) error {
 	if err != nil {
 		return fmt.Errorf("deleting service %s: %w", name, err)
 	}
-	defer tx.Rollback()
+	defer func() { _ = tx.Rollback() }() // after Commit this returns sql.ErrTxDone by design
 	res, err := tx.Exec(`DELETE FROM services WHERE name = ?`, name)
 	if err != nil {
 		return fmt.Errorf("deleting service %s: %w", name, err)

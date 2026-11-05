@@ -22,12 +22,12 @@ import (
 	"testing"
 	"time"
 
+	"github.com/spf13/cobra"
 	"github.com/springledev/ballast/internal/engine"
 	"github.com/springledev/ballast/internal/heartbeat"
 	"github.com/springledev/ballast/internal/inventory"
 	"github.com/springledev/ballast/internal/scheduler"
 	"github.com/springledev/ballast/internal/store"
-	"github.com/spf13/cobra"
 )
 
 func TestVersionCmdPrintsVersion(t *testing.T) {
@@ -1137,7 +1137,7 @@ func TestHeartbeatStopsWhenEverySweepHangs(t *testing.T) {
 	old := sweepRun
 	sweepRun = func(ctx context.Context, _ *app, _ time.Time) error {
 		got := make(chan struct{})
-		go func() { shared.Lock(); shared.Unlock(); close(got) }()
+		go func() { shared.Lock(); close(got); shared.Unlock() }()
 		select {
 		case <-got:
 		case <-ctx.Done(): // shutdown, so the loop can stop

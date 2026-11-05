@@ -7,9 +7,9 @@ import (
 	"os"
 	"strings"
 
+	"github.com/spf13/cobra"
 	"github.com/springledev/ballast/internal/api"
 	"github.com/springledev/ballast/internal/notify"
-	"github.com/spf13/cobra"
 )
 
 // `ballast notify` is a documented addition to spec §9's CLI surface,

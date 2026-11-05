@@ -5,10 +5,10 @@ import (
 	"os"
 	"path/filepath"
 
+	"github.com/spf13/cobra"
 	"github.com/springledev/ballast/internal/api"
 	"github.com/springledev/ballast/internal/inventory"
 	"github.com/springledev/ballast/internal/proxmox"
-	"github.com/spf13/cobra"
 )
 
 var (

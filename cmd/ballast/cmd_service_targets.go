@@ -5,9 +5,9 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/spf13/cobra"
 	"github.com/springledev/ballast/internal/api"
 	"github.com/springledev/ballast/internal/inventory"
-	"github.com/spf13/cobra"
 )
 
 var (

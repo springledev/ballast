@@ -83,10 +83,10 @@ const SignInAgainText = "sign in again"
 func (c *Client) Copy(ctx context.Context, req Request) Result {
 	res := c.copy(ctx, req)
 	if errors.Is(res.err, ErrSignedOut) {
-		res.Result.SignedOut = true
-		res.Result.Detail = "Proton Drive needs you to " + SignInAgainText + ". Open the Destinations page and choose \"Sign in to Proton Drive again\". Nothing was copied this time."
+		res.SignedOut = true
+		res.Detail = "Proton Drive needs you to " + SignInAgainText + ". Open the Destinations page and choose \"Sign in to Proton Drive again\". Nothing was copied this time."
 	} else if res.err != nil {
-		res.Result.Detail = fmt.Sprintf("The Proton Drive copy could not be completed: %v", res.err)
+		res.Detail = fmt.Sprintf("The Proton Drive copy could not be completed: %v", res.err)
 	}
 	return res.Result
 }

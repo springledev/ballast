@@ -67,7 +67,7 @@ func TestRejectedTokenMessage(t *testing.T) {
 		_, errList := cl.ListGuests(ctx)
 		_, errStore := cl.StorageStatus(ctx, "pve1", "local")
 		srv.Close()
-		want := fmt.Sprintf("Proxmox rejected the API token (HTTP %d) — check the token ID and secret, and that the token has the VM.Backup permission on /vms", code)
+		want := fmt.Sprintf("the Proxmox API token was rejected (HTTP %d) — check the token ID and secret, and that the token has the VM.Backup permission on /vms", code)
 		for _, err := range []error{errTest, errList} {
 			if err == nil || err.Error() != want {
 				t.Errorf("HTTP %d: err = %v, want %q", code, err, want)

@@ -173,7 +173,9 @@ func TestStatusShowsProtonCopyAsItsOwnAmberLight(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	m.RecordVerification(engine.VerificationRecord{Method: "restic-read-back", Passed: true})
+	if err := m.RecordVerification(engine.VerificationRecord{Method: "restic-read-back", Passed: true}); err != nil {
+		t.Fatal(err)
+	}
 	if err := m.Transition(engine.SUCCESS, "ok"); err != nil {
 		t.Fatalf("reaching SUCCESS: %v", err)
 	}

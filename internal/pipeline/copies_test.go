@@ -223,7 +223,9 @@ func TestProtonCopyAcceptance(t *testing.T) {
 			for i := range vals {
 				ptrs[i] = &vals[i]
 			}
-			rows.Scan(ptrs...)
+			if err := rows.Scan(ptrs...); err != nil {
+				t.Fatal(err)
+			}
 			for _, v := range vals {
 				if strings.Contains(fmt.Sprint(v), marker) {
 					t.Errorf("session folder contents reached table %s", table)

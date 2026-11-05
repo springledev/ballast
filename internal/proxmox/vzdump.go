@@ -173,7 +173,7 @@ func (cl *Client) WaitTask(ctx context.Context, node, upid string, interval time
 		}
 		if st.Status == "stopped" {
 			if st.ExitStatus != "OK" {
-				return fmt.Errorf("Proxmox reported the backup task failed: %s", st.ExitStatus)
+				return fmt.Errorf("the Proxmox backup task failed: %s", st.ExitStatus)
 			}
 			return nil
 		}

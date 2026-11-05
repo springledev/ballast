@@ -168,7 +168,8 @@ func TestRunSkipsRetentionUnlessVerified(t *testing.T) {
 // who holds the repository, and carries on once it is released.
 func TestRepoGate(t *testing.T) {
 	a, b := t.TempDir(), t.TempDir()
-	if repoGate(a) != repoGate(a) {
+	first, again := repoGate(a), repoGate(a)
+	if first != again {
 		t.Fatal("repoGate returned different gates for one location")
 	}
 	if repoGate(a) == repoGate(b) {

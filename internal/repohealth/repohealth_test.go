@@ -51,7 +51,9 @@ func newFixture(t *testing.T, env ...string) *fixture {
 		t.Fatal(err)
 	}
 	pw := filepath.Join(dir, "pw")
-	os.WriteFile(pw, []byte("x\n"), 0o600)
+	if err := os.WriteFile(pw, []byte("x\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
 	f := &fixture{db: st.DB(), log: filepath.Join(dir, "log"), now: time.Date(2026, 5, 1, 12, 0, 0, 0, time.UTC)}
 	f.env = append(os.Environ(), "STUB_LOG="+f.log)
 	f.env = append(f.env, env...)
@@ -200,12 +202,16 @@ func TestConfigureAndSweepDue(t *testing.T) {
 		t.Fatalf("first sweep: %q", f.calls(t))
 	}
 	f.now = f.now.Add(23 * time.Hour)
-	f.c.SweepDue(ctx)
+	if err := f.c.SweepDue(ctx); err != nil {
+		t.Fatal(err)
+	}
 	if got := strings.Count(f.calls(t), "check"); got != 1 {
 		t.Errorf("not due yet, but ran again: %q", f.calls(t))
 	}
 	f.now = f.now.Add(2 * time.Hour)
-	f.c.SweepDue(ctx)
+	if err := f.c.SweepDue(ctx); err != nil {
+		t.Fatal(err)
+	}
 	if got := strings.Count(f.calls(t), "check"); got != 2 {
 		t.Errorf("due again, should run: %q", f.calls(t))
 	}
@@ -213,7 +219,9 @@ func TestConfigureAndSweepDue(t *testing.T) {
 		t.Fatal(err)
 	}
 	f.now = f.now.Add(100 * time.Hour)
-	f.c.SweepDue(ctx)
+	if err := f.c.SweepDue(ctx); err != nil {
+		t.Fatal(err)
+	}
 	if got := strings.Count(f.calls(t), "check"); got != 2 {
 		t.Errorf("disabled destination was checked: %q", f.calls(t))
 	}
@@ -228,9 +236,13 @@ func TestCheckAlerts(t *testing.T) {
 	f := newFixture(t, "STUB_CHECK_FAIL=1")
 	rec := &recAlerter{}
 	f.c.Alerts = rec
-	f.c.Check(context.Background(), "nas")
+	if _, err := f.c.Check(context.Background(), "nas"); err != nil {
+		t.Fatal(err)
+	}
 	f.env = f.env[:len(f.env)-1]
-	f.c.Check(context.Background(), "nas")
+	if _, err := f.c.Check(context.Background(), "nas"); err != nil {
+		t.Fatal(err)
+	}
 	if rec.alerts != 1 || rec.recovered != 1 {
 		t.Errorf("alerts=%d recovered=%d", rec.alerts, rec.recovered)
 	}
@@ -271,7 +283,9 @@ func TestNotifyAlerter(t *testing.T) {
 	}
 	// No channels for any dependent service surfaces ErrNoChannels.
 	b := &NotifyAlerter{DB: f.db, Notifier: notify.NewNotifier()}
-	f.db.Exec(`DELETE FROM alert_state`)
+	if _, err := f.db.Exec(`DELETE FROM alert_state`); err != nil {
+		t.Fatal(err)
+	}
 	if err := b.Alert(ctx, "nas", StateFailed, "x"); !errors.Is(err, notify.ErrNoChannels) {
 		t.Errorf("err = %v, want ErrNoChannels", err)
 	}

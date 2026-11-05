@@ -64,7 +64,7 @@ const (
 	keelTokenRequired = "the API token ID is required, e.g. user@pve!tokenname"
 	ballastTokenReq   = "the API token ID is required, e.g. ballast@pve!backup"
 	keelRejectedFmt   = "the Proxmox API rejected the token (HTTP %d) — check the token ID and secret, and that the token has the privileges this operation needs"
-	ballastRejected   = "Proxmox rejected the API token (HTTP %d) — check the token ID and secret, and that the token has the VM.Backup permission on /vms"
+	ballastRejected   = "the Proxmox API token was rejected (HTTP %d) — check the token ID and secret, and that the token has the VM.Backup permission on /vms"
 )
 
 // NormalizeConnection validates c and rewrites Host and TokenID into
@@ -108,7 +108,7 @@ type Client struct {
 // do performs one API call through keel's Client.Do, with Ballast's
 // wording on a rejected token.
 func (cl *Client) do(ctx context.Context, method, path string, form url.Values, out any) error {
-	return ballastError(cl.Client.Do(ctx, method, path, form, out))
+	return ballastError(cl.Do(ctx, method, path, form, out))
 }
 
 // Test connects to the host and asks for its API version, proving the

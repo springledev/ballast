@@ -70,17 +70,23 @@ func TestSelfBackupLeavesCredentialsOut(t *testing.T) {
 	}{
 		{"script inside the credentials folder", func(t *testing.T, credDir string) string {
 			p := filepath.Join(credDir, "sneaky.sh")
-			os.WriteFile(p, []byte("secret"), 0o600)
+			if err := os.WriteFile(p, []byte("secret"), 0o600); err != nil {
+				t.Fatal(err)
+			}
 			return p
 		}},
 		{"credential file itself", func(t *testing.T, credDir string) string {
 			p := filepath.Join(credDir, "restic-password")
-			os.WriteFile(p, []byte("hunter2"), 0o600)
+			if err := os.WriteFile(p, []byte("hunter2"), 0o600); err != nil {
+				t.Fatal(err)
+			}
 			return p
 		}},
 		{"symlink pointing into the credentials folder", func(t *testing.T, credDir string) string {
 			target := filepath.Join(credDir, "b2-key")
-			os.WriteFile(target, []byte("hunter2"), 0o600)
+			if err := os.WriteFile(target, []byte("hunter2"), 0o600); err != nil {
+				t.Fatal(err)
+			}
 			link := filepath.Join(t.TempDir(), "looks-innocent.sh")
 			if err := os.Symlink(target, link); err != nil {
 				t.Fatal(err)
@@ -123,7 +129,9 @@ func TestScriptDoctorChecks(t *testing.T) {
 	h.addDestination("local")
 	dir := t.TempDir()
 	ok := filepath.Join(dir, "ok.sh")
-	os.WriteFile(ok, []byte("#!/bin/sh\n"), 0o755)
+	if err := os.WriteFile(ok, []byte("#!/bin/sh\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
 	gone := filepath.Join(dir, "gone.sh")
 	withEntries(t, h, map[string]string{"mine": scriptEntryYAML("mine", ok, gone)})
 	var okN, warnN int

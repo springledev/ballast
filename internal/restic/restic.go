@@ -1090,7 +1090,10 @@ func (l *limitWriter) Write(p []byte) (int, error) {
 	}
 	room := l.max - l.n
 	if int64(len(p)) > room {
-		l.w.Write(p[:room])
+		// The sink is an in-memory sample counter that never fails, and
+		// this is the last write: the sample is complete either way, so
+		// a failure here could not change the read-back result.
+		_, _ = l.w.Write(p[:room])
 		l.n = l.max
 		l.hit = true
 		l.stop()

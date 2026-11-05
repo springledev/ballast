@@ -10,11 +10,11 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/spf13/cobra"
 	"github.com/springledev/ballast/internal/api"
 	"github.com/springledev/ballast/internal/catalog"
 	"github.com/springledev/ballast/internal/inventory"
 	"github.com/springledev/ballast/internal/notify"
-	"github.com/spf13/cobra"
 	execrunner "github.com/springledev/keel/runner"
 )
 
