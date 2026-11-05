@@ -2,7 +2,7 @@
 
 
 
- > **One-line pitch:** A self-hosted, service-aware backup tool for Docker-based homelabs: it knows how to correctly back up the apps homelabers actually run (Immich, Vaultwarden, Postgres, …), *proves every backup restores*, and ships them to any restic-compatible destination (B2, S3, SFTP, local disk), with rclone as a secondary tier planned for Phase 2 (§12).
+ > **One-line pitch:** A self-hosted, service-aware backup tool for homelabs on bare metal, Docker and Proxmox: it knows how to correctly back up the apps homelabers actually run (Immich, Vaultwarden, Postgres, …), *proves every backup restores*, and ships them to any restic-compatible destination (B2, S3, SFTP, local disk), with rclone as a secondary tier planned for Phase 2 (§12).
 
 
 
