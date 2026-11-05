@@ -1,6 +1,6 @@
 {
   "status": 400,
   "body": {
-    "error": "invalid input: service svc: invalid notification settings: the maximum backup age must be at least 1 hour"
+    "error": "service svc: invalid notification settings: the maximum backup age must be at least 1 hour"
   }
 }

@@ -13,7 +13,7 @@ import { describeSchedule } from "@/lib/schedule";
 import { COLLAPSE_SAFE_FROM, collapsesGroup, countLights, emptyQuery, filterEntries, groupEntries, lightShares, needsTools, type ListEntry, type ListQuery } from "@/lib/listView";
 import { usePref } from "@/lib/prefs";
 import { askConfirm } from "@/lib/confirm";
-import { cancelQuestion, describeTier, isCancelling, lightLabel, shortStatus, summarize, worstLight } from "@/lib/status";
+import { cancelQuestion, describeTier, isCancelling, lightLabel, shortStatusParts, summarize, worstLight } from "@/lib/status";
 
 const router = useRouter();
 const services = ref<ServiceStatus[]>([]);
@@ -369,7 +369,12 @@ onUnmounted(() => clearInterval(timer));
             </label>
             <div class="row-main">
               <router-link class="item-title row-link" :to="{ path: '/services', query: { q: s.service } }">{{ s.service }}</router-link>
-              <span class="item-sub">{{ shortStatus(s) }}</span>
+              <span class="item-sub"
+                >{{ shortStatusParts(s).lead
+                }}<template v-if="shortStatusParts(s).age"
+                  >, <span :class="{ 'age-late': shortStatusParts(s).late }">{{ shortStatusParts(s).age }}</span></template
+                ></span
+              >
             </div>
             <span class="row-meta item-sub">{{ s.catalog_entry }}, {{ s.destination }}</span>
             <router-link class="btn btn-small btn-quiet" :to="`/history/${encodeURIComponent(s.service)}`">History</router-link>

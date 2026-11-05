@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"github.com/springledev/keel/dockerhost"
 	"net/http"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -156,6 +157,23 @@ type handler struct{ ops *Ops }
 // that already exists.
 var ErrServiceExists = errors.New("a backup with that name already exists; choose another name, or edit the existing one")
 
+// internalPrefix matches the "service notes: " style context that
+// wrapped errors start with.
+var internalPrefix = regexp.MustCompile(`(?:^|: )(?:service|project|destination) [^\s:]+: invalid input: `)
+
+// UserMessage turns a wrapped error's text into what a person should
+// read: the "service X: invalid input:" style prefix is dropped, since
+// it describes where the error was wrapped, not what to do. The full
+// text stays in logs and in the error itself. Text without that prefix
+// is returned unchanged.
+func UserMessage(msg string) string {
+	if !strings.Contains(msg, ErrValidation.Error()+": ") {
+		return msg
+	}
+	msg = internalPrefix.ReplaceAllString(msg, "")
+	return strings.TrimPrefix(msg, ErrValidation.Error()+": ")
+}
+
 func writeJSON(w http.ResponseWriter, status int, v any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
@@ -181,7 +199,7 @@ func (h *handler) writeErr(w http.ResponseWriter, err error, defaultStatus int) 
 	case errors.Is(err, ErrValidation):
 		status = http.StatusBadRequest
 	}
-	writeErrorMsg(w, status, h.ops.redact(err.Error()))
+	writeErrorMsg(w, status, UserMessage(h.ops.redact(err.Error())))
 }
 
 // decodeJSON reads and validates a JSON request body, rejecting

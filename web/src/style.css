@@ -1777,3 +1777,9 @@ dialog.confirm::backdrop {
 .restore-filter {
   margin-bottom: 0.5rem;
 }
+
+/* An age that is long for how often a backup should run. The light stays as it is. */
+.age-late {
+  color: var(--amber);
+  font-weight: 600;
+}

@@ -1299,3 +1299,115 @@ func TestLimitWriter(t *testing.T) {
 		})
 	}
 }
+
+// TestRestoreRoot: with a Root the snapshot is restored from that folder,
+// so files land directly under the target, and include paths become
+// relative to it. A path outside the root is refused.
+func TestRestoreRoot(t *testing.T) {
+	tests := []struct {
+		name    string
+		root    string
+		paths   []string
+		want    []string
+		wantErr string
+	}{
+		{name: "whole folder", root: "/srv/data", want: []string{"abc123:/srv/data", "--target"}},
+		{name: "one file", root: "/srv/data", paths: []string{"/srv/data/sub/f.txt"}, want: []string{"abc123:/srv/data", "--include /sub/f.txt"}},
+		{name: "the root itself", root: "/srv/data", paths: []string{"/srv/data"}, want: []string{"abc123:/srv/data", "--include /"}},
+		{name: "outside the root", root: "/srv/data", paths: []string{"/etc/passwd"}, wantErr: "is not inside"},
+		{name: "no root keeps full paths", paths: []string{"/srv/data/f"}, want: []string{"abc123 ", "--include /srv/data/f"}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			s := newResticStub(t)
+			repo := s.openStub(t)
+			target := filepath.Join(t.TempDir(), "t")
+			err := repo.Restore(context.Background(), RestoreOptions{SnapshotID: "abc123", TargetDir: target, Root: tt.root, Paths: tt.paths})
+			if tt.wantErr != "" {
+				if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
+					t.Fatalf("error = %v, want %q", err, tt.wantErr)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("Restore: %v", err)
+			}
+			log := s.invocations(t)
+			for _, w := range tt.want {
+				if !strings.Contains(log[0], w) {
+					t.Errorf("argv = %q, want it to contain %q", log[0], w)
+				}
+			}
+		})
+	}
+}
+
+// TestIntegrationRestoreRoot restores real snapshots: a one-folder
+// snapshot lands directly under the target, a one-file snapshot (such
+// as a tar made by a stop-start backup) keeps its original layout and
+// does not fail, and a snapshot of several paths is left alone.
+func TestIntegrationRestoreRoot(t *testing.T) {
+	bin := requireRestic(t)
+	ctx := context.Background()
+	write := func(p, body string) {
+		t.Helper()
+		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(p, []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	work := t.TempDir()
+	folder := filepath.Join(work, "folder")
+	write(filepath.Join(folder, "sub", "a.txt"), "a")
+	tarFile := filepath.Join(work, "w", "data.tar")
+	write(tarFile, "tar")
+	other := filepath.Join(work, "other")
+	write(filepath.Join(other, "b.txt"), "b")
+
+	passFile := filepath.Join(t.TempDir(), "pw")
+	if err := os.WriteFile(passFile, []byte("pw\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	repo, err := Open(filepath.Join(t.TempDir(), "repo"), Options{Runner: &runner.Runner{}, PasswordFile: passFile, ResticBin: bin})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.Init(ctx); err != nil {
+		t.Fatal(err)
+	}
+
+	tests := []struct {
+		name  string
+		paths []string
+		root  string // expected RestoreRoot
+		file  string // expected restored file, relative to the target
+	}{
+		{"one folder", []string{folder}, folder, "sub/a.txt"},
+		{"one file", []string{tarFile}, "", tarFile},
+		{"several paths", []string{folder, other}, "", filepath.Join(folder, "sub", "a.txt")},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			res, err := repo.Backup(ctx, BackupOptions{Paths: tt.paths, Host: "h"})
+			if err != nil {
+				t.Fatalf("Backup: %v", err)
+			}
+			root, err := repo.RestoreRoot(ctx, res.SnapshotID, tt.paths)
+			if err != nil {
+				t.Fatalf("RestoreRoot: %v", err)
+			}
+			if root != tt.root {
+				t.Fatalf("RestoreRoot = %q, want %q", root, tt.root)
+			}
+			target := filepath.Join(t.TempDir(), "out")
+			if err := repo.Restore(ctx, RestoreOptions{SnapshotID: res.SnapshotID, TargetDir: target, Root: root}); err != nil {
+				t.Fatalf("Restore: %v", err)
+			}
+			if _, err := os.Stat(filepath.Join(target, tt.file)); err != nil {
+				t.Errorf("restored file missing at %s: %v", tt.file, err)
+			}
+		})
+	}
+}

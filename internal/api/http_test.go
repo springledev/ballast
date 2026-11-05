@@ -983,3 +983,43 @@ func TestPutService_PathWarning(t *testing.T) {
 		t.Errorf("stored = %v, %v; want saved anyway", got.Params, err)
 	}
 }
+
+// TestDeleteServiceWaitsForASlowBackupThenRefuses: removal waits for a
+// running backup for the coordinator's lock wait. A backup that finishes
+// in time lets the removal go ahead; one that does not gets a plain 409.
+// The wait is injected short, so the test never sleeps for the real wait.
+func TestDeleteServiceWaitsForASlowBackupThenRefuses(t *testing.T) {
+	tests := []struct {
+		name     string
+		holdFor  time.Duration
+		wait     time.Duration
+		wantCode int
+	}{
+		{name: "backup ends within the wait", holdFor: 50 * time.Millisecond, wait: 5 * time.Second, wantCode: http.StatusOK},
+		{name: "backup outlasts the wait", holdFor: 5 * time.Second, wait: 250 * time.Millisecond, wantCode: http.StatusConflict},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			h := newHarness(t)
+			withService(t, h)
+			h.ops.Coord.LockWait = tt.wait
+			release, ok, err := h.locks.TryLock("svc")
+			if err != nil || !ok {
+				t.Fatalf("holding run lock: %v, %v", ok, err)
+			}
+			timer := time.AfterFunc(tt.holdFor, release)
+			defer timer.Stop()
+			rec := serveAs(t, h, http.MethodDelete, "/api/v1/services/svc", nil)
+			if rec.Code != tt.wantCode && !(tt.wantCode == http.StatusOK && rec.Code < 300) {
+				t.Fatalf("DELETE = %d %s, want %d", rec.Code, rec.Body.String(), tt.wantCode)
+			}
+			if tt.wantCode == http.StatusConflict {
+				body := rec.Body.String()
+				if !strings.Contains(body, "backing up") || strings.Contains(body, "invalid input") || strings.Contains(body, "wait-idle") {
+					t.Errorf("refusal = %s, want plain advice about the running backup", body)
+				}
+				release()
+			}
+		})
+	}
+}

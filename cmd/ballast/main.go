@@ -611,7 +611,7 @@ func main() {
 		if errors.As(err, &ee) {
 			os.Exit(ee.code)
 		}
-		fmt.Fprintln(os.Stderr, "Error:", err)
+		fmt.Fprintln(os.Stderr, "Error:", api.UserMessage(err.Error()))
 		os.Exit(1)
 	}
 }

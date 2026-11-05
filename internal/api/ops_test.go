@@ -78,6 +78,7 @@ case "$cmd" in
     ;;
   ls)
     printf '{"message_type":"snapshot","time":"2024-01-01T00:00:00Z","id":"1111111111111111111111111111111111111111111111111111111111111111","short_id":"11111111","hostname":"test","paths":["/stub/data"]}\n'
+    printf '{"message_type":"node","name":"data","type":"dir","path":"/stub/data"}\n'
     printf '{"message_type":"node","name":"sample.txt","type":"file","path":"/stub/data/sample.txt","size":11}\n'
     # STUB_LS_OMIT_DB leaves ballast.db out, as a partial self-backup would.
     if [ -z "$STUB_LS_OMIT_DB" ]; then
@@ -1858,6 +1859,7 @@ func fromStub(id string) string {
 printf '%%s\n' "$*" >> "$STUB_LOG"
 case "$1" in
   snapshots) printf '[{"time":"2024-01-01T00:00:00Z","id":"%[1]s","short_id":"%[2]s","hostname":"t","tags":["ballast","ballast-service:svc"],"paths":["/d"]}]\n' ;;
+  ls) printf '{"message_type":"snapshot","time":"2024-01-01T00:00:00Z","id":"%[1]s","short_id":"%[2]s","hostname":"t","paths":["/d"]}\n{"message_type":"node","name":"d","type":"dir","path":"/d"}\n' ;;
   restore) exit 0 ;;
   *) exit 0 ;;
 esac
@@ -2289,3 +2291,49 @@ func TestOpsSetScheduleDueNow(t *testing.T) {
 }
 
 func ptrBool(b bool) *bool { return &b }
+
+// TestRestoreIsRelativeToTheBackupRoot: a snapshot of a single folder is
+// restored from that folder (so files land directly under the target),
+// and an include path is rewritten to be relative to it.
+func TestRestoreIsRelativeToTheBackupRoot(t *testing.T) {
+	h := newHarness(t)
+	h.addDestination("local")
+	if err := inventory.PutService(h.ops.DB, inventory.Service{Name: "svc", CatalogEntry: "folder", Destination: "local"}); err != nil {
+		t.Fatalf("PutService: %v", err)
+	}
+	to := filepath.Join(t.TempDir(), "out")
+	req := RestoreRequest{Service: "svc", To: to, Paths: []string{"/stub/data/sample.txt"}}
+	if err := h.ops.Restore(context.Background(), req); err != nil {
+		t.Fatalf("Restore: %v", err)
+	}
+	var got string
+	for _, line := range h.resticInvocations(t) {
+		if strings.Contains(line, "restore") {
+			got = line
+		}
+	}
+	for _, want := range []string{":/stub/data", "--include /sample.txt"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("restore argv = %q, want it to contain %q", got, want)
+		}
+	}
+}
+
+// TestUserMessage: internal prefixes are dropped from text shown to a
+// person; messages without them are left alone.
+func TestUserMessage(t *testing.T) {
+	tests := []struct{ name, in, want string }{
+		{"service prefix", "service notes: invalid input: restore requires a target directory (--to)", "restore requires a target directory (--to)"},
+		{"project prefix", "project web: invalid input: could not restore: a, b", "could not restore: a, b"},
+		{"bare marker", "invalid input: a project name is required", "a project name is required"},
+		{"nested", "service x: invalid input: restore target \"rel\" must be an absolute path", "restore target \"rel\" must be an absolute path"},
+		{"no marker kept", "service notes: restic exploded", "service notes: restic exploded"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := UserMessage(tt.in); got != tt.want {
+				t.Errorf("UserMessage(%q) = %q, want %q", tt.in, got, tt.want)
+			}
+		})
+	}
+}

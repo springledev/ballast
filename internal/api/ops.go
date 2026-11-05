@@ -976,10 +976,31 @@ func (o *Ops) Restore(ctx context.Context, req RestoreRequest) error {
 	if err != nil {
 		return err
 	}
-	if err := repo.Restore(ctx, restic.RestoreOptions{SnapshotID: snapID, TargetDir: req.To, Paths: req.Paths}); err != nil {
+	root, err := o.backupRoot(ctx, repo, tag, snapID)
+	if err != nil {
+		return o.redactErr(wrapf("service "+req.Service, err))
+	}
+	if err := repo.Restore(ctx, restic.RestoreOptions{SnapshotID: snapID, TargetDir: req.To, Root: root, Paths: req.Paths}); err != nil {
 		return o.redactErr(wrapf("service "+req.Service, err))
 	}
 	return nil
+}
+
+// backupRoot returns the single folder snapshot snapID was taken of, so
+// a restore can write that folder's files straight into the target.
+// It returns "" when the snapshot covers several paths, is a single
+// file (a tar or dump), or is not found, and the restore then keeps the full original paths.
+func (o *Ops) backupRoot(ctx context.Context, repo *restic.Repository, tag, snapID string) (string, error) {
+	snaps, err := repo.Snapshots(ctx, restic.SnapshotFilter{Tags: []string{tag}})
+	if err != nil {
+		return "", err
+	}
+	for _, s := range snaps {
+		if s.ID == snapID {
+			return repo.RestoreRoot(ctx, snapID, s.Paths)
+		}
+	}
+	return "", nil
 }
 
 // restoreSource picks the destination a restore or snapshot listing
@@ -1249,7 +1270,7 @@ func (o *Ops) DeleteService(ctx context.Context, name string) error {
 	if o.Coord != nil && o.Coord.Locks != nil {
 		release, err := o.Coord.Lock(ctx, name)
 		if errors.Is(err, scheduler.ErrAlreadyRunning) {
-			return fmt.Errorf("service %s: %w: %s is backing up right now; wait for it to finish (ballast wait-idle) or try again later", name, scheduler.ErrAlreadyRunning, name)
+			return fmt.Errorf("service %s: %w: %s is backing up right now and did not finish in time; try again once the backup has finished", name, scheduler.ErrAlreadyRunning, name)
 		}
 		if err != nil {
 			return fmt.Errorf("service %s: %w", name, err)
