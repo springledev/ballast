@@ -26,6 +26,7 @@ import (
 	"github.com/springledev/ballast/internal/restic"
 	"github.com/springledev/ballast/internal/scheduler"
 	"github.com/springledev/ballast/internal/store"
+	"github.com/springledev/ballast/internal/verify"
 	execrunner "github.com/springledev/keel/runner"
 	"github.com/springledev/keel/secret"
 )
@@ -156,7 +157,9 @@ func openApp(cfg config.Config, logw io.Writer) (*app, error) {
 	adapter := &notify.EngineAdapter{DB: st.DB(), Notifier: notifier, Redact: secrets}
 
 	uploads := &progress.Tracker{}
+	drillOwner := verify.OwnerID(cfg.DataDir)
 	pl := &pipeline.Pipeline{
+		DrillOwner: drillOwner,
 		Progress:   uploads,
 		DB:         st.DB(),
 		Catalog:    reg,
@@ -217,7 +220,7 @@ func openApp(cfg config.Config, logw io.Writer) (*app, error) {
 	dockerHosts.CredDirs = credDirs
 	proxmoxResolver := proxmox.Resolver{CredDirs: credDirs, Redact: secrets}
 	pl.Proxmox = proxmoxResolver
-	ops = &api.Ops{Version: buildVersion(), SelfNotifier: adapter, HoldRepository: func(ctx context.Context, label, location string) (func(), error) {
+	ops = &api.Ops{DrillOwner: drillOwner, Version: buildVersion(), SelfNotifier: adapter, HoldRepository: func(ctx context.Context, label, location string) (func(), error) {
 		return pipeline.HoldRepository(ctx, label, location, nil)
 	}, RetainTagged: pipeline.RetainTagged, Progress: uploads, DB: st.DB(), Catalog: reg, CatalogDirs: cfg.CatalogDirs, Coord: coord, Repo: repoFor, RepoHealth: health, DestinationLocks: scheduler.FileLocker{Dir: filepath.Join(cfg.DataDir, "locks", "destinations")}, Runner: r, DockerHosts: dockerHosts, Proxmox: proxmoxResolver, CredentialsDir: cfg.WritableCredentialsDir, CredentialSearchDirs: credDirs, Redact: secrets, WorkRoot: pl.WorkRoot, SelfBackupFiles: api.SelfBackupSources{ConfigFile: filepath.Join(cfg.ConfigDir, "ballast.yaml"), CatalogDirs: cfg.CatalogDirs}}
 

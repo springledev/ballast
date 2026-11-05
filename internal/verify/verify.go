@@ -135,6 +135,11 @@ type Options struct {
 	// probe in ("" = strategy.DefaultVolumeHelperImage, busybox wget
 	// and nc).
 	HelperImage string
+
+	// DrillOwner is this install's OwnerID. It labels throwaway drill
+	// containers so SweepDrills can recognize one left behind by a
+	// killed process. "" leaves them unlabelled.
+	DrillOwner string
 }
 
 // Built-in verification method names.

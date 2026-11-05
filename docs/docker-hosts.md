@@ -113,7 +113,7 @@ Ballast runs these commands on the remote machine, but nothing is installed ther
 - `docker stop` and `docker start` — for stop-start services and stopped-mode volume backups
 - `docker volume ls` / `docker volume inspect` — to list volumes in the web UI and check a volume exists before backing it up
 - A temporary `alpine` helper container (`docker run --rm`, no network, volume mounted read-only) — to copy a Docker volume into the backup. The image is pulled once on that machine the first time a volume is backed up.
-- Temporary restore containers — created and destroyed during verification
+- Temporary restore containers (named `ballast-verify-...`) — created and destroyed during verification, along with their temporary data. If Ballast is killed or the machine loses power during a check, Ballast removes what that check left behind the next time it starts. It leaves checks that are still running alone, and those from another Ballast install using the same Docker host.
 
 ## Troubleshooting
 

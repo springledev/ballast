@@ -109,7 +109,7 @@ func (o *Ops) VerifyService(ctx context.Context, service string) (VerifyReport, 
 	snap := snaps[0]
 	rep.SnapshotID = snap.ShortID
 
-	checkers, err := verify.For(entry, verify.Options{Runner: o.Runner, Docker: docker})
+	checkers, err := verify.For(entry, verify.Options{Runner: o.Runner, Docker: docker, DrillOwner: o.DrillOwner})
 	if err != nil {
 		return rep, wrapf("service "+service, err)
 	}

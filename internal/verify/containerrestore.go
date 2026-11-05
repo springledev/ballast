@@ -110,7 +110,7 @@ func (c *ContainerRestore) Check(ctx context.Context, req Request) (res Result) 
 	}
 
 	dialect := dialectFor(c.image)
-	name := "ballast-verify-" + randomSuffix()
+	name := drillNamePrefix + randomSuffix()
 
 	// spec §7.2 MUST: warn when the live container's image differs
 	// from the image we restore into. Comparison is best-effort: an
@@ -284,6 +284,7 @@ func (c *ContainerRestore) startContainer(ctx context.Context, name, image strin
 	// containers during the check window. Every interaction happens
 	// through docker exec, which works without a network.
 	args := []string{"run", "--detach", "--network", "none", "--name", name}
+	args = append(args, drillLabelArgs(c.opts.DrillOwner)...)
 	args = append(args, d.extraRun...)
 	args = append(args, image)
 	_, err := c.opts.Runner.Run(ctx, nil, nil, c.opts.Docker.Command(env, args...))

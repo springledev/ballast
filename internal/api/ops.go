@@ -102,6 +102,10 @@ type Ops struct {
 	// tool is missing).
 	Runner *runner.Runner
 
+	// DrillOwner labels this install's restore drill containers; see
+	// verify.Options.DrillOwner.
+	DrillOwner string
+
 	// DockerHosts resolves a configured Docker host into the handle
 	// every Docker operation runs through (discovery, detection,
 	// verification drills, connection tests). Wiring passes the

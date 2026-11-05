@@ -152,6 +152,8 @@ var serveCmd = &cobra.Command{
 			a.logf("clearing runs left over from the last time Ballast stopped: %v", err)
 		}
 
+		sweepDone := a.startDrillSweep(ctx)
+
 		schedDone := make(chan struct{})
 		go func() {
 			defer close(schedDone)
@@ -160,6 +162,7 @@ var serveCmd = &cobra.Command{
 
 		serveErr := serveUntilDone(ctx, ln, mux)
 		<-schedDone
+		<-sweepDone
 		a.ops.Wait()
 		return serveErr
 	},
@@ -479,6 +482,8 @@ var runDueCmd = &cobra.Command{
 		}
 		return withApp(cfg, cmd.ErrOrStderr(), func(a *app) error {
 			a.warnReservedName()
+			sweepDone := a.startDrillSweep(cmd.Context())
+			defer func() { <-sweepDone }()
 			return sweepDue(cmd.Context(), a, time.Now())
 		})
 	},

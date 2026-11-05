@@ -92,6 +92,10 @@ type Pipeline struct {
 	// and verify at the same time; zero or one means one at a time.
 	TargetParallel int
 
+	// DrillOwner labels this install's restore drill containers; see
+	// verify.Options.DrillOwner.
+	DrillOwner string
+
 	// Proxmox resolves the configured Proxmox connection for guest jobs
 	// (spec §19.6); ProxmoxPoll overrides how often a running Proxmox
 	// task is checked (tests only; zero means the default).
@@ -260,7 +264,7 @@ func (p *Pipeline) Run(ctx context.Context, service string) (engine.State, error
 	if err != nil {
 		return fail(err)
 	}
-	checkers, err := verify.For(entry, verify.Options{Runner: p.Runner, Docker: docker})
+	checkers, err := verify.For(entry, verify.Options{Runner: p.Runner, Docker: docker, DrillOwner: p.DrillOwner})
 	if err != nil {
 		return fail(err)
 	}
