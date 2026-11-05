@@ -14,3 +14,6 @@ go.work.sum
 .env.*
 *.pem
 *.log
+
+# Local assistant config
+.claude/
