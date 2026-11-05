@@ -139,8 +139,94 @@ type Coordinator struct {
 	// replaced with "[redacted]". Errors stay matchable with errors.Is
 	// and errors.As; only their text changes. Nil redacts nothing.
 	Redact *secret.Set
+	// CancelPoll is how often a running backup checks the database for
+	// a request to stop it made by another process (`ballast cancel`
+	// without a daemon, or a daemon stopping a `ballast backup` run).
+	// Zero means DefaultCancelPoll. Tests shorten it.
+	CancelPoll time.Duration
 
 	logMu sync.Mutex
+
+	activeMu sync.Mutex
+	active   map[string]context.CancelCauseFunc
+}
+
+// DefaultCancelPoll is how often a running backup looks for a stop
+// request when Coordinator.CancelPoll is zero.
+const DefaultCancelPoll = time.Second
+
+// runOwned is the only way the Coordinator calls Runner.Run. The run
+// gets its own context, which is cancelled with
+// engine.ErrCancelledByUser as soon as someone asks for the backup to
+// stop: at once through Cancel when the request reaches this process,
+// or within CancelPoll when it was recorded in the database by another
+// process. The Runner tells the two causes apart with context.Cause, so
+// a stopped run says "stopped on request" rather than "shutting down".
+func (c *Coordinator) runOwned(ctx context.Context, service string) (engine.State, error) {
+	runCtx, cancel := context.WithCancelCause(ctx)
+	defer cancel(nil)
+	c.activeMu.Lock()
+	if c.active == nil {
+		c.active = map[string]context.CancelCauseFunc{}
+	}
+	c.active[service] = cancel
+	c.activeMu.Unlock()
+	defer func() {
+		c.activeMu.Lock()
+		delete(c.active, service)
+		c.activeMu.Unlock()
+	}()
+
+	stop := make(chan struct{})
+	watched := make(chan struct{})
+	go func() {
+		defer close(watched)
+		c.watchCancel(runCtx, service, cancel, stop)
+	}()
+	defer func() { close(stop); <-watched }()
+	return c.Runner.Run(runCtx, service)
+}
+
+// watchCancel polls the database for a stop request on service's
+// unfinished run until stop is closed or ctx ends, cancelling the run
+// when it finds one. A failed lookup is retried at the next tick: it
+// must never stop a backup on its own.
+func (c *Coordinator) watchCancel(ctx context.Context, service string, cancel context.CancelCauseFunc, stop <-chan struct{}) {
+	every := c.CancelPoll
+	if every <= 0 {
+		every = DefaultCancelPoll
+	}
+	t := time.NewTicker(every)
+	defer t.Stop()
+	for {
+		select {
+		case <-stop:
+			return
+		case <-ctx.Done():
+			return
+		case <-t.C:
+		}
+		if asked, err := engine.CancelRequested(c.DB, service); err == nil && asked {
+			c.logf(service, "stopping the backup, as requested")
+			cancel(engine.ErrCancelledByUser)
+			return
+		}
+	}
+}
+
+// Cancel stops service's backup at once when this process is running
+// it, and reports whether it was. The stop request itself must already
+// be recorded with engine.RequestCancel, which is what keeps a run from
+// finishing as a success after the request (rule 1) and lets a run in
+// another process notice it.
+func (c *Coordinator) Cancel(service string) bool {
+	c.activeMu.Lock()
+	cancel, ok := c.active[service]
+	c.activeMu.Unlock()
+	if ok {
+		cancel(engine.ErrCancelledByUser)
+	}
+	return ok
 }
 
 // sweepOutcome is what happened to one service during RunDue.
@@ -282,7 +368,7 @@ func (c *Coordinator) sweepOne(ctx context.Context, j ScheduledJob, now time.Tim
 		if err := MarkFired(c.DB, j.Service, now); err != nil {
 			return err
 		}
-		state, runErr := c.Runner.Run(ctx, j.Service)
+		state, runErr := c.runOwned(ctx, j.Service)
 		checkErr := checkRunSuccess(j.Service, state, runErr)
 		if ctx.Err() != nil && checkErr != nil {
 			// Cut short by shutdown, not a real failure of this
@@ -354,7 +440,7 @@ func (c *Coordinator) RunNow(ctx context.Context, service string) error {
 // runNow is RunNow without redaction of the returned error.
 func (c *Coordinator) runNow(ctx context.Context, service string) error {
 	interrupted, err := c.withClaim(ctx, service, c.lockWait(), func() error {
-		state, runErr := c.Runner.Run(ctx, service)
+		state, runErr := c.runOwned(ctx, service)
 		return checkRunSuccess(service, state, runErr)
 	})
 	if errors.Is(err, ErrAlreadyRunning) {
@@ -455,7 +541,7 @@ func (c *Coordinator) Start(ctx context.Context, service string) (done <-chan er
 	ch := make(chan error, 1)
 	go func() {
 		defer release()
-		state, runErr := c.Runner.Run(ctx, service)
+		state, runErr := c.runOwned(ctx, service)
 		ch <- c.redactErr(checkRunSuccess(service, state, runErr))
 	}()
 	return ch, interrupted, nil

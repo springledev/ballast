@@ -337,6 +337,9 @@ type TierStatus struct {
 	// ElapsedSeconds is how long the running backup has been going;
 	// zero when not running.
 	ElapsedSeconds int64 `json:"elapsed_seconds,omitempty"`
+	// Cancelling is true while a running backup that was asked to stop
+	// tidies up (Phase then reads "cancelling").
+	Cancelling bool `json:"cancelling,omitempty"`
 	// LastVerifiedAt is when this tier's last verified (SUCCESS, never
 	// SUCCESS_UNVERIFIED) backup finished — i.e. the last restore-checked
 	// copy — or nil if there never was one.
@@ -697,6 +700,9 @@ func (o *Ops) statusOne(s inventory.Service, sched scheduler.ScheduledJob, withV
 		tier.Waiting = last.Waiting
 		if last.InProgress {
 			tier.Phase = PhaseLabel(run.State)
+			if last.CancelRequested {
+				tier.Phase, tier.Cancelling = PhaseCancelling, true
+			}
 			if el := time.Since(run.StartedAt); el > 0 {
 				tier.ElapsedSeconds = int64(el.Seconds())
 			}
@@ -797,6 +803,10 @@ func (o *Ops) targetStatuses(s inventory.Service, last engine.LatestRun, tier Ti
 // §5.3): green only for a verified SUCCESS, amber for
 // SUCCESS_UNVERIFIED, red for anything else terminal, "running" while
 // still in progress.
+// PhaseCancelling is the phase of a running backup that was asked to
+// stop and is tidying up.
+const PhaseCancelling = "cancelling"
+
 // PhaseLabel describes a run state in plain English for status output.
 func PhaseLabel(state engine.State) string {
 	switch state {

@@ -72,6 +72,8 @@ func NewAuthedHandler(ops *Ops, auth *Auth) http.Handler {
 	protected.HandleFunc("GET /api/v1/services/{name}/snapshots", h.snapshots)
 	protected.HandleFunc("GET /api/v1/services/{name}/runs", h.listRuns)
 	protected.HandleFunc("GET /api/v1/runs/{id}", h.getRun)
+	protected.HandleFunc("POST /api/v1/runs/{id}/cancel", h.cancelRun)
+	protected.HandleFunc("POST /api/v1/services/{name}/cancel", h.cancelService)
 	protected.HandleFunc("POST /api/v1/services/{name}/verify", h.verifyService)
 	protected.HandleFunc("POST /api/v1/services/{name}/restore", h.restore)
 	protected.HandleFunc("GET /api/v1/services/{name}/schedule", h.getSchedule)
@@ -173,7 +175,8 @@ func (h *handler) writeErr(w http.ResponseWriter, err error, defaultStatus int) 
 	switch {
 	case errors.Is(err, inventory.ErrNotFound):
 		status = http.StatusNotFound
-	case errors.Is(err, inventory.ErrInUse), errors.Is(err, scheduler.ErrAlreadyRunning), errors.Is(err, repohealth.ErrBusy), errors.Is(err, ErrSelfBackupRunning), errors.Is(err, ErrReservedName), errors.Is(err, inventory.ErrReservedName), errors.Is(err, ErrServiceExists):
+	case errors.Is(err, inventory.ErrInUse), errors.Is(err, scheduler.ErrAlreadyRunning), errors.Is(err, repohealth.ErrBusy), errors.Is(err, ErrSelfBackupRunning), errors.Is(err, ErrReservedName), errors.Is(err, inventory.ErrReservedName), errors.Is(err, ErrServiceExists),
+		errors.Is(err, ErrNothingRunning), errors.Is(err, ErrAlreadyFinished), errors.Is(err, ErrNotCancellable):
 		status = http.StatusConflict
 	case errors.Is(err, ErrValidation):
 		status = http.StatusBadRequest
@@ -438,6 +441,34 @@ func (h *handler) getRun(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, d)
+}
+
+// cancelRun handles POST /api/v1/runs/{id}/cancel: 202 when the stop
+// was asked for (again, with already_requested), 404 for an unknown
+// run, 409 when it has already finished.
+func (h *handler) cancelRun(w http.ResponseWriter, r *http.Request) {
+	id, err := queryInt(r.PathValue("id"), "run id")
+	if err != nil || id <= 0 {
+		h.writeErr(w, fmt.Errorf("%w: the run id must be a positive number", ErrValidation), http.StatusBadRequest)
+		return
+	}
+	res, err := h.ops.CancelRun(r.Context(), id)
+	if err != nil {
+		h.writeErr(w, err, http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, http.StatusAccepted, res)
+}
+
+// cancelService handles POST /api/v1/services/{name}/cancel, stopping
+// whichever backup of the service is running (409 when none is).
+func (h *handler) cancelService(w http.ResponseWriter, r *http.Request) {
+	res, err := h.ops.CancelService(r.Context(), pathName(r))
+	if err != nil {
+		h.writeErr(w, err, http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, http.StatusAccepted, res)
 }
 
 // queryInt parses an optional whole-number parameter; "" means 0.

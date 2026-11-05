@@ -4,6 +4,7 @@ import { createApp, nextTick } from "vue";
 import { createMemoryHistory, createRouter } from "vue-router";
 
 import type { ServiceStatus } from "@/api/types";
+import { answerConfirm, pending } from "@/lib/confirm";
 import DashboardView from "./DashboardView.vue";
 
 function status(n: number): ServiceStatus[] {
@@ -105,6 +106,61 @@ describe("overview at different sizes", () => {
     const posts = fetchMock.mock.calls.filter(([, init]) => (init as RequestInit | undefined)?.method === "POST").map(([u]) => String(u));
     expect(posts).toHaveLength(2);
     expect(posts.every((u) => u.endsWith("/backup"))).toBe(true);
+    unmount();
+  });
+});
+
+describe("cancelling a running backup", () => {
+  beforeEach(() => {
+    localStorage.clear();
+    pending.value = null;
+  });
+  afterEach(() => vi.unstubAllGlobals());
+
+  const running = (cancelling = false): ServiceStatus[] => [
+    { service: "photos", catalog_entry: "folder", destination: "nas", tiers: [{ tier: "restic", light: "running", cancelling }] },
+  ];
+
+  function cancelPosts(fetchMock: ReturnType<typeof vi.fn>) {
+    return fetchMock.mock.calls
+      .filter(([u, init]) => (init as RequestInit | undefined)?.method === "POST" && String(u).endsWith("/cancel"))
+      .map(([u]) => String(u));
+  }
+
+  it("asks first, and stops nothing when the person keeps it running", async () => {
+    const fetchMock = vi.fn(routes(running()));
+    vi.stubGlobal("fetch", fetchMock);
+    const { el, unmount } = await mount();
+    const btn = el.querySelector<HTMLButtonElement>(".cancel-backup")!;
+    expect(btn.textContent?.trim()).toBe("Cancel backup");
+    btn.click();
+    await flush();
+    expect(pending.value?.message).toBe("Stop this backup? The last good backup is kept.");
+    answerConfirm(false);
+    await flush();
+    expect(cancelPosts(fetchMock)).toHaveLength(0);
+    unmount();
+  });
+
+  it("sends the stop once confirmed", async () => {
+    const fetchMock = vi.fn(routes(running()));
+    vi.stubGlobal("fetch", fetchMock);
+    const { el, unmount } = await mount();
+    el.querySelector<HTMLButtonElement>(".cancel-backup")!.click();
+    await flush();
+    answerConfirm(true);
+    await flush();
+    expect(cancelPosts(fetchMock)).toEqual(["/api/v1/services/photos/cancel"]);
+    unmount();
+  });
+
+  it("shows Cancelling… while the backup tidies up", async () => {
+    vi.stubGlobal("fetch", vi.fn(routes(running(true))));
+    const { el, unmount } = await mount();
+    const btn = el.querySelector<HTMLButtonElement>(".cancel-backup")!;
+    expect(btn.textContent?.trim()).toBe("Cancelling…");
+    expect(btn.disabled).toBe(true);
+    expect(el.querySelector(".status-line")?.textContent).toContain("Stopping the backup");
     unmount();
   });
 });

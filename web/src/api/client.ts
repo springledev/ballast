@@ -2,6 +2,7 @@ import { markSignedOut } from "./auth";
 import type {
   ApiErrorBody,
   BallastHealth,
+  CancelResult,
   CatalogInstallResult,
   CatalogSummary, EnvSourceProposal,
   CatalogTemplate,
@@ -180,6 +181,14 @@ export const api = {
   // --- backups, snapshots, restore ---
   startBackup(name: string): Promise<{ started: boolean; previous_run_interrupted: boolean }> {
     return request("POST", `${base}/services/${encodeURIComponent(name)}/backup`);
+  },
+  /** Asks a service's running backup to stop; the last good backup is kept. */
+  cancelBackup(name: string): Promise<CancelResult> {
+    return request("POST", `${base}/services/${encodeURIComponent(name)}/cancel`);
+  },
+  /** Asks one run to stop, by its id. */
+  cancelRun(id: number): Promise<CancelResult> {
+    return request("POST", `${base}/runs/${id}/cancel`);
   },
   snapshots(name: string, from?: string): Promise<Snapshot[]> {
     const q = from ? `?from=${encodeURIComponent(from)}` : "";

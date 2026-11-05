@@ -3,6 +3,7 @@ package pipeline
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -11,6 +12,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/springledev/ballast/internal/engine"
 	"github.com/springledev/ballast/internal/inventory"
@@ -29,6 +31,11 @@ type fakePVE struct {
 	configFails bool
 	size        int64
 	storage     *proxmox.StorageStatus // reply to storage-status reads when set
+	// taskRunning keeps every task "running"; taskStopFails makes a
+	// request to stop a task fail; stopped lists the tasks asked to stop.
+	taskRunning   bool
+	taskStopFails bool
+	stopped       []string
 }
 
 func newFakePVE(foreign ...string) *fakePVE {
@@ -55,8 +62,17 @@ func (f *fakePVE) handler(t *testing.T) http.Handler {
 			reply("UPID:pve:1")
 		case f.storage != nil && strings.Contains(p, "/storage/") && strings.HasSuffix(p, "/status"):
 			reply(f.storage)
+		case strings.HasSuffix(p, "/status") && f.taskRunning:
+			reply(map[string]string{"status": "running"})
 		case strings.HasSuffix(p, "/status"):
 			reply(map[string]string{"status": "stopped", "exitstatus": "OK"})
+		case r.Method == http.MethodDelete && strings.Contains(p, "/tasks/"):
+			f.stopped = append(f.stopped, p[strings.Index(p, "/tasks/")+len("/tasks/"):])
+			if f.taskStopFails {
+				http.Error(w, `{"errors":"cannot stop"}`, http.StatusInternalServerError)
+				return
+			}
+			reply(nil)
 		case r.Method == http.MethodDelete:
 			vol := p[strings.Index(p, "/content/")+len("/content/"):]
 			f.deleted = append(f.deleted, vol)
@@ -363,6 +379,56 @@ func TestRunGuestJobKeepLastAppliesToCopy(t *testing.T) {
 			log, _ := os.ReadFile(h.resticLog)
 			if !strings.Contains(string(log), tt.want) {
 				t.Errorf("restic forget missing %q:\n%s", tt.want, log)
+			}
+		})
+	}
+}
+
+// TestRunGuestJob_CancelStopsProxmoxTask: stopping a guest job while
+// Proxmox is still making the dump stops that task too, and the
+// cancellation says so; when it cannot be stopped, the cancellation
+// says plainly that the dump keeps going and a new backup may be
+// refused until it finishes.
+func TestRunGuestJob_CancelStopsProxmoxTask(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		stopFails bool
+		want      string
+	}{
+		{"task stopped", false, "was stopped too"},
+		{"task left running", true, "keeps going on Proxmox until it finishes"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			h := newHarness(t)
+			f := newFakePVE()
+			f.taskRunning, f.taskStopFails = true, tc.stopFails
+			p := h.guestPipeline(t, f)
+			putGuest(t, h, inventory.GuestJob{Storage: "backup"}, "")
+			ctx, cancel := context.WithCancelCause(context.Background())
+			go func() {
+				time.Sleep(200 * time.Millisecond)
+				cancel(engine.ErrCancelledByUser)
+			}()
+			state, err := p.Run(ctx, "pve-ct100")
+			if state != engine.CANCELLED || !errors.Is(err, engine.ErrCancelledByUser) {
+				t.Fatalf("Run = %s, %v; want CANCELLED stopped on request", state, err)
+			}
+			f.mu.Lock()
+			stopped := append([]string(nil), f.stopped...)
+			f.mu.Unlock()
+			if len(stopped) != 1 || stopped[0] != "UPID:pve:1" {
+				t.Errorf("tasks asked to stop = %v, want the dump's task", stopped)
+			}
+			runs, _ := engine.RecentRuns(h.db, "pve-ct100", 1)
+			var detail string
+			if err := h.db.QueryRow(`SELECT detail FROM run_transitions WHERE run_id = ? ORDER BY id DESC LIMIT 1`, runs[0].ID).Scan(&detail); err != nil {
+				t.Fatal(err)
+			}
+			if !strings.HasPrefix(detail, engine.CancelDetailRequested) || !strings.Contains(detail, tc.want) {
+				t.Errorf("detail = %q, want it to say %q", detail, tc.want)
+			}
+			if strings.Contains(detail, "secret-uuid") {
+				t.Errorf("detail leaks the token: %q", detail)
 			}
 		})
 	}

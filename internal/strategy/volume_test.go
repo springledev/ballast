@@ -150,7 +150,7 @@ func TestVolumeBackup(t *testing.T) {
 			name:       "failed stop restarts what was stopped",
 			volumes:    []string{"data"},
 			containers: []string{"web", "fail-stop"},
-			wantCmds:   []string{"inspect data", "stop web", "stop fail-stop", "start web"},
+			wantCmds:   []string{"inspect data", "stop web", "stop fail-stop", "start web", "start fail-stop"},
 			wantErr:    []string{"stopping container fail-stop"},
 		},
 		{

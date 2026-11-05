@@ -90,6 +90,14 @@ type GuestBackupResult struct {
 	// filled in by the caller after BackupGuest: nil means the dump
 	// has not been drilled and must not be shown as verified.
 	Verification *GuestVerification `json:"verification,omitempty"`
+	// TaskLeftRunning is set when the run was stopped while Proxmox was
+	// still making the dump and Ballast could not stop that task: it
+	// says why, and the dump keeps going on Proxmox until it finishes.
+	// Empty when the task was stopped too, or never needed stopping.
+	TaskLeftRunning string `json:"task_left_running,omitempty"`
+	// TaskStopped is true when the run was stopped while Proxmox was
+	// making the dump and Ballast stopped that task as well.
+	TaskStopped bool `json:"task_stopped,omitempty"`
 }
 
 // TaskStatus is a Proxmox task's state.
@@ -135,6 +143,21 @@ func (cl *Client) TaskStatus(ctx context.Context, node, upid string) (TaskStatus
 		return TaskStatus{}, err
 	}
 	return st, nil
+}
+
+// taskStopTimeout bounds stopping a Proxmox task after the run that
+// started it was stopped.
+const taskStopTimeout = 30 * time.Second
+
+// StopTask asks Proxmox to stop a running task (DELETE on the task).
+// For a vzdump, Proxmox's own clean-up then resumes or restarts the
+// guest as it would for any interrupted backup.
+func (cl *Client) StopTask(ctx context.Context, node, upid string) error {
+	path := "/api2/json/nodes/" + url.PathEscape(node) + "/tasks/" + url.PathEscape(upid)
+	if err := cl.do(ctx, http.MethodDelete, path, nil, nil); err != nil {
+		return fmt.Errorf("stopping Proxmox task %s: %w", upid, err)
+	}
+	return nil
 }
 
 // WaitTask polls a task every interval until it stops, and returns an
@@ -252,6 +275,18 @@ func (cl *Client) createDump(ctx context.Context, o GuestBackupOptions, poll tim
 	}
 	res.UPID = upid
 	if err := cl.WaitTask(ctx, o.Node, upid, poll); err != nil {
+		if ctx.Err() != nil {
+			// The run was stopped: stop the dump too, on a fresh bounded
+			// context, so it does not keep running on Proxmox.
+			sctx, cancel := context.WithTimeout(context.Background(), taskStopTimeout)
+			serr := cl.StopTask(sctx, o.Node, upid)
+			cancel()
+			if serr != nil {
+				res.TaskLeftRunning = serr.Error()
+			} else {
+				res.TaskStopped = true
+			}
+		}
 		return res, nil, fmt.Errorf("guest %d: %w", o.VMID, err)
 	}
 

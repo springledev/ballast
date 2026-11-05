@@ -875,3 +875,56 @@ func TestPruneOwnedNeverTouchesForeignDumps(t *testing.T) {
 		t.Errorf("keep-last 0 must prune nothing, got %v", p)
 	}
 }
+
+// TestCreateDump_CancelStopsTask: when the run is stopped while
+// Proxmox is still making the dump, the task is stopped too (DELETE on
+// the task), on a fresh context; if that fails, the result says so.
+func TestCreateDump_CancelStopsTask(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		deleteCode int
+		wantStop   bool
+	}{
+		{"task stopped", http.StatusOK, true},
+		{"task could not be stopped", http.StatusInternalServerError, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			const upid = "UPID:pve1:12345:1234567890"
+			var deleted atomic.Int32
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.Header().Set("Content-Type", "application/json")
+				switch {
+				case r.Method == http.MethodGet && strings.Contains(r.URL.Path, "/content"):
+					w.Write([]byte(`{"data":[]}`))
+				case r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/vzdump"):
+					w.Write([]byte(`{"data":"` + upid + `"}`))
+				case r.Method == http.MethodGet && strings.HasSuffix(r.URL.Path, "/status"):
+					w.Write([]byte(`{"data":{"status":"running"}}`))
+				case r.Method == http.MethodDelete && strings.HasSuffix(r.URL.Path, "/tasks/"+upid):
+					deleted.Add(1)
+					w.WriteHeader(tc.deleteCode)
+					w.Write([]byte(`{"data":null}`))
+				default:
+					w.WriteHeader(http.StatusNotFound)
+				}
+			}))
+			defer srv.Close()
+			cl := &Client{Host: srv.URL, TokenID: "x@pve!y", TokenSecret: "z", HTTPClient: srv.Client()}
+			ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+			defer cancel()
+			res, err := cl.CreateDump(ctx, GuestBackupOptions{Node: "pve1", VMID: 100, Storage: "local"}, time.Millisecond)
+			if err == nil {
+				t.Fatal("CreateDump = nil error, want the cancellation")
+			}
+			if deleted.Load() != 1 {
+				t.Fatalf("task stop requests = %d, want 1", deleted.Load())
+			}
+			if res.TaskStopped != tc.wantStop || (res.TaskLeftRunning == "") != tc.wantStop {
+				t.Errorf("TaskStopped=%v TaskLeftRunning=%q", res.TaskStopped, res.TaskLeftRunning)
+			}
+			if strings.Contains(res.TaskLeftRunning, "z") && strings.Contains(res.TaskLeftRunning, "PVEAPIToken") {
+				t.Errorf("token leaked: %q", res.TaskLeftRunning)
+			}
+		})
+	}
+}

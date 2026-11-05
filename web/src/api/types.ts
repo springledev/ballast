@@ -262,6 +262,8 @@ export interface TierStatus {
   waiting?: string;
   /** The plain-English step a running backup is on, e.g. "checking the backup can be restored". */
   phase?: string;
+  /** True while a running backup that was asked to stop is tidying up. */
+  cancelling?: boolean;
   last_verified_at?: string;
   verified_age_seconds?: number;
   max_age_seconds?: number;
@@ -627,4 +629,14 @@ export interface RunDetail extends RunSummary {
   verification_results: VerificationRecord[];
   log_tail: RunLogLine[];
   log_truncated?: boolean;
+}
+
+/** What asking a running backup to stop did. */
+export interface CancelResult {
+  run_id: number;
+  service: string;
+  /** A stop had already been asked for; this was a harmless repeat. */
+  already_requested: boolean;
+  /** What happens next, in plain English. */
+  message: string;
 }

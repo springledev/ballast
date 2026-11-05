@@ -12,7 +12,8 @@ import { emptyProgress, parseProgress, scriptSteps, type ScriptProgress } from "
 import { describeSchedule } from "@/lib/schedule";
 import { COLLAPSE_SAFE_FROM, collapsesGroup, countLights, emptyQuery, filterEntries, groupEntries, lightShares, needsTools, type ListEntry, type ListQuery } from "@/lib/listView";
 import { usePref } from "@/lib/prefs";
-import { describeTier, lightLabel, shortStatus, summarize, worstLight } from "@/lib/status";
+import { askConfirm } from "@/lib/confirm";
+import { cancelQuestion, describeTier, isCancelling, lightLabel, shortStatus, summarize, worstLight } from "@/lib/status";
 
 const router = useRouter();
 const services = ref<ServiceStatus[]>([]);
@@ -237,6 +238,23 @@ async function backupNow(name: string) {
   }
 }
 
+// Stopping a running backup asks first (the safe answer is focused),
+// then shows "Cancelling…" until the run has tidied up.
+const stopping = ref<Set<string>>(new Set());
+async function cancelNow(name: string) {
+  if (!(await askConfirm(cancelQuestion.message, cancelQuestion.confirmLabel, cancelQuestion.cancelLabel))) return;
+  stopping.value.add(name);
+  error.value = "";
+  try {
+    await api.cancelBackup(name);
+    await load(true);
+  } catch (e) {
+    error.value = `Couldn't stop the backup of ${name}: ${(e as Error).message}`;
+  } finally {
+    stopping.value.delete(name);
+  }
+}
+
 // Refresh while anything is running, so a backup started here (or on
 // schedule) turns green or red without a manual reload.
 let timer: ReturnType<typeof setInterval> | undefined;
@@ -355,7 +373,16 @@ onUnmounted(() => clearInterval(timer));
             </div>
             <span class="row-meta item-sub">{{ s.catalog_entry }}, {{ s.destination }}</span>
             <router-link class="btn btn-small btn-quiet" :to="`/history/${encodeURIComponent(s.service)}`">History</router-link>
-            <button class="btn btn-small" type="button" :disabled="starting.has(s.service) || isRunning(s)" @click="backupNow(s.service)">
+            <button
+              v-if="isRunning(s)"
+              class="btn btn-small btn-danger cancel-backup"
+              type="button"
+              :disabled="stopping.has(s.service) || isCancelling(s)"
+              @click="cancelNow(s.service)"
+            >
+              {{ stopping.has(s.service) || isCancelling(s) ? "Cancelling…" : "Cancel" }}
+            </button>
+            <button v-else class="btn btn-small" type="button" :disabled="starting.has(s.service)" @click="backupNow(s.service)">
               {{ starting.has(s.service) ? "Starting…" : "Back up" }}
             </button>
           </li>
@@ -421,7 +448,16 @@ onUnmounted(() => clearInterval(timer));
                 </div>
               </details>
               <router-link class="btn btn-quiet" :to="`/history/${encodeURIComponent(s.service)}`">History</router-link>
-              <button class="btn" type="button" :disabled="starting.has(s.service) || isRunning(s)" @click="backupNow(s.service)">
+              <button
+                v-if="isRunning(s)"
+                class="btn btn-danger cancel-backup"
+                type="button"
+                :disabled="stopping.has(s.service) || isCancelling(s)"
+                @click="cancelNow(s.service)"
+              >
+                {{ stopping.has(s.service) || isCancelling(s) ? "Cancelling…" : "Cancel backup" }}
+              </button>
+              <button v-else class="btn" type="button" :disabled="starting.has(s.service)" @click="backupNow(s.service)">
                 {{ starting.has(s.service) ? "Starting…" : "Back up now" }}
               </button>
             </div>

@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import type { ServiceStatus, TierStatus } from "@/api/types";
-import { describeCheck, describeTier, shortStatus, summarize, worstLight } from "./status";
+import { cancelQuestion, describeCheck, describeTier, isCancelling, shortStatus, summarize, worstLight } from "./status";
 
 function svc(...lights: TierStatus["light"][]): ServiceStatus {
   return {
@@ -116,5 +116,33 @@ describe("shortStatus", () => {
     const s = svc("green");
     s.tiers[0].last_finished_at = new Date(Date.now() - 2 * 3600e3).toISOString();
     expect(shortStatus(s)).toMatch(/^Safe, /);
+  });
+});
+
+describe("cancelling a backup", () => {
+  const running = (cancelling: boolean): ServiceStatus => ({
+    service: "s",
+    catalog_entry: "folder",
+    destination: "local",
+    tiers: [{ tier: "restic", light: "running", phase: cancelling ? "cancelling" : "uploading to the destination", cancelling }],
+  });
+
+  it("says a backup asked to stop is cancelling", () => {
+    expect(isCancelling(running(true))).toBe(true);
+    expect(isCancelling(running(false))).toBe(false);
+    expect(shortStatus(running(true))).toBe("Cancelling…");
+    expect(describeTier(running(true).tiers[0])).toContain("Stopping the backup");
+    expect(describeTier(running(true).tiers[0])).toContain("last good backup is kept");
+  });
+
+  it("words a stopped backup as stopped, keeping the red light", () => {
+    const t: TierStatus = { tier: "restic", light: "red", last_state: "CANCELLED" };
+    expect(describeTier(t)).toBe("The last backup was stopped before it finished. The backup before it is kept.");
+    expect(describeTier({ tier: "restic", light: "red", last_state: "FAILED" })).toBe("The last backup failed.");
+  });
+
+  it("asks in plain English and offers a safe way out", () => {
+    expect(cancelQuestion.message).toBe("Stop this backup? The last good backup is kept.");
+    expect(cancelQuestion.cancelLabel).not.toBe(cancelQuestion.confirmLabel);
   });
 });

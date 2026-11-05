@@ -25,6 +25,9 @@ type LatestRun struct {
 	// Machine.SetWaiting), or "" when it is not waiting or has
 	// finished.
 	Waiting string
+	// CancelRequested is true when the in-progress run has been asked
+	// to stop (see RequestCancel) and is tidying up.
+	CancelRequested bool
 }
 
 // LastStartedRun returns the most recently started run for service,
@@ -37,13 +40,14 @@ func LastStartedRun(db *sql.DB, service string) (LatestRun, error) {
 		started  string
 		finished sql.NullString
 		waiting  sql.NullString
+		cancel   sql.NullString
 	)
 	err := db.QueryRow(`
-		SELECT r.id, r.started_at, r.finished_at, r.waiting FROM runs r
+		SELECT r.id, r.started_at, r.finished_at, r.waiting, r.cancel_requested_at FROM runs r
 		JOIN jobs j ON j.id = r.job_id
 		WHERE j.service = ? AND `+store.RunsAfterFloorSQL+`
 		ORDER BY r.id DESC LIMIT 1`, service,
-	).Scan(&id, &started, &finished, &waiting)
+	).Scan(&id, &started, &finished, &waiting, &cancel)
 	if errors.Is(err, sql.ErrNoRows) {
 		return LatestRun{}, nil
 	}
@@ -57,6 +61,7 @@ func LastStartedRun(db *sql.DB, service string) (LatestRun, error) {
 	lr := LatestRun{RunID: id, StartedAt: t, InProgress: !finished.Valid}
 	if lr.InProgress {
 		lr.Waiting = waiting.String
+		lr.CancelRequested = cancel.Valid
 	}
 	return lr, nil
 }

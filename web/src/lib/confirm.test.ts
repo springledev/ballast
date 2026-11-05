@@ -23,6 +23,14 @@ describe("askConfirm", () => {
     });
   }
 
+  it("labels the safe choice Cancel unless told otherwise", () => {
+    void askConfirm("Forget it?", "Forget");
+    expect(pending.value?.cancelLabel).toBe("Cancel");
+    void askConfirm("Stop it?", "Stop backup", "Keep running");
+    expect(pending.value?.cancelLabel).toBe("Keep running");
+    answerConfirm(false);
+  });
+
   it("answers an earlier question no when a new one is asked", async () => {
     const first = askConfirm("First?");
     const second = askConfirm("Second?");

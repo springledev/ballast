@@ -36,7 +36,7 @@ function onBackdrop(e: MouseEvent) {
     <form v-if="pending" method="dialog" @submit.prevent="answerConfirm(true)">
       <p id="confirm-message" class="confirm-message">{{ pending.message }}</p>
       <div class="actions">
-        <button ref="cancelButton" class="btn btn-quiet" type="button" @click="answerConfirm(false)">Cancel</button>
+        <button ref="cancelButton" class="btn btn-quiet" type="button" @click="answerConfirm(false)">{{ pending.cancelLabel }}</button>
         <button class="btn btn-danger" type="submit">{{ pending.confirmLabel }}</button>
       </div>
     </form>

@@ -7,6 +7,8 @@ import { ref } from "vue";
 export interface ConfirmRequest {
   message: string;
   confirmLabel: string;
+  /** The safe choice's label, focused first; "Cancel" unless the question needs another word. */
+  cancelLabel: string;
   resolve: (ok: boolean) => void;
 }
 
@@ -18,10 +20,10 @@ export const pending = ref<ConfirmRequest | null>(null);
  * confirm button. Asking again while a question is open answers the first
  * one "no".
  */
-export function askConfirm(message: string, confirmLabel = "Yes, continue"): Promise<boolean> {
+export function askConfirm(message: string, confirmLabel = "Yes, continue", cancelLabel = "Cancel"): Promise<boolean> {
   pending.value?.resolve(false);
   return new Promise((resolve) => {
-    pending.value = { message, confirmLabel, resolve };
+    pending.value = { message, confirmLabel, cancelLabel, resolve };
   });
 }
 

@@ -28,8 +28,14 @@ export function describeTier(t: TierStatus): string {
     case "amber":
       return `Backed up ${when}, but the check didn't pass. Don't rely on this backup until it's checked again.`;
     case "red":
+      if (t.last_state === "CANCELLED") {
+        return t.last_finished_at
+          ? `The last backup was stopped before it finished (${when}). The backup before it is kept.`
+          : "The last backup was stopped before it finished. The backup before it is kept.";
+      }
       return t.last_finished_at ? `The last backup failed (${when}).` : "The last backup failed.";
     case "running":
+      if (t.cancelling) return "Stopping the backup and tidying up… The last good backup is kept.";
       if (t.waiting) return `Backing up now, ${t.waiting}…`;
       return t.phase ? `Backing up now: ${t.phase}…` : "Backing up now…";
     default:
@@ -74,6 +80,18 @@ export function summarize(services: ServiceStatus[]): { light: Light; text: stri
   return { light, text: `${problems} of ${services.length} need${problems === 1 ? "s" : ""} attention: ${parts.join(", ")}.` };
 }
 
+/** True while a service's running backup has been asked to stop and is tidying up. */
+export function isCancelling(s: ServiceStatus): boolean {
+  return s.tiers.some((t) => t.light === "running" && !!t.cancelling);
+}
+
+/** The question asked before stopping a backup; the safe answer is focused first. */
+export const cancelQuestion = {
+  message: "Stop this backup? The last good backup is kept.",
+  confirmLabel: "Stop backup",
+  cancelLabel: "Keep running",
+};
+
 /** What each verification check actually did, in plain words. */
 export const checkLabels: Record<string, string> = {
   "restic-read-back": "Read files back out of the stored backup",
@@ -94,6 +112,7 @@ export function describeCheck(method: string): string {
 export function shortStatus(s: ServiceStatus): string {
   const light = worstLight(s);
   if (light === "running") {
+    if (isCancelling(s)) return "Cancelling…";
     const up = (s.targets ?? []).find((t) => t.upload && t.upload.total_bytes > 0)?.upload;
     if (up) return `Uploading, ${Math.floor(up.percent)}%`;
     const phase = s.tiers.find((t) => t.light === "running")?.phase;
