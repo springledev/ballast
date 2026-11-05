@@ -215,6 +215,10 @@ stops it gaining extra rights. The Docker socket still works. Ballast
 stays root because it needs Docker access and to read your services'
 data.
 
+`ProtectHome=read-only` means Ballast can read files under `/home` (for example a
+service whose data lives there) but cannot write to them. To restore into a home
+folder, add that folder to `ReadWritePaths=`.
+
 List one `LoadCredential=` line per credential file you've
 provisioned (add more for other destinations, per-service ntfy/webhook
 overrides, and so on).
