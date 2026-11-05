@@ -2,9 +2,9 @@
 
 
 
- Ballast is a self-hosted, service-aware backup tool for homelab Docker
+ Ballast is a self-hosted, service-aware backup tool for homelab bare metal,
 
- containers. **`spec.md` in this repo root is the single source of truth.**
+ Docker and Proxmox. **`spec.md` in this repo root is the single source of truth.**
 
  Read it before doing anything. If code and spec disagree, the spec wins —
 
@@ -16,11 +16,13 @@
 
 
 
- Ballast backs up Docker-hosted services (Immich, Vaultwarden, generic
+ Ballast backs up bare-metal machines, Docker-hosted services and Proxmox
 
- Postgres/MySQL, any folder) using per-service strategies from a YAML
+ guests (Immich, Vaultwarden, generic Postgres/MySQL, any folder, whole VMs
 
- catalog, ships them via **restic** to local/B2/S3/SFTP destinations,
+ and LXCs) using per-service strategies from a YAML catalog, ships them via
+
+ **restic** to local/B2/S3/SFTP destinations (whole guests use `vzdump`),
 
  **verifies every backup is restorable** (throwaway-container DB restores,
 
