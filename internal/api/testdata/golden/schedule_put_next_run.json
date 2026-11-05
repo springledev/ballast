@@ -1,0 +1,10 @@
+{
+  "status": 200,
+  "body": {
+    "cron": "0 3 * * *",
+    "due_now": true,
+    "enabled": true,
+    "next_run": "\u003ctime\u003e",
+    "service": "svc"
+  }
+}

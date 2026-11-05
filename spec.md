@@ -540,7 +540,7 @@
 
 
 
- Each step lands with tests green and `ballast --help` working. Do not start a step until the previous one is complete. `PLAN.md` tracks progress against this list.
+ Each step lands with tests green and `ballast --help` working. Do not start a step until the previous one is complete. Progress is tracked by the checkboxes and step notes in this section.
 
 
 
@@ -583,7 +583,7 @@
  13. Docs: quickstart (15-min wizard → verified backup) and catalog contribution guide, shipped together with the bundled Immich, Vaultwarden, and CouchDB catalog entries (§15) as its worked examples.
 
 
- **v0.1 is complete as of step 13. Steps 14+ below are the v0.2 extension (§17: multi-host Docker, Proxmox, remote destinations) — design rationale and full detail in `PLAN-v0.2.md`; this list is the normative, session-by-session order `/implement` follows.**
+ **v0.1 is complete as of step 13. Steps 14+ below are the v0.2 extension (§17: multi-host Docker, Proxmox, remote destinations) — this list is the normative, session-by-session order `/implement` follows.**
 
 
  14. v0.1 parity — CLI commands: `ballast verify <service>|--all`, `ballast catalog validate|install <file>` (thin wrappers over existing engine/catalog logic, §9), plus a catalog data fix so the MySQL entry's `imagePattern` also matches `mariadb` images.
@@ -636,7 +636,7 @@
 
 
 
- **v0.3 extension (steps 30–40, §18: friction removal + compose robustness) — design rationale in `PLAN-v0.3.md`; this list is the normative order.**
+ **v0.3 extension (steps 30–40, §18: friction removal + compose robustness) — this list is the normative order.**
 
 
  30. Notification channels (v0.3, §18.1): reusable `NotificationChannel` model (ntfy, full base URL — `https://ntfy.sh/` only the default, self-hosted first-class — with optional username/token from the credential store), test-send button on every channel through the same code path as job notifications, Settings UI page, `ballast notify channel …` CLI parity; existing per-service notification settings and the ntfy credential-file path migrate onto channels, not dropped.
@@ -676,7 +676,7 @@
 
 
 
- **v0.4 extension (steps 41–51, §19: replace the scripts) — design rationale and the line-by-line audit of the two reference scripts in `PLAN-v0.4.md`; this list is the normative order.**
+ **v0.4 extension (steps 41–51, §19: replace the scripts) — this list is the normative order.**
 
 
  41. Install + runtime (§19.1): `ballast install` (root) installs the shipped unit, creates `/etc/ballast` and `/var/lib/ballast`, moves an existing XDG install (invoking user's or root's) into them without loss, enables and starts the service, prints the UI URL and access key; idempotent, refuses to overwrite a different existing install. Root without `$HOME` falls back to those directories instead of failing. UI banner and `doctor` check when `serve` runs from a terminal rather than as a service. restic 0.18 output supported alongside 0.17.3 (golden fixtures for both); the version warning fires only outside the tested range.
@@ -712,7 +712,7 @@
  51. Preview + migration (§19.9): per-service preview (UI and `ballast backup --preview`) — parts, where each goes, estimated size, which containers stop and for how long, excludes applied, what reaches the second copy; nothing runs. "Replace a script" guide and dashboard checklist (parallel run, 7 green days, one UI test restore per service, then retire the script) with a script-idiom map in the docs; final v0.4 acceptance sweep (§19.11) reproducing both reference scripts.
 
 
- **v0.5 extension (steps 52–65, §20: findings from the first real migration) — design rationale and the evidence for each finding in `PLAN-v0.5.md`; this list is the normative order.**
+ **v0.5 extension (steps 52–65, §20: findings from the first real migration) — this list is the normative order.**
 
  52. Repository locking that cannot starve verification (H1, §20.1): a pending prune must never block new read-backs on the same repository (retention after the batch of verifications, skipped-and-retried when the repo is busy, or restic's own lock as the only lock); "waiting for repository lock (held by <service>)" in the log and run status. Failing test first: held shared lock + pending retention + new read-back that must still complete.
 
@@ -742,7 +742,7 @@
 
  65. CouchDB behind a login (H16, §20.1): the built-in entry accepts 200 or 401 (or a catalog parameter for the expected status) and the failure message says a 401 probably means a password-protected server.
 
- **v0.6 extension (steps 66–78, §21: findings from running v0.5 in production) — design rationale and the evidence for each finding in `PLAN-v0.6.md`; this list is the normative order.**
+ **v0.6 extension (steps 66–78, §21: findings from running v0.5 in production) — this list is the normative order.**
 
  66. Alert decision log (J6, §21.1): one log line for every alert decision — sent (`sent verification_failure for utility-tracker to ballast`), held back (`alerted 23h ago, cool-down 24h`) or failed (with the reason) — and the last few decisions per service kept in the status DB (time, type, outcome, reason; never a topic, URL or token) and shown in the service detail view and `ballast status --json`. First, so step 67 can be seen working. Test: a held, a sent and a failed delivery each log and store one decision, and no secret reaches either.
 
@@ -769,6 +769,26 @@
  77. Heartbeat to an external monitor (J15, §21.7): optional credential file `ballast-heartbeat-url`; while the daemon's scheduler loop is alive it requests that URL on an interval (default 5 minutes) so a dead daemon, a stuck loop or a powered-off machine is noticed by something that is not Ballast. The URL is a secret (rule 2: root-only file, stripped from errors and logs); a failed ping is logged and never affects a backup; `doctor` reports whether a heartbeat is configured and when it last succeeded. Test with a stub server and a stopped loop.
 
  78. Support bundle (J16, §21.7): `ballast support-bundle [--output file]` writes one archive for bug reports and for asking someone else for help — version, `doctor --json`, status, recent alert decisions, schema version, restic/docker versions and catalog entry names — with every secret absent (the existing redaction harness in `cmd/ballast/redaction_test.go` is extended with seeded secrets across the new files). Nothing is sent anywhere.
+
+ **v0.7 extension (steps 79–87, §22: findings from a QA and UX review of v0.6) — this list is the normative order. Its step A (commit the fixes from a seeded-instance QA pass, listed in §22.1) is already done in commit 833984b and has no number here.**
+
+ 79. Server-side folder path validation (K3, §22.2): the service layer, not only the web UI, trims the path, requires it to be absolute and refuses a relative one; a path that does not exist is saved with a warning, not refused, because the folder may be on a mount that is not up yet. The CLI and API get the same behaviour. Test: a relative path and a path with a trailing space (trimmed) through the API and the CLI, and a missing absolute path saved with a warning.
+
+ 80. Fast `GET /api/v1/status` (K5, §22.3): the cause is not known (indexes exist), so profile first. Build a 60-service, 3,200-run fixture and a `go test -bench` benchmark that fails above 200 ms, confirm where the time goes, then fix that cost. Observed: about 1.0 to 1.2 s before the fix.
+
+ 81. Saving a schedule keeps its paused state (K7, §22.4): saving never re-enables a paused schedule unless the user turns it on; the API returns `next_run`, and the Schedules page confirms "Saved. Next run: Tue 03:00." and shows the next run time. Test: save a paused schedule and it stays paused; save an enabled one and `next_run` is returned.
+
+ 82. Run history API (K1, §22.5): `GET /api/v1/services/{name}/runs` (paged, newest first) and `GET /api/v1/runs/{id}` with state, duration, size, verification result and log tail. Secrets never appear in a log tail or any field (rule 2); a test seeds secrets and asserts none comes back. Same shape for the CLI where it already lists runs.
+
+ 83. History view (K1, §22.5): a History tab on the service page lists past runs and opens one to show its verification detail and log tail, so a failed run can be understood from the UI. Depends on step 82. No API changes.
+
+ 84. Cancel a running backup (K2, §22.6): `POST /api/v1/runs/{id}/cancel`, `ballast cancel <service>` and a Cancel button on a running card, using the existing CANCELLED state. A cancelled run is CANCELLED, never SUCCESS (rule 1), the restic repository is left unlocked, and a stop-start container is restarted. Test with a fake slow job: cancel mid-run, assert the state, the unlocked repository and the restarted container. Largest step of v0.7.
+
+ 85. Behaviour and wording (K6, K4, K9, §22.7): removing a service while it backs up shows "Waiting for the running backup to finish…" in the dialog and the refusal path is tested with a fake slow job (K6); restore errors drop the internal "service notes: invalid input:" prefix and "restore into a path" restores relative to the backup root instead of nesting the full absolute path (K4); a service older than half its expected interval shows its age in amber text without changing its light (K9). Failing tests first for K4 and K9.
+
+ 86. Accessibility and tall pages (K10, §22.8): a skip-to-content link; touch targets of about 44 px for the status legend buttons and checkboxes; the wizard's raw restic version warning moves behind "Details"; "Stop backing up" is renamed "Remove" and says what is kept; Notifications and Schedules get the same search, grouping and folding as Backups. Web only; must not touch `internal/`.
+
+ 87. Sessions across restarts (K8, §22.9): sessions live in memory, so every server restart signs the browser out. First decide whether that is by design; this needs the maintainer's decision. If it is not by design, persist session hashes (never raw tokens) in SQLite. Do not implement before the decision is recorded in the pull request or spec change that implements it.
 
 
 
@@ -832,7 +852,7 @@
 
 
 
- **Terminology note:** §12 above calls the mobile/phone work "Phase 2." This v0.2 extension (multi-host Docker + Proxmox) is a *separate*, earlier release that ships before mobile; it does not change §12's scope or timeline, and mobile remains phone-code-free until its own phase regardless of what v0.2 number it ends up carrying. Full design rationale, suggested-additions list, and launch sequencing live in `PLAN-v0.2.md`; this section is the normative subset `/implement` and future spec changes must agree with.
+ **Terminology note:** §12 above calls the mobile/phone work "Phase 2." This v0.2 extension (multi-host Docker + Proxmox) is a *separate*, earlier release that ships before mobile; it does not change §12's scope or timeline, and mobile remains phone-code-free until its own phase regardless of what v0.2 number it ends up carrying. This section is the normative subset `/implement` and future spec changes must agree with.
 
 
 
@@ -949,7 +969,7 @@
 
 
 
- **Goal:** close three usability gaps found in real use (notifications only via CLI, credentials pasted by hand, Ballast only reachable from localhost) and make compose discovery miss nothing. Builds on v0.2; rationale, reconciliation with existing code and added usability features in `PLAN-v0.3.md`. No mobile code (rule 6); the `exec` strategy and `ballast trigger --token` interfaces are untouched.
+ **Goal:** close three usability gaps found in real use (notifications only via CLI, credentials pasted by hand, Ballast only reachable from localhost) and make compose discovery miss nothing. Builds on v0.2. No mobile code (rule 6); the `exec` strategy and `ballast trigger --token` interfaces are untouched.
 
 
 
@@ -1033,7 +1053,7 @@
 
 
 
- **Goal:** every step of a real homelab's two backup scripts — an app-level script on the Docker VM and a host-level script on the Proxmox node — is reproducible in Ballast, set up from the web UI, and safe to run in parallel with those scripts until they are retired. Each requirement below is a gap hit while attempting that migration; the line-by-line audit and the decisions behind them are in `PLAN-v0.4.md`. No mobile code (rule 6); the `exec` strategy and `ballast trigger --token` interfaces are untouched.
+ **Goal:** every step of a real homelab's two backup scripts — an app-level script on the Docker VM and a host-level script on the Proxmox node — is reproducible in Ballast, set up from the web UI, and safe to run in parallel with those scripts until they are retired. Each requirement below is a gap hit while attempting that migration. No mobile code (rule 6); the `exec` strategy and `ballast trigger --token` interfaces are untouched.
 
 
 
@@ -1162,7 +1182,7 @@
 
 
 
- **Goal:** fix what the first real replacement of a homelab's scripts by the v0.4 build turned up (2026-10-07): verification that stalls behind an unrelated upload, a green light that can hide a missing copy, jobs that cannot be edited, missing disk and permission safety nets, and no live view of a running backup. Each requirement below was hit in practice or traced to code; the evidence, confidence tags (observed / inferred / expected) and wording of each finding (H1–H16, R1–R2) are in `PLAN-v0.5.md`. No mobile *backup* code (rule 6); the `exec` strategy and `ballast trigger --token` interfaces are untouched.
+ **Goal:** fix what the first real replacement of a homelab's scripts by the v0.4 build turned up (2026-10-07): verification that stalls behind an unrelated upload, a green light that can hide a missing copy, jobs that cannot be edited, missing disk and permission safety nets, and no live view of a running backup. Each requirement below was hit in practice or traced to code; the findings are tagged H1–H16 and R1–R2. No mobile *backup* code (rule 6); the `exec` strategy and `ballast trigger --token` interfaces are untouched.
 
 
 
@@ -1264,7 +1284,7 @@
 
 
 
- **Goal:** fix what the first week of v0.5 on the reference homelab (deployed 2026-10-10) turned up: alerts that may not repeat and cannot be audited, CLI output that cannot be scripted, repository health and off-site restores the CLI cannot reach, a self-backup that must be run by hand and leaves out its scripts, and an unwritten upgrade procedure. Each requirement was hit in practice or traced to code; the evidence, confidence tags (observed / inferred / expected) and wording of each finding (J1–J16) are in `PLAN-v0.6.md`. No mobile *backup* code (rule 6); the `exec` strategy and `ballast trigger --token` interfaces are untouched.
+ **Goal:** fix what the first week of v0.5 on a production homelab (deployed 2026-10-10) turned up: alerts that may not repeat and cannot be audited, CLI output that cannot be scripted, repository health and off-site restores the CLI cannot reach, a self-backup that must be run by hand and leaves out its scripts, and an unwritten upgrade procedure. Each requirement was hit in practice or traced to code; the findings are tagged J1–J16. No mobile *backup* code (rule 6); the `exec` strategy and `ballast trigger --token` interfaces are untouched.
 
 
 
@@ -1344,10 +1364,108 @@
 
  - [ ] A scheduled self-backup reaches verified on every destination, old self-backups are pruned, and its scripts come back from a restore
 
- - [ ] A source build reports a real version in the CLI, `doctor`, API and UI; `ballast wait-idle` blocks during a run and `docs/upgrading.md` has been followed once on the reference homelab
+ - [ ] A source build reports a real version in the CLI, `doctor`, API and UI; `ballast wait-idle` blocks during a run and `docs/upgrading.md` has been followed once on a production homelab
 
  - [ ] The CLI works as root without environment variables after `ballast install`
 
  - [ ] A stopped daemon stops the heartbeat; the support bundle contains no seeded secret
 
  - [ ] Secrets never in DB, logs or API responses — re-asserted for alert decisions, the heartbeat URL and the support bundle
+
+
+ ## 22. v0.7 extension: findings from a QA and UX review of v0.6 (normative)
+
+
+
+ **Goal:** fix what a browser QA and UX pass of v0.6 on a seeded instance (60 "Any folder" services, two destinations, about 3,200 runs over 90 days) turned up: no run history and no way to cancel, a server that accepts bad paths, a slow status route, a schedule save that undoes a pause, and a set of accessibility and wording problems. The findings are tagged K1–K10. No mobile *backup* code (rule 6); the `exec` strategy and `ballast trigger --token` interfaces are untouched.
+
+
+
+ ### 22.1 Already fixed (context, step A, commit 833984b)
+
+ - `POST /services` no longer silently replaces an existing service: a duplicate name is a 409.
+
+ - "Still in use" errors for destinations and Docker hosts name the count and say what to do; the self-backup banner explains why it matters and gives the exact command.
+
+ - Wizard and form errors scroll into view; relative paths are caught on the wizard step; a styled confirm dialog replaces the native one.
+
+ - Overview and Backups rows link to the backup, with a status light, counts, grouping and a folded Safe group at 12 or more; the restore picker has a filter; schedules read "Weekdays at 4:15"; a running backup shows its step.
+
+ - These are not redone by steps 79 to 87.
+
+
+
+ ### 22.2 Server validation
+
+ - The service layer trims a folder path and requires it to be absolute, for the CLI and API as well as the web UI. A missing path is saved with a warning, not refused, because the folder may be on a mount that is not up yet (K3).
+ - Which parameters count as folder paths is data, not code: a catalog parameter with `kind: path` is checked (the only `kind` value), so new entries opt in without Go changes.
+
+
+
+ ### 22.3 Performance
+
+ - `GET /api/v1/status` answers in under 200 ms with 60 services and 3,200 runs. The cause is unknown, so the work starts with a benchmark and a profile, and the benchmark stays so it cannot regress (K5).
+
+
+
+ ### 22.4 Schedules
+
+ - Saving a schedule keeps its paused state unless the user turns it on. The API returns `next_run` and the page confirms the save with the next run time (K7).
+
+
+
+ ### 22.5 Run history
+
+ - A service's past runs can be listed (paged, newest first) and one run opened, with state, duration, size, verification result and log tail, in the API and in a History tab. Secrets never appear in a log tail or any field (rule 2) (K1).
+
+
+
+ ### 22.6 Cancelling a backup
+
+ - A running backup can be cancelled from the API, the CLI and the UI. The run ends CANCELLED and never SUCCESS (rule 1), the repository is left unlocked and any stopped container is restarted (K2).
+
+
+
+ ### 22.7 Behaviour and wording
+
+ - Removing a service during a backup says it is waiting for the backup to finish, and the refusal is tested (K6). Restore errors read in plain English without internal prefixes, and restoring "into a path" is relative to the backup root (K4). A service past half its expected interval shows its age in amber text; the light itself does not change (K9).
+
+
+
+ ### 22.8 Accessibility and tall pages
+
+ - A skip-to-content link; touch targets of about 44 px; a beginner-friendly wizard (the restic version warning behind "Details"); "Stop backing up" renamed "Remove" and saying what is kept; Notifications and Schedules searchable, grouped and folded like Backups (K10).
+
+
+
+ ### 22.9 Sessions
+
+ - Whether a server restart should sign the browser out is a decision for the maintainer (K8). If it should not, session hashes (never raw tokens) are kept in SQLite.
+
+
+
+ ### 22.10 Out of scope (v0.7)
+
+ Phone backup (§12); rclone providers; multi-user auth/RBAC, OIDC, TLS/ACME; `ballast install --upgrade`; a push stream for progress; the review's untested areas (the LIVE instance, a real phone, the 1440 px layout).
+
+
+
+ ### 22.11 Acceptance checklist (v0.7 "done")
+
+ - [ ] The CLI and API refuse a relative folder path and trim a trailing space; a missing absolute path is saved with a warning
+
+ - [ ] `GET /api/v1/status` stays under 200 ms with 60 services and 3,200 runs (benchmark in the tests)
+
+ - [ ] Saving a paused schedule leaves it paused and shows the next run time
+
+ - [ ] A failed run's verification detail and log tail can be opened from a History tab, and no seeded secret appears in them
+
+ - [ ] A cancelled backup ends CANCELLED, never SUCCESS, with the repository unlocked and any stopped container restarted
+
+ - [ ] Removing a service during a backup explains the wait; restore errors are plain English; a weekly service shows an amber age cue while its light stays green
+
+ - [ ] Skip link, 44 px touch targets, "Remove" wording and folded Notifications and Schedules pages are in place
+
+ - [ ] The maintainer has decided whether sessions survive a restart, and the decision is recorded in the pull request or spec change that implements it
+
+ - [ ] Secrets never in DB, logs or API responses; re-asserted for run logs and sessions

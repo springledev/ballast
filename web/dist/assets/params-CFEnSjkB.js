@@ -1,0 +1,1 @@
+function n(t,e){const r=e??"",i=t.prompt||t.name;return t.required&&!r.trim()?`Fill in "${i}".`:r&&/absolute path/i.test(t.prompt??"")&&!r.startsWith("/")?`Use a full path that starts with /, like /srv/data. "${r}" is relative.`:""}function a(t){const e=(t??[]).filter(r=>r.trim());return e.length?`Saved, but note: ${e.join(" ")}`:""}export{n as c,a as w};

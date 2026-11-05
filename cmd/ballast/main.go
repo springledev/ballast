@@ -129,7 +129,7 @@ var serveCmd = &cobra.Command{
 			}
 			a.secrets.Add(tok)
 			return nil
-		}, listen)
+		}, listen).WithStore(a.store)
 		a.ops.ListenAddr = listen
 		a.ops.InTerminal = startedFromTerminal(os.Getenv, os.Stdin)
 		mux := http.NewServeMux()
@@ -551,7 +551,7 @@ func init() {
 	registerScheduleCommands(rootCmd)
 	registerNotifyCommands(rootCmd)
 	registerSecretCommands(rootCmd)
-	rootCmd.AddCommand(backupCmd, statusCmd, snapshotsCmd, restoreCmd, restoreProjectCmd, tokenCmd, catalogCmd, wizardCmd, verifyCmd, doctorCmd, selfBackupCmd)
+	rootCmd.AddCommand(backupCmd, cancelCmd, statusCmd, snapshotsCmd, runsCmd, restoreCmd, restoreProjectCmd, tokenCmd, catalogCmd, wizardCmd, verifyCmd, doctorCmd, selfBackupCmd)
 }
 
 // shutdownContext returns a context cancelled by the first SIGINT or
@@ -611,7 +611,7 @@ func main() {
 		if errors.As(err, &ee) {
 			os.Exit(ee.code)
 		}
-		fmt.Fprintln(os.Stderr, "Error:", err)
+		fmt.Fprintln(os.Stderr, "Error:", api.UserMessage(err.Error()))
 		os.Exit(1)
 	}
 }

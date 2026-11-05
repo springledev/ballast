@@ -16,6 +16,7 @@ import (
 	"github.com/springledev/ballast/internal/progress"
 	"github.com/springledev/keel/dockerhost"
 	"io"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"sort"
@@ -336,6 +337,9 @@ type TierStatus struct {
 	// ElapsedSeconds is how long the running backup has been going;
 	// zero when not running.
 	ElapsedSeconds int64 `json:"elapsed_seconds,omitempty"`
+	// Cancelling is true while a running backup that was asked to stop
+	// tidies up (Phase then reads "cancelling").
+	Cancelling bool `json:"cancelling,omitempty"`
 	// LastVerifiedAt is when this tier's last verified (SUCCESS, never
 	// SUCCESS_UNVERIFIED) backup finished — i.e. the last restore-checked
 	// copy — or nil if there never was one.
@@ -696,6 +700,9 @@ func (o *Ops) statusOne(s inventory.Service, sched scheduler.ScheduledJob, withV
 		tier.Waiting = last.Waiting
 		if last.InProgress {
 			tier.Phase = PhaseLabel(run.State)
+			if last.CancelRequested {
+				tier.Phase, tier.Cancelling = PhaseCancelling, true
+			}
 			if el := time.Since(run.StartedAt); el > 0 {
 				tier.ElapsedSeconds = int64(el.Seconds())
 			}
@@ -796,6 +803,10 @@ func (o *Ops) targetStatuses(s inventory.Service, last engine.LatestRun, tier Ti
 // §5.3): green only for a verified SUCCESS, amber for
 // SUCCESS_UNVERIFIED, red for anything else terminal, "running" while
 // still in progress.
+// PhaseCancelling is the phase of a running backup that was asked to
+// stop and is tidying up.
+const PhaseCancelling = "cancelling"
+
 // PhaseLabel describes a run state in plain English for status output.
 func PhaseLabel(state engine.State) string {
 	switch state {
@@ -965,10 +976,31 @@ func (o *Ops) Restore(ctx context.Context, req RestoreRequest) error {
 	if err != nil {
 		return err
 	}
-	if err := repo.Restore(ctx, restic.RestoreOptions{SnapshotID: snapID, TargetDir: req.To, Paths: req.Paths}); err != nil {
+	root, err := o.backupRoot(ctx, repo, tag, snapID)
+	if err != nil {
+		return o.redactErr(wrapf("service "+req.Service, err))
+	}
+	if err := repo.Restore(ctx, restic.RestoreOptions{SnapshotID: snapID, TargetDir: req.To, Root: root, Paths: req.Paths}); err != nil {
 		return o.redactErr(wrapf("service "+req.Service, err))
 	}
 	return nil
+}
+
+// backupRoot returns the single folder snapshot snapID was taken of, so
+// a restore can write that folder's files straight into the target.
+// It returns "" when the snapshot covers several paths, is a single
+// file (a tar or dump), or is not found, and the restore then keeps the full original paths.
+func (o *Ops) backupRoot(ctx context.Context, repo *restic.Repository, tag, snapID string) (string, error) {
+	snaps, err := repo.Snapshots(ctx, restic.SnapshotFilter{Tags: []string{tag}})
+	if err != nil {
+		return "", err
+	}
+	for _, s := range snaps {
+		if s.ID == snapID {
+			return repo.RestoreRoot(ctx, snapID, s.Paths)
+		}
+	}
+	return "", nil
 }
 
 // restoreSource picks the destination a restore or snapshot listing
@@ -1071,11 +1103,78 @@ func (o *Ops) GetService(ctx context.Context, name string) (inventory.Service, e
 	return s, nil
 }
 
-// PutService configures a service: the catalog entry must exist, and
+// PutService is PutServiceChecked without the warnings, for callers
+// that have nowhere to show them.
+func (o *Ops) PutService(ctx context.Context, s inventory.Service) error {
+	_, _, err := o.PutServiceChecked(ctx, s)
+	return err
+}
+
+// PutServiceChecked saves a service like putService, after cleaning its
+// folder-path parameters (catalog parameters with kind "path"): each is
+// trimmed and must be a full path starting with "/", else the result is
+// ErrValidation and nothing is saved. A full path that does not exist on
+// this machine is still saved, with a plain-English warning, because the
+// folder may be on a drive that is not mounted yet. It returns the
+// service as saved (trimmed values) and the warnings. Warnings name only
+// path values, never secrets.
+func (o *Ops) PutServiceChecked(ctx context.Context, s inventory.Service) (inventory.Service, []string, error) {
+	var paths []string
+	hostSide := false
+	if !s.IsGuestJob() && !s.IsConfigSnapshot() {
+		if entry, ok := o.Catalog.Get(s.CatalogEntry); ok {
+			hostSide = len(entry.Backup.HostPaths) > 0
+			params := make(map[string]string, len(s.Params))
+			for k, v := range s.Params {
+				params[k] = v
+			}
+			for _, p := range entry.Parameters {
+				if p.Kind != catalog.KindPath {
+					continue
+				}
+				v, present := params[p.Name]
+				if !present {
+					continue
+				}
+				v = strings.TrimSpace(v)
+				switch {
+				case v == "" && p.Required:
+					return s, nil, fmt.Errorf("service %s: %w: fill in the folder for %q", s.Name, ErrValidation, p.Name)
+				case v == "":
+				case !strings.HasPrefix(v, "/"):
+					return s, nil, fmt.Errorf("service %s: %w: use a full path that starts with /, like /srv/data (%q is relative)", s.Name, ErrValidation, v)
+				default:
+					paths = append(paths, v)
+				}
+				params[p.Name] = v
+			}
+			s.Params = params
+		}
+	}
+	if err := o.putService(ctx, s); err != nil {
+		return s, nil, err
+	}
+	var warnings []string
+	// Folders from a kind: path parameter feed backup.files, which are
+	// always read on the Ballast machine whatever the Docker host, so
+	// they are checked here for every host. Only a path that fed hostPaths
+	// (checked on the Docker host by preflight) would be skipped; no
+	// catalog entry does that today.
+	if !hostSide {
+		for _, p := range paths {
+			if _, err := os.Stat(p); errors.Is(err, fs.ErrNotExist) {
+				warnings = append(warnings, o.redact(fmt.Sprintf("%s does not exist yet; it is saved, but backups fail until it does (is the drive mounted?)", p)))
+			}
+		}
+	}
+	return s, warnings, nil
+}
+
+// putService configures a service: the catalog entry must exist, and
 // Resolve must succeed against a copy of it with s's params/
 // containers, so a missing required parameter fails loudly at add
 // time rather than at the first scheduled run.
-func (o *Ops) PutService(ctx context.Context, s inventory.Service) error {
+func (o *Ops) putService(ctx context.Context, s inventory.Service) error {
 	if s.IsGuestJob() {
 		return o.putGuestJob(ctx, s)
 	}
@@ -1171,7 +1270,7 @@ func (o *Ops) DeleteService(ctx context.Context, name string) error {
 	if o.Coord != nil && o.Coord.Locks != nil {
 		release, err := o.Coord.Lock(ctx, name)
 		if errors.Is(err, scheduler.ErrAlreadyRunning) {
-			return fmt.Errorf("service %s: %w: %s is backing up right now; wait for it to finish (ballast wait-idle) or try again later", name, scheduler.ErrAlreadyRunning, name)
+			return fmt.Errorf("service %s: %w: %s is backing up right now and did not finish in time; try again once the backup has finished", name, scheduler.ErrAlreadyRunning, name)
 		}
 		if err != nil {
 			return fmt.Errorf("service %s: %w", name, err)
@@ -1812,34 +1911,85 @@ func (o *Ops) TestDestination(ctx context.Context, name string) error {
 
 // --- Schedules -------------------------------------------------------
 
-// ListSchedules lists every configured schedule.
-func (o *Ops) ListSchedules(ctx context.Context) ([]scheduler.ScheduledJob, error) {
-	return scheduler.ListSchedules(o.DB)
+// ScheduleInfo is a configured schedule plus when it will next run.
+type ScheduleInfo struct {
+	scheduler.ScheduledJob
+	// NextRun is the next time the schedule fires. It is nil when the
+	// schedule is paused or its expression never fires.
+	NextRun *time.Time `json:"next_run,omitempty"`
+	// DueNow is true when an enabled schedule has a slot it missed (for
+	// example while paused), so the next check runs a backup straight
+	// away. NextRun is then the slot after that.
+	DueNow bool `json:"due_now,omitempty"`
+}
+
+// scheduleInfo decorates j with its next run, counted from the Ops clock.
+func (o *Ops) scheduleInfo(j scheduler.ScheduledJob) ScheduleInfo {
+	info := ScheduleInfo{ScheduledJob: j}
+	if !j.Enabled {
+		return info
+	}
+	sched, err := scheduler.ParseCron(j.Cron)
+	if err != nil {
+		return info
+	}
+	now := o.now()
+	if next, ok := sched.Next(now); ok {
+		info.NextRun = &next
+	}
+	if base, err := scheduler.ScheduleBaseline(o.DB, j.Service); err == nil {
+		info.DueNow = sched.IsDue(now, base)
+	}
+	return info
+}
+
+// ListSchedules lists every configured schedule with its next run.
+func (o *Ops) ListSchedules(ctx context.Context) ([]ScheduleInfo, error) {
+	jobs, err := scheduler.ListSchedules(o.DB)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]ScheduleInfo, 0, len(jobs))
+	for _, j := range jobs {
+		out = append(out, o.scheduleInfo(j))
+	}
+	return out, nil
 }
 
 // GetSchedule returns the named service's configured schedule, or
 // inventory.ErrNotFound wrapped if it has none.
-func (o *Ops) GetSchedule(ctx context.Context, service string) (scheduler.ScheduledJob, error) {
+func (o *Ops) GetSchedule(ctx context.Context, service string) (ScheduleInfo, error) {
 	list, err := scheduler.ListSchedules(o.DB)
 	if err != nil {
-		return scheduler.ScheduledJob{}, err
+		return ScheduleInfo{}, err
 	}
 	for _, s := range list {
 		if s.Service == service {
-			return s, nil
+			return o.scheduleInfo(s), nil
 		}
 	}
-	return scheduler.ScheduledJob{}, fmt.Errorf("service %s: no schedule configured: %w", service, inventory.ErrNotFound)
+	return ScheduleInfo{}, fmt.Errorf("service %s: no schedule configured: %w", service, inventory.ErrNotFound)
 }
 
-// SetSchedule sets service's cron schedule, enabling it. The
-// expression is validated before it is stored (spec: invalid
-// schedules must be rejected loudly, not silently skipped later).
-func (o *Ops) SetSchedule(ctx context.Context, service, cronExpr string) error {
+// SetSchedule sets service's cron schedule and returns the saved
+// schedule with its next run. A new schedule starts enabled; an
+// existing one keeps its paused or enabled state unless enabled is
+// non-nil, which explicitly turns it on or off. The expression is
+// validated before it is stored (spec: invalid schedules must be
+// rejected loudly, not silently skipped later).
+func (o *Ops) SetSchedule(ctx context.Context, service, cronExpr string, enabled *bool) (ScheduleInfo, error) {
 	if _, err := scheduler.ParseCron(cronExpr); err != nil {
-		return fmt.Errorf("service %s: %w: %w", service, ErrValidation, err)
+		return ScheduleInfo{}, fmt.Errorf("service %s: %w: %w", service, ErrValidation, err)
 	}
-	return scheduler.SetSchedule(o.DB, service, cronExpr)
+	if err := scheduler.SetSchedule(o.DB, service, cronExpr); err != nil {
+		return ScheduleInfo{}, err
+	}
+	if enabled != nil {
+		if err := scheduler.SetEnabled(o.DB, service, *enabled); err != nil {
+			return ScheduleInfo{}, fmt.Errorf("service %s: %w", service, err)
+		}
+	}
+	return o.GetSchedule(ctx, service)
 }
 
 // SetScheduleEnabled enables or disables service's existing schedule

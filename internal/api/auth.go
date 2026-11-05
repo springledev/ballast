@@ -2,14 +2,19 @@ package api
 
 import (
 	"crypto/rand"
+	"crypto/sha256"
 	"crypto/subtle"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
+	"log"
 	"net"
 	"net/http"
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/springledev/ballast/internal/store"
 )
 
 // bearerPrefix is the standard HTTP Authorization scheme Ballast's
@@ -36,6 +41,8 @@ type Auth struct {
 	token    string
 	sessions map[string]time.Time // session id -> expiry
 	fails    map[string][]time.Time
+	revoked  map[string]bool // hashes whose row could not be deleted yet
+	store    *store.Store    // when set, sessions persist here (as hashes)
 	persist  func(newToken string) error
 	listen   string
 	now      func() time.Time
@@ -50,10 +57,51 @@ func NewAuth(token string, persist func(string) error, listen string) *Auth {
 		token:    token,
 		sessions: map[string]time.Time{},
 		fails:    map[string][]time.Time{},
+		revoked:  map[string]bool{},
 		persist:  persist,
 		listen:   listen,
 		now:      time.Now,
 	}
+}
+
+// WithStore makes sessions survive a restart: only a SHA-256 hash of each
+// session token is saved in the database, never the token. Sessions last
+// sessionLifetime from login (an absolute limit); expired rows are pruned
+// at login and when they are looked up. Without a store, sessions live in
+// memory only.
+func (a *Auth) WithStore(s *store.Store) *Auth {
+	a.store = s
+	return a
+}
+
+// retryRevoked tries again to delete sessions whose sign-out failed.
+func (a *Auth) retryRevoked() {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	for h := range a.revoked {
+		if a.store.DeleteSession(h) == nil {
+			delete(a.revoked, h)
+		}
+	}
+}
+
+// hashSession returns the hex SHA-256 of a session token. The token is 256
+// random bits, so a plain hash is enough to make a stolen database useless.
+func hashSession(id string) string {
+	sum := sha256.Sum256([]byte(id))
+	return hex.EncodeToString(sum[:])
+}
+
+// clearSessions ends every session, in memory and in the database. It
+// returns an error if the database could not be cleared.
+func (a *Auth) clearSessions() error {
+	a.mu.Lock()
+	a.sessions = map[string]time.Time{}
+	a.mu.Unlock()
+	if a.store != nil {
+		return a.store.DeleteAllSessions()
+	}
+	return nil
 }
 
 // GenerateToken returns a fresh random access key (256 bits, hex).
@@ -77,6 +125,21 @@ func (a *Auth) tokenMatches(given string) bool {
 func (a *Auth) sessionValid(id string) bool {
 	if id == "" {
 		return false
+	}
+	if a.store != nil {
+		h := hashSession(id)
+		a.mu.RLock()
+		gone := a.revoked[h]
+		a.mu.RUnlock()
+		if gone {
+			return false
+		}
+		ok, err := a.store.SessionValid(h, a.now())
+		if err != nil {
+			log.Printf("ballast: could not check a sign-in session: %v", err)
+			return false
+		}
+		return ok
 	}
 	a.mu.Lock()
 	defer a.mu.Unlock()
@@ -180,9 +243,18 @@ func (a *Auth) login(w http.ResponseWriter, r *http.Request) {
 	}
 	id := hex.EncodeToString(idb)
 	exp := a.now().Add(sessionLifetime)
-	a.mu.Lock()
-	a.sessions[id] = exp
-	a.mu.Unlock()
+	if a.store != nil {
+		a.retryRevoked()
+		if err := a.store.CreateSession(hashSession(id), a.now(), exp); err != nil {
+			log.Printf("ballast: could not save a sign-in session: %v", err)
+			writeErrorMsg(w, http.StatusInternalServerError, "could not start a session")
+			return
+		}
+	} else {
+		a.mu.Lock()
+		a.sessions[id] = exp
+		a.mu.Unlock()
+	}
 	a.setCookie(w, r, id, exp)
 	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
 }
@@ -192,6 +264,20 @@ func (a *Auth) logout(w http.ResponseWriter, r *http.Request) {
 		a.mu.Lock()
 		delete(a.sessions, c.Value)
 		a.mu.Unlock()
+		if a.store != nil {
+			h := hashSession(c.Value)
+			if err := a.store.DeleteSession(h); err != nil {
+				// Refuse this session in this process until the row is
+				// really gone (retried at the next login).
+				a.mu.Lock()
+				a.revoked[h] = true
+				a.mu.Unlock()
+				log.Printf("ballast: could not end a sign-in session: %v", err)
+				a.setCookie(w, r, "", time.Unix(0, 0))
+				writeErrorMsg(w, http.StatusInternalServerError, "could not sign you out completely; try again")
+				return
+			}
+		}
 	}
 	a.setCookie(w, r, "", time.Unix(0, 0))
 	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
@@ -204,14 +290,18 @@ func (a *Auth) Rotate() (string, error) {
 	if err != nil {
 		return "", err
 	}
+	// Sign everyone out first: if that fails, nothing has changed and the
+	// old key and sessions stay as they were.
+	if err := a.clearSessions(); err != nil {
+		return "", fmt.Errorf("could not sign the browsers out, so the access key was not changed: %w", err)
+	}
 	if a.persist != nil {
 		if err := a.persist(tok); err != nil {
-			return "", err
+			return "", fmt.Errorf("could not save the new access key (browsers were signed out): %w", err)
 		}
 	}
 	a.mu.Lock()
 	a.token = tok
-	a.sessions = map[string]time.Time{}
 	a.mu.Unlock()
 	return tok, nil
 }
@@ -219,7 +309,7 @@ func (a *Auth) Rotate() (string, error) {
 func (a *Auth) rotate(w http.ResponseWriter, r *http.Request) {
 	tok, err := a.Rotate()
 	if err != nil {
-		writeErrorMsg(w, http.StatusInternalServerError, "could not save the new access key: "+err.Error())
+		writeErrorMsg(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"token": tok})
@@ -227,9 +317,10 @@ func (a *Auth) rotate(w http.ResponseWriter, r *http.Request) {
 
 // signOutEverywhere ends every browser session without changing the key.
 func (a *Auth) signOutEverywhere(w http.ResponseWriter, _ *http.Request) {
-	a.mu.Lock()
-	a.sessions = map[string]time.Time{}
-	a.mu.Unlock()
+	if err := a.clearSessions(); err != nil {
+		writeErrorMsg(w, http.StatusInternalServerError, "could not sign everyone out: "+err.Error())
+		return
+	}
 	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
 }
 

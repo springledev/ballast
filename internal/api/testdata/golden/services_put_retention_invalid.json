@@ -1,6 +1,6 @@
 {
   "status": 400,
   "body": {
-    "error": "invalid input: service svc: retention policy must keep at least one snapshot (keep_last, keep_daily, keep_weekly and keep_monthly are all zero)"
+    "error": "service svc: retention policy must keep at least one snapshot (keep_last, keep_daily, keep_weekly and keep_monthly are all zero)"
   }
 }

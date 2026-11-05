@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -191,12 +192,18 @@ func (o Options) volumeHelperImage() string {
 // removeHelper force-removes a helper container after a failure. When
 // the run was cancelled, killing the docker CLI does not stop the
 // container it started, so it would otherwise keep running (and keep
-// the volume mounted). Best effort, on a fresh bounded context: "no
-// such container" is the normal outcome when --rm already removed it.
+// the volume mounted). --volumes matters because removing the container
+// here bypasses --rm's own volume cleanup, which would leak an anonymous
+// volume if a configured helper image declares one. Best effort, on a
+// fresh bounded context, so the caller still reports the original
+// failure: a failed removal is logged, and "no such container" (when
+// --rm already removed it) is not a failure, as docker rm -f exits 0.
 func (o Options) removeHelper(name string) {
 	ctx, cancel := context.WithTimeout(context.Background(), helperCleanupTimeout)
 	defer cancel()
-	_, _ = o.Runner.Run(ctx, nil, nil, o.Docker.Command(nil, "rm", "-f", name))
+	if _, err := o.Runner.Run(ctx, nil, nil, o.Docker.Command(nil, "rm", "-f", "--volumes", name)); err != nil {
+		log.Printf("ballast: helper container %s on Docker host %s could not be removed (the backup or restore result is unaffected); to remove it yourself, run: docker rm -f --volumes %s: %v", name, o.Docker.Name(), name, err)
+	}
 }
 
 // helperName returns a unique helper container name, so a failed run

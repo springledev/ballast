@@ -217,9 +217,17 @@ func (m *Machine) recordTx(tx *sql.Tx, from, to State, detail string, now time.T
 	}
 
 	// Guard is structural: the UPDATE only applies if the DB still
-	// holds the state this machine believes; zero rows means stale.
-	res, err := tx.Exec(
-		`UPDATE runs SET state = ?, finished_at = ?, error = ? WHERE id = ? AND state = ?`,
+	// holds the state this machine believes; zero rows means stale. A
+	// good outcome also requires that nobody asked the run to stop, in
+	// the same statement, so a stop request racing the finish either
+	// lands first (and the run is refused a good outcome) or finds the
+	// run already finished (rule 1: a cancelled run is never SUCCESS).
+	query := `UPDATE runs SET state = ?, finished_at = ?, error = ? WHERE id = ? AND state = ?`
+	good := to == SUCCESS || to == SUCCESS_UNVERIFIED
+	if good {
+		query += ` AND cancel_requested_at IS NULL`
+	}
+	res, err := tx.Exec(query,
 		string(to),
 		finishedAtValue(to, now),
 		errorIfBad(to, detail),
@@ -230,6 +238,12 @@ func (m *Machine) recordTx(tx *sql.Tx, from, to State, detail string, now time.T
 		return fmt.Errorf("recording transition %s->%s for service %s (run %d): %w", from, to, m.run.Service, m.run.ID, err)
 	}
 	if affected, aerr := res.RowsAffected(); aerr == nil && affected == 0 {
+		if good {
+			var requested int
+			if qerr := tx.QueryRow(`SELECT cancel_requested_at IS NOT NULL FROM runs WHERE id = ? AND state = ?`, m.run.ID, string(from)).Scan(&requested); qerr == nil && requested == 1 {
+				return fmt.Errorf("service %s run %d: %w", m.run.Service, m.run.ID, ErrCancelRequested)
+			}
+		}
 		return fmt.Errorf("recording transition for service %s (run %d): database state is not %s (stale machine?)", m.run.Service, m.run.ID, from)
 	}
 	if _, err = tx.Exec(

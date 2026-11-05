@@ -140,7 +140,17 @@ Only after one of those checks passes does a backup go green.
 ballast status
 ballast status --service immich --verify   # per-check detail
 ballast status --json                       # for scripts
+ballast status --check                      # for scripts: the answer is the exit code
+ballast status --running                    # is a backup running right now?
+ballast wait-idle --timeout 30m             # wait until nothing is running
 ```
+
+`ballast status --check` prints the status and exits with 0 when every service
+is green, 1 for amber, stale, running or no backups yet, 2 for red, and 3 when
+the status cannot be read. `ballast status --running` exits with 1 if a backup
+is running and 0 if not. `ballast wait-idle` waits until nothing is running and
+then exits with 0, or exits with 1 if the timeout passes first (the default is
+10 minutes). Use them in scripts, or before you stop or upgrade Ballast.
 
 ### Open the web UI
 
@@ -152,8 +162,11 @@ By default this listens on `http://0.0.0.0:8080` and serves both the API
 and the Vue-based web UI. On first start, Ballast auto-generates a 256-bit
 access key, prints it to the terminal once, and saves it root-only. Open the
 web UI in a browser, enter that access key on the sign-in screen, and you're
-in — it's kept in the browser as a session cookie and sent only to your own
-Ballast server. (If you're listening beyond localhost without HTTPS, a
+in. Your browser then stays signed in for up to 30 days, and restarting or
+upgrading Ballast does not sign you out. (Changing the access key, or using
+**Sign out everywhere** on the Security page, does sign every browser out.) The
+access key is kept in a cookie that is sent only to your own Ballast server.
+(If you're listening beyond localhost without HTTPS, a
 banner will remind you to use a reverse proxy with HTTPS or a tailnet.)
 
 To use your own access key instead, create it before starting:
@@ -179,6 +192,39 @@ ballast schedule list
 ballast schedule enable <service>
 ballast schedule disable <service>
 ```
+
+`schedule set` and `schedule list` say when each schedule runs next, for
+example `Next run: Tue 2026-11-03 03:00`. A schedule you have turned off with
+`schedule disable` shows as `paused` and never runs until you run
+`schedule enable`; it is kept, not deleted. Saving a schedule does not start a
+backup by surprise. The one exception is a service that has never been backed
+up, or whose slot was missed: the list then says `Runs at the next check`.
+To back up right now, run `ballast backup <service>`.
+
+### Stop a backup, and look at past backups
+
+```bash
+ballast cancel <service>        # stop a backup that is running
+ballast runs <service>          # past backups, newest first (--limit N, --json)
+```
+
+`ballast cancel` stops the backup that is running for that service. Anything
+Ballast stopped for the backup (such as a container) is started again, the run
+is recorded as cancelled, and your last good backup is kept. The web UI has the
+same thing: a **Cancel** button on the dashboard while a backup runs, and a
+**History** button on each service that opens the **Backup history** page. It
+lists every run, and clicking one shows each check that was done and why
+anything is amber or red.
+
+### Remove a service
+
+`ballast service remove <service>` (or **Remove** on the Services page) tells
+Ballast to stop backing that service up. It deletes the service's schedule,
+trigger token and notification settings, and stops its history from counting
+toward your status. It does **not** touch the backups already stored in your
+destinations, your destinations themselves, or the encryption password files,
+so you can still restore from them. If a backup of that service is running,
+removal waits for it to finish.
 
 ### Notifications
 
@@ -256,4 +302,4 @@ This checks restic, your Docker hosts, destinations and free disk space, and tel
 
 ### Proxmox
 
-If you run Proxmox, see the [Proxmox guide](proxmox.md). Upgrading from an earlier version? See [Upgrading](migrating.md).
+If you run Proxmox, see the [Proxmox guide](proxmox.md). Replacing Ballast with a newer version? See [Upgrading](upgrading.md). Coming from v0.1? See [Migrating from v0.1](migrating.md).

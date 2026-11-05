@@ -54,12 +54,12 @@ func (p *Pipeline) runGuest(ctx context.Context, svc inventory.Service) (engine.
 	}
 	defer p.logNotifyErr(service, m)
 
+	// dumpNote says what became of a dump Proxmox was still making when
+	// the run was stopped.
+	var dumpNote string
 	fail := func(cause error) (engine.State, error) {
-		if ctx.Err() != nil {
-			if terr := m.Transition(engine.CANCELLED, "cancelled: Ballast is shutting down"); terr != nil {
-				p.logf("%s: recording cancellation: %v", service, terr)
-			}
-			return engine.CANCELLED, ensureServiceContext(service, ctx.Err())
+		if engine.Cancelled(ctx, cause) {
+			return p.cancelRun(ctx, m, service, cause, targets, "", dumpNote)
 		}
 		err := ensureServiceContext(service, cause)
 		detail := p.redact(err.Error())
@@ -70,7 +70,15 @@ func (p *Pipeline) runGuest(ctx context.Context, svc inventory.Service) (engine.
 		return engine.FAILED, err
 	}
 
-	if err := m.Transition(engine.PREPARING, "preparing"); err != nil {
+	// step moves the run to its next phase, unless it was stopped
+	// meanwhile: no phase starts once a stop has been asked for.
+	step := func(to engine.State, detail string) error {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		return m.Transition(to, detail)
+	}
+	if err := step(engine.PREPARING, "preparing"); err != nil {
 		return fail(err)
 	}
 	conn, err := inventory.GetProxmoxConnection(p.DB)
@@ -102,7 +110,7 @@ func (p *Pipeline) runGuest(ctx context.Context, svc inventory.Service) (engine.
 		return fail(targetsError(targets))
 	}
 
-	if err := m.Transition(engine.DUMPING, "dumping"); err != nil {
+	if err := step(engine.DUMPING, "dumping"); err != nil {
 		return fail(err)
 	}
 	// Check the Proxmox storage has room before the dump starts, not
@@ -120,6 +128,12 @@ func (p *Pipeline) runGuest(ctx context.Context, svc inventory.Service) (engine.
 		}
 	}
 	res, err := cl.CreateDump(ctx, opts, p.pollInterval())
+	switch {
+	case res.TaskStopped:
+		dumpNote = fmt.Sprintf("The backup Proxmox was making of guest %d was stopped too", opts.VMID)
+	case res.TaskLeftRunning != "":
+		dumpNote = fmt.Sprintf("Ballast could not stop the backup Proxmox is making of guest %d, so it keeps going on Proxmox until it finishes, and a new backup of that guest may be refused until then (%s)", opts.VMID, res.TaskLeftRunning)
+	}
 	if err != nil {
 		return fail(fmt.Errorf("%s", p.redact(err.Error())))
 	}
@@ -127,7 +141,7 @@ func (p *Pipeline) runGuest(ctx context.Context, svc inventory.Service) (engine.
 		return fail(err)
 	}
 
-	if err := m.Transition(engine.UPLOADING, "uploading"); err != nil {
+	if err := step(engine.UPLOADING, "uploading"); err != nil {
 		return fail(err)
 	}
 	if len(targets) > 0 {
@@ -160,7 +174,7 @@ func (p *Pipeline) runGuest(ctx context.Context, svc inventory.Service) (engine.
 		}
 	}
 
-	if err := m.Transition(engine.VERIFYING, "verifying"); err != nil {
+	if err := step(engine.VERIFYING, "verifying"); err != nil {
 		return fail(err)
 	}
 	layer := cl.VerifyGuestConfig(ctx, res)

@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import type { ServiceStatus, TierStatus } from "@/api/types";
-import { describeCheck, describeTier, shortStatus, summarize, worstLight } from "./status";
+import { wasCancelled, ageIsLate, cancelQuestion, describeCheck, describeTier, expectedIntervalSeconds, isCancelling, shortStatus, shortStatusParts, summarize, worstLight } from "./status";
 
 function svc(...lights: TierStatus["light"][]): ServiceStatus {
   return {
@@ -116,5 +116,104 @@ describe("shortStatus", () => {
     const s = svc("green");
     s.tiers[0].last_finished_at = new Date(Date.now() - 2 * 3600e3).toISOString();
     expect(shortStatus(s)).toMatch(/^Safe, /);
+  });
+});
+
+describe("cancelling a backup", () => {
+  const running = (cancelling: boolean): ServiceStatus => ({
+    service: "s",
+    catalog_entry: "folder",
+    destination: "local",
+    tiers: [{ tier: "restic", light: "running", phase: cancelling ? "cancelling" : "uploading to the destination", cancelling }],
+  });
+
+  it("says a backup asked to stop is cancelling", () => {
+    expect(isCancelling(running(true))).toBe(true);
+    expect(isCancelling(running(false))).toBe(false);
+    expect(shortStatus(running(true))).toBe("Cancelling…");
+    expect(describeTier(running(true).tiers[0])).toContain("Stopping the backup");
+    expect(describeTier(running(true).tiers[0])).toContain("last good backup is kept");
+  });
+
+  it("words a stopped backup as stopped, keeping the red light", () => {
+    const t: TierStatus = { tier: "restic", light: "red", last_state: "CANCELLED" };
+    expect(describeTier(t)).toBe("Last backup was cancelled. The backup before it is kept.");
+    expect(describeTier({ tier: "restic", light: "red", last_state: "FAILED", last_error: "cancelled: stopped on request" })).toBe(
+      "Last backup was cancelled. The backup before it is kept.",
+    );
+    expect(describeTier({ tier: "restic", light: "red", last_state: "FAILED" })).toBe("The last backup failed.");
+  });
+
+  it("asks in plain English and offers a safe way out", () => {
+    expect(cancelQuestion.message).toBe("Stop this backup? The last good backup is kept.");
+    expect(cancelQuestion.cancelLabel).not.toBe(cancelQuestion.confirmLabel);
+  });
+});
+
+const HOUR = 3600;
+const NOW = Date.parse("2026-11-05T12:00:00Z");
+
+function aged(cron: string | undefined, ageSeconds: number, light: TierStatus["light"] = "green"): ServiceStatus {
+  return {
+    ...svc(light),
+    schedule: cron === undefined ? undefined : { cron, enabled: true },
+    tiers: [{ tier: "restic", light, last_finished_at: new Date(NOW - ageSeconds * 1000).toISOString() }],
+  };
+}
+
+describe("expectedIntervalSeconds", () => {
+  it.each<[string, string | undefined, number | undefined]>([
+    ["daily", "0 2 * * *", 24 * HOUR],
+    ["twice a day", "0 2,14 * * *", 12 * HOUR],
+    ["every 6 hours", "0 */6 * * *", 6 * HOUR],
+    ["hourly", "0 * * * *", HOUR],
+    ["weekly", "0 3 * * 0", 7 * 24 * HOUR],
+    ["monthly", "0 3 1 * *", 30 * 24 * HOUR],
+    ["unscheduled", undefined, undefined],
+    ["unreadable", "soon", undefined],
+  ])("%s", (_n, cron, want) => {
+    expect(expectedIntervalSeconds(cron)).toBe(want);
+  });
+});
+
+describe("ageIsLate", () => {
+  it.each<[string, string | undefined, number, boolean]>([
+    ["daily at 13 hours", "0 2 * * *", 13 * HOUR, false],
+    ["daily at 25 hours", "0 2 * * *", 25 * HOUR, true],
+    ["weekly at 2 days", "0 3 * * 0", 48 * HOUR, false],
+    ["weekly at 4 days", "0 3 * * 0", 96 * HOUR, true],
+    ["weekly at 6 days", "0 3 * * 0", 144 * HOUR, true],
+    ["unscheduled at 30 days", undefined, 30 * 24 * HOUR, false],
+  ])("%s", (_n, cron, age, want) => {
+    expect(ageIsLate(aged(cron, age), NOW)).toBe(want);
+  });
+
+  it("only cues a green light", () => {
+    expect(ageIsLate(aged("0 3 * * 0", 144 * HOUR, "red"), NOW)).toBe(false);
+  });
+});
+
+describe("shortStatusParts", () => {
+  it("keeps the light and the sentence, and marks the age", () => {
+    const s = aged("0 3 * * 0", 144 * HOUR);
+    const parts = shortStatusParts(s, NOW);
+    expect(parts.lead).toBe("Safe");
+    expect(parts.late).toBe(true);
+    expect(parts.age).toBe("6 days ago");
+    expect(worstLight(s)).toBe("green");
+  });
+});
+
+describe("wasCancelled", () => {
+  it.each([
+    ["CANCELLED", undefined, true],
+    ["cancelled", undefined, true],
+    ["FAILED", "cancelled: stopped on request", true],
+    ["FAILED", "canceled: Ballast is shutting down", true],
+    ["FAILED", "disk full", false],
+    ["FAILED", "restic was cancelled by the kernel", false],
+    [undefined, undefined, false],
+  ])("%s / %s", (state, error, want) => {
+    expect(wasCancelled(state, error)).toBe(want);
   });
 });

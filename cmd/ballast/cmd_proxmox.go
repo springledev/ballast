@@ -262,7 +262,7 @@ Example:
 			}
 			cmd.Printf("%s: will back up guest %d on %s to %s\n", jobName, jobVMID, jobNode, jobStorage)
 			if jobSchedule != "" {
-				if err := a.ops.SetSchedule(cmd.Context(), jobName, jobSchedule); err != nil {
+				if _, err := a.ops.SetSchedule(cmd.Context(), jobName, jobSchedule, nil); err != nil {
 					return err
 				}
 				cmd.Printf("%s: scheduled %q\n", jobName, jobSchedule)
@@ -304,7 +304,7 @@ Example:
 			}
 			cmd.Printf("%s: will save the Proxmox settings to %s\n", cfgName, cfgTo)
 			if cfgSchedule != "" {
-				if err := a.ops.SetSchedule(cmd.Context(), cfgName, cfgSchedule); err != nil {
+				if _, err := a.ops.SetSchedule(cmd.Context(), cfgName, cfgSchedule, nil); err != nil {
 					return err
 				}
 				cmd.Printf("%s: scheduled %q\n", cfgName, cfgSchedule)

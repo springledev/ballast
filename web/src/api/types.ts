@@ -12,6 +12,9 @@ export interface CatalogParameter {
   /** "docker-volume" / "compose-project": show a picker of the service's
    * Docker host's volumes / Compose projects. */
   picker?: string;
+  /** "path": a folder on the service's machine; the server trims it and
+   * requires a full path. */
+  kind?: string;
 }
 
 export interface CatalogSummary {
@@ -85,6 +88,10 @@ export interface ProtonSignIn {
   done: boolean;
   error?: string;
 }
+
+/** A service as the server saved it (paths trimmed), plus plain-English
+ * warnings such as a folder that does not exist yet. */
+export type SavedService = Service & { warnings?: string[] };
 
 export interface Service {
   name: string;
@@ -236,6 +243,10 @@ export interface ScheduledJob {
   service: string;
   cron: string;
   enabled: boolean;
+  /** When it runs next; absent while paused. */
+  next_run?: string;
+  /** True when a missed slot makes the next check run a backup at once. */
+  due_now?: boolean;
 }
 
 export interface TierStatus {
@@ -251,6 +262,8 @@ export interface TierStatus {
   waiting?: string;
   /** The plain-English step a running backup is on, e.g. "checking the backup can be restored". */
   phase?: string;
+  /** True while a running backup that was asked to stop is tidying up. */
+  cancelling?: boolean;
   last_verified_at?: string;
   verified_age_seconds?: number;
   max_age_seconds?: number;
@@ -258,6 +271,8 @@ export interface TierStatus {
 }
 
 export interface VerificationRecord {
+  /** The destination this check belongs to; absent means the whole backup. */
+  target?: string;
   method: string;
   passed: boolean;
   warning?: string;
@@ -561,4 +576,67 @@ export interface CatalogValidation {
 export interface CatalogInstallResult {
   service: string;
   path: string;
+}
+
+/** Counts of one run's verification checks. */
+export interface RunVerificationSummary {
+  checks: number;
+  passed: number;
+  failed: number;
+  warnings: number;
+}
+
+/** One destination's result within a past run. */
+export interface RunTarget {
+  destination: string;
+  state: string;
+  light: TierStatus["light"];
+  snapshot_id?: string;
+  detail?: string;
+  secondary?: boolean;
+}
+
+/** One past run, as listed in a service's history. */
+export interface RunSummary {
+  id: number;
+  service: string;
+  state: string;
+  light: TierStatus["light"];
+  started_at: string;
+  finished_at?: string;
+  duration_seconds?: number;
+  snapshot_id?: string;
+  error?: string;
+  verification: RunVerificationSummary;
+  targets: RunTarget[];
+}
+
+/** One page of a service's run history, newest first. */
+export interface RunPage {
+  runs: RunSummary[];
+  /** Pass as `before` to get the next page; absent when there are no older runs. */
+  next_before?: number;
+}
+
+/** One line of a run's log. */
+export interface RunLogLine {
+  at: string;
+  text: string;
+}
+
+/** One run in full. */
+export interface RunDetail extends RunSummary {
+  verification_results: VerificationRecord[];
+  log_tail: RunLogLine[];
+  log_truncated?: boolean;
+}
+
+/** What asking a running backup to stop did. */
+export interface CancelResult {
+  run_id: number;
+  service: string;
+  /** A stop had already been asked for; this was a harmless repeat. */
+  already_requested: boolean;
+  /** What happens next, in plain English. */
+  message: string;
 }

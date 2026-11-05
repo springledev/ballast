@@ -422,7 +422,7 @@ func (o *Ops) EditGuestJob(ctx context.Context, name string, e GuestJobEdit) (in
 		return inventory.Service{}, err
 	}
 	if e.Schedule != nil {
-		if err := o.SetSchedule(ctx, name, *e.Schedule); err != nil {
+		if _, err := o.SetSchedule(ctx, name, *e.Schedule, nil); err != nil {
 			return inventory.Service{}, err
 		}
 	}

@@ -40,6 +40,7 @@ discovery:
     fallback: "{{ .Params.db_container }}"
 parameters:
   - name: library_dir
+    kind: path
     required: true
     prompt: "Path to your Immich upload/library folder on this machine (UPLOAD_LOCATION in Immich's .env file)"
   - name: db_name

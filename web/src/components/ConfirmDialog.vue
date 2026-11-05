@@ -7,16 +7,26 @@ const dialog = ref<HTMLDialogElement | null>(null);
 const cancelButton = ref<HTMLButtonElement | null>(null);
 
 // <dialog> gives a focus trap, Esc to close and a backdrop for free.
-watch(pending, async (request) => {
+let opener: HTMLElement | null = null;
+
+watch(pending, async (request, previous) => {
   const el = dialog.value;
   if (!el) return;
   if (request && !el.open) {
+    opener = request.opener;
     el.showModal();
     await nextTick();
     // Land on the safe choice so a stray Enter never confirms.
     cancelButton.value?.focus();
   } else if (!request && el.open) {
     el.close();
+  }
+  // Put focus back where the question came from, not on the page body.
+  if (!request && previous) {
+    const target = opener ?? previous.opener;
+    opener = null;
+    await nextTick();
+    if (target?.isConnected) target.focus();
   }
 });
 
@@ -36,7 +46,7 @@ function onBackdrop(e: MouseEvent) {
     <form v-if="pending" method="dialog" @submit.prevent="answerConfirm(true)">
       <p id="confirm-message" class="confirm-message">{{ pending.message }}</p>
       <div class="actions">
-        <button ref="cancelButton" class="btn btn-quiet" type="button" @click="answerConfirm(false)">Cancel</button>
+        <button ref="cancelButton" class="btn btn-quiet" type="button" @click="answerConfirm(false)">{{ pending.cancelLabel }}</button>
         <button class="btn btn-danger" type="submit">{{ pending.confirmLabel }}</button>
       </div>
     </form>

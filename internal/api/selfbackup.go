@@ -440,9 +440,12 @@ func (o *Ops) RunSelfBackup(ctx context.Context) (engine.State, error) {
 	}()
 
 	fail := func(cause error) (engine.State, error) {
-		if ctx.Err() != nil {
-			if terr := m.Transition(engine.CANCELLED, "cancelled: Ballast is shutting down"); terr != nil {
+		if engine.Cancelled(ctx, cause) {
+			if terr := m.Transition(engine.CANCELLED, engine.CancelDetail(ctx, cause)); terr != nil {
 				o.logf("%s: recording cancellation: %v", svc, terr)
+			}
+			if ctx.Err() == nil {
+				return engine.CANCELLED, fmt.Errorf("%s: %w", svc, cause)
 			}
 			return engine.CANCELLED, fmt.Errorf("%s: %w", svc, ctx.Err())
 		}

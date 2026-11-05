@@ -663,6 +663,29 @@ func (r *Repository) Dump(ctx context.Context, snapshotID, path string, w io.Wri
 	return nil
 }
 
+// RestoreRoot decides whether a snapshot can be restored relative to
+// the folder it was taken of. It returns that folder when the snapshot
+// covers exactly one path and that path is a directory in the snapshot;
+// otherwise (several paths, or a single file such as a tar made by a
+// stop-start backup) it returns "" and the restore keeps the original
+// layout.
+func (r *Repository) RestoreRoot(ctx context.Context, snapshotID string, paths []string) (string, error) {
+	if len(paths) != 1 || !filepath.IsAbs(paths[0]) {
+		return "", nil
+	}
+	root := filepath.Clean(paths[0])
+	entries, err := r.LS(ctx, snapshotID, root)
+	if err != nil {
+		return "", err
+	}
+	for _, e := range entries {
+		if e.Path == root && e.Type == "dir" {
+			return root, nil
+		}
+	}
+	return "", nil
+}
+
 // RestoreOptions are the per-run inputs of Restore.
 type RestoreOptions struct {
 	// SnapshotID is the snapshot to restore ("latest" allowed).
@@ -671,6 +694,12 @@ type RestoreOptions struct {
 	// TargetDir is the directory to restore into. Created when
 	// missing (0700: restored service data may be sensitive).
 	TargetDir string
+
+	// Root, when set, is the absolute folder inside the snapshot that
+	// is restored directly into TargetDir, so files land at
+	// TargetDir/<path relative to Root> instead of under a copy of the
+	// folder's full original path. Paths must then lie inside Root.
+	Root string
 
 	// Paths limits the restore to these absolute paths from the
 	// snapshot. Empty restores everything in the snapshot.
@@ -695,12 +724,32 @@ func (r *Repository) Restore(ctx context.Context, opts RestoreOptions) error {
 		return fmt.Errorf("restic restore: creating target directory %s: %w", opts.TargetDir, err)
 	}
 
-	args := []string{"restore", "--no-lock", opts.SnapshotID, "--target", filepath.Clean(opts.TargetDir)}
+	snap := opts.SnapshotID
+	root := ""
+	if opts.Root != "" {
+		if !filepath.IsAbs(opts.Root) {
+			return fmt.Errorf("restic restore: backup folder %q must be absolute", opts.Root)
+		}
+		root = filepath.Clean(opts.Root)
+		snap = opts.SnapshotID + ":" + root
+	}
+	args := []string{"restore", "--no-lock", snap, "--target", filepath.Clean(opts.TargetDir)}
 	for _, p := range opts.Paths {
 		if !filepath.IsAbs(p) {
 			return fmt.Errorf("restic restore: path %q must be absolute", p)
 		}
-		args = append(args, "--include", filepath.Clean(p))
+		p = filepath.Clean(p)
+		if root != "" {
+			rel, err := filepath.Rel(root, p)
+			if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+				return fmt.Errorf("restic restore: path %q is not inside the backed-up folder %s", p, root)
+			}
+			p = "/" + filepath.ToSlash(rel)
+			if rel == "." {
+				p = "/"
+			}
+		}
+		args = append(args, "--include", p)
 	}
 	_, err := r.run(ctx, args...)
 	return err

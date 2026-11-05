@@ -29,10 +29,14 @@ func writeStub(t *testing.T, dir, name, body string) string {
 // "fail-stop" only breaks docker stop),
 // answers `docker exec ...` with a small SQL dump on stdout, and for
 // `docker run ...` either saves its stdin to $STUB_STDIN (when set) or
-// prints the file $STUB_TAR (when set).
+// prints the file $STUB_TAR (when set). `docker stop` sleeps
+// $STUB_STOP_SLEEP seconds first when set (for cancellation tests).
 const dockerStub = `#!/bin/sh
 printf '%s\n' "$*" >> "$STUB_LOG"
 cmd="$1"
+if [ "$cmd" = stop ] && [ -n "$STUB_STOP_SLEEP" ]; then
+  exec sleep "$STUB_STOP_SLEEP"
+fi
 for a in "$@"; do
   case "$a" in
     "fail-$cmd"|"fail-$cmd":*|*source=*/fail-"$cmd",*)
@@ -41,7 +45,9 @@ for a in "$@"; do
   esac
 done
 case "$cmd" in
-  inspect) if [ -n "$STUB_INSPECT" ]; then cat "$STUB_INSPECT"; fi ;;
+  inspect)
+    if [ "$3" = "{{.State.Running}}" ]; then echo true; exit 0; fi
+    if [ -n "$STUB_INSPECT" ]; then cat "$STUB_INSPECT"; fi ;;
   exec) printf 'CREATE TABLE stub(id int);\n' ;;
   run)
     if [ -n "$STUB_STDIN" ]; then cat > "$STUB_STDIN"
@@ -77,7 +83,15 @@ func readStubLog(t *testing.T, logPath string) []string {
 	if err != nil {
 		t.Fatalf("reading stub log: %v", err)
 	}
-	return strings.Split(strings.TrimRight(string(data), "\n"), "\n")
+	// The check that a restarted container is running is left out, so
+	// tests can compare the stop/start order exactly.
+	var out []string
+	for _, l := range strings.Split(strings.TrimRight(string(data), "\n"), "\n") {
+		if !strings.Contains(l, "{{.State.Running}}") {
+			out = append(out, l)
+		}
+	}
+	return out
 }
 
 // entryFor builds a minimal catalog entry for one strategy.

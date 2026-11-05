@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/springledev/ballast/internal/catalog"
 )
@@ -200,7 +201,9 @@ func TestStopStartPartialStopFailure(t *testing.T) {
 		t.Errorf("error = %q, want it to name the failing container", err)
 	}
 	log := readStubLog(t, logPath)
-	want := []string{"stop vw", "stop fail-stop", "start vw"}
+	// The container whose stop failed is started too: a failed or
+	// cancelled `docker stop` may still have stopped it.
+	want := []string{"stop vw", "stop fail-stop", "start vw", "start fail-stop"}
 	if strings.Join(log, "|") != strings.Join(want, "|") {
 		t.Errorf("docker invocations = %v, want %v", log, want)
 	}
@@ -255,6 +258,84 @@ func TestStopStartCancelledRun(t *testing.T) {
 		if strings.HasPrefix(line, "start ") {
 			t.Errorf("unexpected docker invocation after failed stop: %v", line)
 		}
+	}
+}
+
+// statefulDockerStub is a fake docker that behaves like the daemon:
+// `docker stop` marks the container "stopping" and the daemon finishes
+// stopping it on its own after $STUB_DAEMON_STOP seconds, even when the
+// client is killed; the client returns after $STUB_CLIENT_STOP seconds.
+// `docker start` of a container that is still stopping does nothing, as
+// with the real daemon. Each container's state lives in $STUB_STATE.
+const statefulDockerStub = `#!/bin/sh
+printf '%s\n' "$*" >> "$STUB_LOG"
+for a in "$@"; do last="$a"; done
+state() { cat "$STUB_STATE/$1" 2>/dev/null || echo running; }
+case "$1" in
+  stop)
+    echo stopping > "$STUB_STATE/$last"
+    ( sleep "$STUB_DAEMON_STOP"; echo exited > "$STUB_STATE/$last" ) >/dev/null 2>&1 &
+    exec sleep "$STUB_CLIENT_STOP" ;;
+  start)
+    if [ "$(state "$last")" = exited ]; then echo running > "$STUB_STATE/$last"; fi ;;
+  inspect)
+    if [ "$(state "$last")" = running ]; then echo true; else echo false; fi ;;
+esac
+exit 0
+`
+
+// TestStopStartCancelDuringStop stops the run while `docker stop` is
+// still going. A cancel must not cut `docker stop` short and then start
+// the container while the daemon is still stopping it (a no-op that
+// would leave it down): the container must end up running, and no
+// further container is stopped.
+func TestStopStartCancelDuringStop(t *testing.T) {
+	dir := t.TempDir()
+	dockerBin := writeStub(t, dir, "docker-stateful", statefulDockerStub)
+	data := stopStartFixture(t)
+	for _, strat := range []string{"stop-start", "volume"} {
+		t.Run(strat, func(t *testing.T) {
+			stateDir := t.TempDir()
+			logPath := filepath.Join(stateDir, "docker.log")
+			entry := stopStartEntry(data, "vw", "vw-db")
+			if strat == "volume" {
+				entry.Backup.Strategy = "volume"
+				entry.Backup.Files = nil
+				entry.Backup.Volumes = []catalog.VolumeSpec{{Name: "vwdata"}}
+			}
+			r := stubRunner(logPath)
+			// The client gives up before the daemon has finished stopping,
+			// so the first start attempt lands while it is still stopping.
+			r.BaseEnv = append(r.BaseEnv, "STUB_STATE="+stateDir, "STUB_CLIENT_STOP=0.3", "STUB_DAEMON_STOP=0.8")
+			s, err := For(entry, Options{Runner: r, Docker: dockerhost.NewLocal(dockerBin)})
+			if err != nil {
+				t.Fatalf("For: %v", err)
+			}
+			ctx, cancel := context.WithCancel(context.Background())
+			go func() {
+				for i := 0; i < 500; i++ {
+					if data, _ := os.ReadFile(logPath); strings.Contains(string(data), "stop vw\n") {
+						cancel()
+						return
+					}
+					time.Sleep(5 * time.Millisecond)
+				}
+				cancel()
+			}()
+			if _, err := s.Backup(ctx, Request{WorkDir: t.TempDir()}); err == nil {
+				t.Fatal("Backup = nil error, want cancellation")
+			}
+			time.Sleep(time.Second) // let the daemon finish whatever it was doing
+			for _, c := range []string{"vw", "vw-db"} {
+				st, _ := os.ReadFile(filepath.Join(stateDir, c))
+				if got := strings.TrimSpace(string(st)); got != "" && got != "running" {
+					t.Errorf("container %s is %s after the cancelled backup, want running", c, got)
+				}
+			}
+			if log, _ := os.ReadFile(logPath); strings.Contains(string(log), "stop vw-db") {
+				t.Errorf("docker invocations = %q, want no further stops after cancelling", log)
+			}
+		})
 	}
 }
 

@@ -40,6 +40,15 @@ watch(
   () => (moreOpen.value = false),
 );
 
+// The skip link moves focus to the page itself so the next Tab starts
+// inside the content, not back in the navigation.
+function skipToMain(e: Event) {
+  e.preventDefault();
+  const main = document.getElementById("main");
+  main?.focus();
+  main?.scrollIntoView?.();
+}
+
 function onKey(e: KeyboardEvent) {
   if (e.key === "Escape") moreOpen.value = false;
 }
@@ -78,6 +87,7 @@ onMounted(checkSession);
   <div v-if="session === 'checking'" class="center-screen" aria-busy="true" />
   <ConnectGate v-else-if="session === 'out'" @signed-in="checkSession" />
   <div v-else class="app-shell" @keydown="onKey">
+    <a class="skip-link" href="#main" @click="skipToMain">Skip to content</a>
     <header class="topbar">
       <router-link to="/dashboard" class="brand" aria-label="Ballast overview">
         <svg width="24" height="24" viewBox="0 0 24 24" fill="none" aria-hidden="true">
@@ -116,7 +126,7 @@ onMounted(checkSession);
 
     <ConfirmDialog />
 
-    <main class="main">
+    <main id="main" class="main" tabindex="-1">
       <div class="page">
         <p v-if="insecure" class="notice notice--warn" role="alert">
           Ballast is reachable from your network over plain HTTP, so your access key can be read by anyone on it.

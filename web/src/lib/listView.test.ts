@@ -6,6 +6,8 @@ import {
   emptyQuery,
   filterEntries,
   groupEntries,
+  initialGroup,
+  unfoldedItems,
   lightShares,
   matchesText,
   needsTools,
@@ -127,4 +129,30 @@ describe("collapsesGroup", () => {
       expect(collapsesGroup(c.g, c.q, c.open)).toBe(c.want);
     });
   }
+});
+
+describe("initialGroup", () => {
+  it.each([
+    [5, true, "none"],
+    [12, true, "none"],
+    [13, true, "status"],
+    [60, true, "status"],
+    [60, false, "none"],
+  ] as const)("%i entries, lights known %s -> %s", (count, lights, want) => {
+    expect(initialGroup(count, lights)).toBe(want);
+  });
+});
+
+describe("unfoldedItems", () => {
+  const groups = [
+    { key: "red", label: "Failed", items: ["a"] },
+    { key: "green", label: "Safe", items: ["b", "c"] },
+  ];
+  it.each([
+    ["nothing folded", () => false, ["a", "b", "c"]],
+    ["safe group folded", (g: { key: string }) => g.key === "green", ["a"]],
+    ["all folded", () => true, []],
+  ])("%s", (_n, folded, want) => {
+    expect(unfoldedItems(groups, folded)).toEqual(want);
+  });
 });

@@ -362,10 +362,39 @@ func TestHTTPGolden(t *testing.T) {
 			},
 		},
 		{
+			name: "schedule_put_paused_stays_paused",
+			arrange: func(t *testing.T, h *harness) {
+				withService(t, h)
+				if _, err := h.ops.SetSchedule(context.Background(), "svc", "0 4 * * *", nil); err != nil {
+					t.Fatalf("SetSchedule: %v", err)
+				}
+				if err := h.ops.SetScheduleEnabled(context.Background(), "svc", false); err != nil {
+					t.Fatalf("SetScheduleEnabled: %v", err)
+				}
+			},
+			req: func(h *harness) *http.Request {
+				r := httptest.NewRequest(http.MethodPut, "/api/v1/services/svc/schedule", jsonBody(t, scheduleRequestBody{Cron: "0 3 * * *"}))
+				r.Header.Set("Content-Type", "application/json")
+				return r
+			},
+		},
+		{
+			name: "schedule_put_next_run",
+			arrange: func(t *testing.T, h *harness) {
+				withService(t, h)
+				h.ops.Now = func() time.Time { return time.Date(2026, 11, 2, 12, 0, 0, 0, time.UTC) }
+			},
+			req: func(h *harness) *http.Request {
+				r := httptest.NewRequest(http.MethodPut, "/api/v1/services/svc/schedule", jsonBody(t, scheduleRequestBody{Cron: "0 3 * * *"}))
+				r.Header.Set("Content-Type", "application/json")
+				return r
+			},
+		},
+		{
 			name: "schedule_get",
 			arrange: func(t *testing.T, h *harness) {
 				withService(t, h)
-				if err := h.ops.SetSchedule(context.Background(), "svc", "0 3 * * *"); err != nil {
+				if _, err := h.ops.SetSchedule(context.Background(), "svc", "0 3 * * *", nil); err != nil {
 					t.Fatalf("SetSchedule: %v", err)
 				}
 			},
@@ -377,7 +406,7 @@ func TestHTTPGolden(t *testing.T) {
 			name: "schedule_enabled_put",
 			arrange: func(t *testing.T, h *harness) {
 				withService(t, h)
-				if err := h.ops.SetSchedule(context.Background(), "svc", "0 3 * * *"); err != nil {
+				if _, err := h.ops.SetSchedule(context.Background(), "svc", "0 3 * * *", nil); err != nil {
 					t.Fatalf("SetSchedule: %v", err)
 				}
 			},
@@ -884,5 +913,113 @@ func TestCreateServiceRefusesAnExistingName(t *testing.T) {
 	}
 	if got.Params["path"] != "/x" {
 		t.Errorf("path after the refused POST = %q, want /x (unchanged)", got.Params["path"])
+	}
+}
+
+// TestCreateService_PathValidation: a relative folder is a 400 with
+// plain advice (not a 500), and a padded one is stored trimmed.
+func TestCreateService_PathValidation(t *testing.T) {
+	dir := t.TempDir()
+	tests := []struct {
+		name     string
+		path     string
+		wantCode int
+		wantPath string
+	}{
+		{name: "relative", path: "data", wantCode: http.StatusBadRequest},
+		{name: "empty", path: " ", wantCode: http.StatusBadRequest},
+		{name: "trimmed", path: dir + " ", wantCode: http.StatusCreated, wantPath: dir},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			h := newHarness(t)
+			h.addDestination("local")
+			rec := serveAs(t, h, http.MethodPost, "/api/v1/services", inventory.Service{
+				Name: "docs", CatalogEntry: "folder", Destination: "local", Params: map[string]string{"path": tt.path},
+			})
+			if rec.Code != tt.wantCode {
+				t.Fatalf("POST = %d %s, want %d", rec.Code, rec.Body.String(), tt.wantCode)
+			}
+			if tt.wantPath == "" {
+				return
+			}
+			var body struct {
+				Params   map[string]string `json:"params"`
+				Warnings []string          `json:"warnings"`
+			}
+			if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+				t.Fatal(err)
+			}
+			if body.Params["path"] != tt.wantPath || len(body.Warnings) != 0 {
+				t.Errorf("body = %+v, want trimmed path and no warnings", body)
+			}
+		})
+	}
+}
+
+// TestPutService_PathWarning: a folder that does not exist yet is
+// saved, and the response carries a warning.
+func TestPutService_PathWarning(t *testing.T) {
+	h := newHarness(t)
+	withService(t, h)
+	missing := filepath.Join(t.TempDir(), "unmounted")
+	rec := serveAs(t, h, http.MethodPut, "/api/v1/services/svc", inventory.Service{
+		CatalogEntry: "folder", Destination: "local", Params: map[string]string{"path": missing},
+	})
+	if rec.Code != http.StatusOK {
+		t.Fatalf("PUT = %d %s", rec.Code, rec.Body.String())
+	}
+	var body struct {
+		Warnings []string `json:"warnings"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	if len(body.Warnings) != 1 || !strings.Contains(body.Warnings[0], missing) {
+		t.Errorf("warnings = %v, want one naming %s", body.Warnings, missing)
+	}
+	got, err := inventory.GetService(h.ops.DB, "svc")
+	if err != nil || got.Params["path"] != missing {
+		t.Errorf("stored = %v, %v; want saved anyway", got.Params, err)
+	}
+}
+
+// TestDeleteServiceWaitsForASlowBackupThenRefuses: removal waits for a
+// running backup for the coordinator's lock wait. A backup that finishes
+// in time lets the removal go ahead; one that does not gets a plain 409.
+// The wait is injected short, so the test never sleeps for the real wait.
+func TestDeleteServiceWaitsForASlowBackupThenRefuses(t *testing.T) {
+	tests := []struct {
+		name     string
+		holdFor  time.Duration
+		wait     time.Duration
+		wantCode int
+	}{
+		{name: "backup ends within the wait", holdFor: 50 * time.Millisecond, wait: 5 * time.Second, wantCode: http.StatusOK},
+		{name: "backup outlasts the wait", holdFor: 5 * time.Second, wait: 250 * time.Millisecond, wantCode: http.StatusConflict},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			h := newHarness(t)
+			withService(t, h)
+			h.ops.Coord.LockWait = tt.wait
+			release, ok, err := h.locks.TryLock("svc")
+			if err != nil || !ok {
+				t.Fatalf("holding run lock: %v, %v", ok, err)
+			}
+			timer := time.AfterFunc(tt.holdFor, release)
+			defer timer.Stop()
+			rec := serveAs(t, h, http.MethodDelete, "/api/v1/services/svc", nil)
+			if rec.Code != tt.wantCode && !(tt.wantCode == http.StatusOK && rec.Code < 300) {
+				t.Fatalf("DELETE = %d %s, want %d", rec.Code, rec.Body.String(), tt.wantCode)
+			}
+			if tt.wantCode == http.StatusConflict {
+				body := rec.Body.String()
+				if !strings.Contains(body, "backing up") || strings.Contains(body, "invalid input") || strings.Contains(body, "wait-idle") {
+					t.Errorf("refusal = %s, want plain advice about the running backup", body)
+				}
+				release()
+			}
+		})
 	}
 }

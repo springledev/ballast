@@ -195,13 +195,14 @@ func (p *Pipeline) Run(ctx context.Context, service string) (engine.State, error
 	// a cancelled context always wins and transitions to CANCELLED,
 	// returning ctx's own error; otherwise the run is FAILED with a
 	// redacted, service-attributed detail.
+	//
+	// A stopped run (on request or at shutdown) also tidies up after
+	// itself first: see cancelRun. workDir is set once it exists.
+	var workDir string
 	fail := func(cause error) (engine.State, error) {
-		if ctx.Err() != nil {
-			if terr := m.Transition(engine.CANCELLED, "cancelled: Ballast is shutting down"); terr != nil {
-				p.logf("%s: recording cancellation: %v", service, terr)
-			}
-			p.logf("%s: run %d cancelled", service, m.Run().ID)
-			return engine.CANCELLED, ensureServiceContext(service, ctx.Err())
+		if engine.Cancelled(ctx, cause) {
+			p.skipCopies(m, service, copies)
+			return p.cancelRun(ctx, m, service, cause, targets, workDir, "")
 		}
 		err := ensureServiceContext(service, cause)
 		detail := p.redact(err.Error())
@@ -219,7 +220,15 @@ func (p *Pipeline) Run(ctx context.Context, service string) (engine.State, error
 	// path-set (spec §8): a per-run directory would defeat `forget`.
 	// Wiping and recreating it here is safe because the Coordinator's
 	// run lock is held for the whole call.
-	if err := m.Transition(engine.PREPARING, "preparing"); err != nil {
+	// step moves the run to its next phase, unless it was stopped
+	// meanwhile: no phase starts once a stop has been asked for.
+	step := func(to engine.State, detail string) error {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		return m.Transition(to, detail)
+	}
+	if err := step(engine.PREPARING, "preparing"); err != nil {
 		return fail(err)
 	}
 	// Discovery and secrets depend on the host's state on the day of
@@ -276,7 +285,7 @@ func (p *Pipeline) Run(ctx context.Context, service string) (engine.State, error
 	if allFailed(targets) {
 		return fail(targetsError(targets))
 	}
-	workDir := filepath.Join(p.WorkRoot, service)
+	workDir = filepath.Join(p.WorkRoot, service)
 	if err := os.RemoveAll(workDir); err != nil {
 		return fail(fmt.Errorf("preparing work directory %s: %w", workDir, err))
 	}
@@ -286,7 +295,7 @@ func (p *Pipeline) Run(ctx context.Context, service string) (engine.State, error
 
 	// DUMPING: the artifacts are produced once, whatever the number of
 	// targets (one stop/start window).
-	if err := m.Transition(engine.DUMPING, "dumping"); err != nil {
+	if err := step(engine.DUMPING, "dumping"); err != nil {
 		return fail(err)
 	}
 	res, err := strat.Backup(ctx, strategy.Request{WorkDir: workDir})
@@ -303,7 +312,7 @@ func (p *Pipeline) Run(ctx context.Context, service string) (engine.State, error
 	}
 
 	// UPLOADING: every target gets its own snapshot.
-	if err := m.Transition(engine.UPLOADING, "uploading"); err != nil {
+	if err := step(engine.UPLOADING, "uploading"); err != nil {
 		return fail(err)
 	}
 	p.forEachTarget(targets, func(rt *runTarget) {
@@ -332,7 +341,7 @@ func (p *Pipeline) Run(ctx context.Context, service string) (engine.State, error
 	// VERIFYING (mandatory, spec §4.1: SUCCESS is unreachable without
 	// it). Restore drills run once per artifact; restic's read-back
 	// runs once per destination.
-	if err := m.Transition(engine.VERIFYING, "verifying"); err != nil {
+	if err := step(engine.VERIFYING, "verifying"); err != nil {
 		return fail(err)
 	}
 	shared, foldArchive, err := p.runCheckers(ctx, service, entry, checkers, res)
@@ -385,7 +394,9 @@ func (p *Pipeline) Run(ctx context.Context, service string) (engine.State, error
 	p.runCopies(ctx, m, service, targets, copies, res)
 	// Retention cleanup only for a target with a verified SUCCESS, and
 	// never lets its own failure change the run's outcome (spec plan
-	// step 8).
+	// step 8). A stopped run marks every target CANCELLED (cancelRun),
+	// so it prunes nothing; a prune that has begun runs after the run
+	// is finished, so a stop request is refused and never interrupts it.
 	defer p.retainTargets(ctx, service, targets)
 
 	if anyTargetFailed(targets) {

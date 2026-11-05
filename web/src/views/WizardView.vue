@@ -5,7 +5,7 @@ import { api } from "@/api/client";
 import type { CatalogSummary, EnvSourceProposal, Destination, DetectResult, DockerComposeProject, DockerHost, DockerVolume, PreflightResult, ServiceStatus } from "@/api/types";
 import { schedulePresets } from "@/lib/schedule";
 import { describeCheck, describeTier } from "@/lib/status";
-import { checkParam } from "@/lib/params";
+import { checkParam, warningsNote } from "@/lib/params";
 import { revealOnError } from "@/lib/revealError";
 
 type Step = "what" | "where" | "when" | "review" | "running" | "done";
@@ -18,6 +18,8 @@ const stepOrder: { id: Step; label: string }[] = [
 
 const step = ref<Step>("what");
 const error = ref("");
+/** Plain-English warning from saving the service, e.g. a folder that does not exist yet. */
+const saveWarning = ref("");
 revealOnError(error);
 const loading = ref(true);
 
@@ -261,9 +263,9 @@ async function start() {
       secrets: Object.keys(envSecrets.value).length ? { ...envSecrets.value } : undefined,
     };
     if (serviceSaved.value) {
-      await api.updateService(serviceSaved.value, svc);
+      saveWarning.value = warningsNote((await api.updateService(serviceSaved.value, svc)).warnings);
     } else {
-      await api.createService(svc);
+      saveWarning.value = warningsNote((await api.createService(svc)).warnings);
       serviceSaved.value = serviceName.value;
     }
     const preset = schedulePresets.find((p) => p.id === scheduleChoice.value);
@@ -322,7 +324,15 @@ const resultLight = computed(() => {
         on the server, then reload this page.
       </p>
     </div>
-    <p v-else-if="preflight?.restic_warning" class="notice notice--warn">{{ preflight.restic_warning }}</p>
+    <div v-else-if="preflight?.restic_warning" class="notice notice--warn">
+      <p style="margin: 0">
+        The backup tool (restic) on this server is not the version Ballast was tested with. Backups will probably still work.
+      </p>
+      <details class="advanced">
+        <summary>Details</summary>
+        <div class="advanced-body">{{ preflight.restic_warning }}</div>
+      </details>
+    </div>
 
     <ol v-if="stepIndex >= 0" class="steps" aria-label="Progress">
       <li
@@ -336,6 +346,7 @@ const resultLight = computed(() => {
     </ol>
 
     <p v-if="error" class="notice notice--error" role="alert">{{ error }}</p>
+    <p v-if="saveWarning" class="notice notice--warn" role="status">{{ saveWarning }}</p>
 
     <!-- 1. What -->
     <form v-if="step === 'what'" class="panel" @submit.prevent="next">

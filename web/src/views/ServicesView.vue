@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { removedText, removeQuestion, removeWaitText } from "@/lib/removal";
 import { computed, onMounted, reactive, ref, watch } from "vue";
 import { useRoute } from "vue-router";
 
@@ -10,7 +11,7 @@ import ListTools from "@/components/ListTools.vue";
 import { COLLAPSE_SAFE_FROM, collapsesGroup, countLights, emptyQuery, filterEntries, groupEntries, needsTools, type ListEntry, type ListQuery } from "@/lib/listView";
 import { worstLight, type Light } from "@/lib/status";
 import TrafficLight from "@/components/TrafficLight.vue";
-import { checkParam } from "@/lib/params";
+import { checkParam, warningsNote } from "@/lib/params";
 import { askConfirm } from "@/lib/confirm";
 import { revealOnError } from "@/lib/revealError";
 
@@ -509,11 +510,11 @@ async function submit() {
   };
   try {
     if (editingName.value) {
-      await api.updateService(editingName.value, payload);
-      saved.value = `Saved changes to ${form.name}.`;
+      const res = await api.updateService(editingName.value, payload);
+      saved.value = [`Saved changes to ${form.name}.`, warningsNote(res.warnings)].filter(Boolean).join(" ");
     } else {
-      await api.createService(payload);
-      saved.value = `Added ${form.name}. Set when it runs on the "When it runs" page, or back it up now from the Overview.`;
+      const res = await api.createService(payload);
+      saved.value = `Added ${form.name}. Set when it runs on the "When it runs" page, or back it up now from the Overview.` + (warningsNote(res.warnings) ? ` ${warningsNote(res.warnings)}` : "");
     }
     closeForm();
     await load();
@@ -535,17 +536,24 @@ async function makeMain(name: string, destination: string) {
   }
 }
 
+/** The backup being removed right now; removal waits for a running backup to finish first. */
+const removing = ref("");
+
 async function remove(name: string) {
-  if (!(await askConfirm(`Stop backing up "${name}"? Backups already made are kept; Ballast just stops making new ones.`, "Stop backing up"))) {
+  if (!(await askConfirm(removeQuestion(name), "Remove"))) {
     return;
   }
   error.value = "";
+  saved.value = "";
+  removing.value = name;
   try {
     await api.deleteService(name);
-    saved.value = `Stopped backing up ${name}.`;
+    saved.value = removedText(name);
     await load();
   } catch (e) {
     error.value = (e as Error).message;
+  } finally {
+    removing.value = "";
   }
 }
 
@@ -559,6 +567,7 @@ onMounted(load);
   </header>
 
   <p v-if="error" class="notice notice--error" role="alert">{{ error }}</p>
+  <p v-if="removing" class="notice" role="status">{{ removeWaitText(removing) }}</p>
   <p v-if="saved" class="notice notice--ok" role="status">{{ saved }}</p>
   <p v-if="loading" class="loading">Loading…</p>
 
@@ -607,7 +616,7 @@ onMounted(load);
               {{ stateFor(s.name).open ? "Hide backups" : "Backups" }}
             </button>
             <button class="btn" type="button" @click="startEdit(s)">Edit</button>
-            <button class="btn btn-quiet btn-danger" type="button" @click="remove(s.name)">Stop backing up</button>
+            <button class="btn btn-quiet btn-danger" type="button" @click="remove(s.name)">Remove</button>
           </div>
         </div>
 

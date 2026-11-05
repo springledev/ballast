@@ -150,9 +150,7 @@
 
  Work strictly in the order of spec §14, one step per session. Start each
 
- session with the `/implement` command. Keep `PLAN.md` updated: each §14
-
- step gets `[x]` and a one-line summary when done. When you believe a
+ session with the `/implement` command. Track progress in the spec.md §14 checkboxes (each step gets `[x]` and a one-line summary when done) and in PR descriptions. When you believe a
 
  feature is done, run `/verify-feature` before moving on. Never batch
 

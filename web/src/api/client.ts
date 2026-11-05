@@ -2,6 +2,7 @@ import { markSignedOut } from "./auth";
 import type {
   ApiErrorBody,
   BallastHealth,
+  CancelResult,
   CatalogInstallResult,
   CatalogSummary, EnvSourceProposal,
   CatalogTemplate,
@@ -13,6 +14,8 @@ import type {
   CreateDockerHostResponse,
   Destination,
   ProtonSignIn,
+  RunDetail,
+  RunPage,
   DetectResult,
   DigestSendResult,
   DockerComposeProject,
@@ -33,6 +36,7 @@ import type {
   Service,
   ServiceStatus,
   Snapshot,
+  SavedService,
 } from "./types";
 
 // ApiError carries the HTTP status so callers can special-case 401
@@ -91,6 +95,18 @@ async function request<T>(method: string, path: string, body?: unknown): Promise
 const base = "/api/v1";
 
 export const api = {
+  // --- run history ---
+  listRuns(name: string, limit?: number, before?: number): Promise<RunPage> {
+    const params = new URLSearchParams();
+    if (limit) params.set("limit", String(limit));
+    if (before) params.set("before", String(before));
+    const qs = params.toString();
+    return request("GET", `${base}/services/${encodeURIComponent(name)}/runs${qs ? `?${qs}` : ""}`);
+  },
+  getRun(id: number): Promise<RunDetail> {
+    return request("GET", `${base}/runs/${id}`);
+  },
+
   // --- status & catalog ---
   status(service?: string, withVerify?: boolean): Promise<ServiceStatus[]> {
     const params = new URLSearchParams();
@@ -146,10 +162,10 @@ export const api = {
   getService(name: string): Promise<Service> {
     return request("GET", `${base}/services/${encodeURIComponent(name)}`);
   },
-  createService(s: Service): Promise<Service> {
+  createService(s: Service): Promise<SavedService> {
     return request("POST", `${base}/services`, s);
   },
-  updateService(name: string, s: Service): Promise<Service> {
+  updateService(name: string, s: Service): Promise<SavedService> {
     return request("PUT", `${base}/services/${encodeURIComponent(name)}`, s);
   },
   servicePreview(name: string): Promise<ServicePreview> {
@@ -165,6 +181,14 @@ export const api = {
   // --- backups, snapshots, restore ---
   startBackup(name: string): Promise<{ started: boolean; previous_run_interrupted: boolean }> {
     return request("POST", `${base}/services/${encodeURIComponent(name)}/backup`);
+  },
+  /** Asks a service's running backup to stop; the last good backup is kept. */
+  cancelBackup(name: string): Promise<CancelResult> {
+    return request("POST", `${base}/services/${encodeURIComponent(name)}/cancel`);
+  },
+  /** Asks one run to stop, by its id. */
+  cancelRun(id: number): Promise<CancelResult> {
+    return request("POST", `${base}/runs/${id}/cancel`);
   },
   snapshots(name: string, from?: string): Promise<Snapshot[]> {
     const q = from ? `?from=${encodeURIComponent(from)}` : "";
@@ -186,8 +210,9 @@ export const api = {
   getSchedule(name: string): Promise<ScheduledJob> {
     return request("GET", `${base}/services/${encodeURIComponent(name)}/schedule`);
   },
-  setSchedule(name: string, cron: string): Promise<ScheduledJob> {
-    return request("PUT", `${base}/services/${encodeURIComponent(name)}/schedule`, { cron });
+  /** Saves the cron; `enabled` is sent only to explicitly turn it on or off. */
+  setSchedule(name: string, cron: string, enabled?: boolean): Promise<ScheduledJob> {
+    return request("PUT", `${base}/services/${encodeURIComponent(name)}/schedule`, enabled === undefined ? { cron } : { cron, enabled });
   },
   setScheduleEnabled(name: string, enabled: boolean): Promise<{ enabled: boolean }> {
     return request("PUT", `${base}/services/${encodeURIComponent(name)}/schedule/enabled`, { enabled });

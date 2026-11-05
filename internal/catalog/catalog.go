@@ -73,7 +73,15 @@ type Parameter struct {
 	// host; empty means a plain text box. It never changes how the
 	// value is used — the parameter is still an ordinary string.
 	Picker string `yaml:"picker,omitempty" json:"picker,omitempty"`
+	// Kind says what sort of value the parameter holds so the service
+	// layer can check it before saving. The only kind is "path": a
+	// folder on the service's machine, which is trimmed and must be
+	// absolute. Empty means an ordinary string.
+	Kind string `yaml:"kind,omitempty" json:"kind,omitempty"`
 }
+
+// KindPath is the Parameter.Kind of a folder path.
+const KindPath = "path"
 
 // EnvSource declares the documented keys of an app's .env file, giving
 // a one-field setup: the user supplies the app's directory and setup

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { checkParam } from "./params";
+import { checkParam, warningsNote } from "./params";
 
 const path = { name: "path", required: true, prompt: "Absolute path to the folder you want backed up" };
 
@@ -20,6 +20,20 @@ describe("checkParam", () => {
   for (const c of cases) {
     it(c.name, () => {
       expect(checkParam(c.p, c.v)).toBe(c.want);
+    });
+  }
+});
+
+describe("warningsNote", () => {
+  const cases = [
+    { name: "nothing to say", w: undefined, want: "" },
+    { name: "empty list", w: [], want: "" },
+    { name: "one warning", w: ["/mnt/x does not exist yet; it is saved, but backups fail until it does (is the drive mounted?)"], want: "Saved, but note: /mnt/x does not exist yet; it is saved, but backups fail until it does (is the drive mounted?)" },
+    { name: "several", w: ["a.", "b."], want: "Saved, but note: a. b." },
+  ];
+  for (const c of cases) {
+    it(c.name, () => {
+      expect(warningsNote(c.w)).toBe(c.want);
     });
   }
 });

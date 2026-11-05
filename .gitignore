@@ -5,3 +5,12 @@ web/node_modules/
 go.work
 go.work.sum
 /cmd/ballast/ballast
+
+# Never commit local databases, secrets or logs
+*.db
+*.sqlite
+*.sqlite3
+.env
+.env.*
+*.pem
+*.log

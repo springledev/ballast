@@ -132,6 +132,43 @@ func TestHandleLocks(t *testing.T) {
 	}
 }
 
+// TestClearOwnLocks: after a stopped backup a fresh lock from this
+// machine whose process is gone is removed at once (no minimum age),
+// while another machine's lock or a live process's lock is left alone.
+func TestClearOwnLocks(t *testing.T) {
+	now := time.Date(2026, 5, 1, 12, 0, 0, 0, time.UTC)
+	for _, tc := range []struct {
+		name       string
+		host       string
+		alive      bool
+		wantUnlock bool
+		wantNote   string
+	}{
+		{"fresh own lock of a dead process removed", "nas-host", false, true, ""},
+		{"other machine left alone", "other-box", false, false, "another machine"},
+		{"live process left alone", "nas-host", true, false, "still running"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newFixture(t, lockEnv(tc.host, time.Second, now)...)
+			f.c.ProcessAlive = func(int) bool { return tc.alive }
+			repo, _ := f.c.Repo(inventory.Destination{})
+			out, err := f.c.ClearOwnLocks(context.Background(), repo, "nas")
+			if err != nil {
+				t.Fatalf("ClearOwnLocks: %v", err)
+			}
+			if out.Removed != tc.wantUnlock || strings.Contains(f.calls(t), "unlock") != tc.wantUnlock {
+				t.Errorf("removed=%v calls=%q", out.Removed, f.calls(t))
+			}
+			if !strings.Contains(out.Note, tc.wantNote) {
+				t.Errorf("note = %q, want containing %q", out.Note, tc.wantNote)
+			}
+			if strings.Contains(f.calls(t), "--remove-all") {
+				t.Error("--remove-all must never be used")
+			}
+		})
+	}
+}
+
 func TestCheckAmberWhenForeignLockBlocks(t *testing.T) {
 	now := time.Date(2026, 5, 1, 12, 0, 0, 0, time.UTC)
 	f := newFixture(t, append(lockEnv("other-box", 10*time.Hour, now), "STUB_CHECK_FAIL=1")...)

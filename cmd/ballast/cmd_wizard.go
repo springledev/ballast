@@ -110,7 +110,7 @@ func runWizard(cmd *cobra.Command, args []string) error {
 			return err
 		}
 
-		if err := a.ops.PutService(ctx, inventory.Service{
+		if err := putServiceWarn(ctx, a, os.Stderr, inventory.Service{
 			Name: serviceName, CatalogEntry: entry.Service, Destination: destName, Params: params, Secrets: secrets,
 		}); err != nil {
 			return fmt.Errorf("saving %s: %w", serviceName, err)
@@ -360,7 +360,7 @@ func configureSchedule(ctx context.Context, a *app, in *bufio.Reader, out io.Wri
 	if preset, ok := schedulePresets[strings.ToLower(choice)]; ok {
 		cron = preset
 	}
-	if err := a.ops.SetSchedule(ctx, service, cron); err != nil {
+	if _, err := a.ops.SetSchedule(ctx, service, cron, nil); err != nil {
 		return fmt.Errorf("setting the schedule: %w", err)
 	}
 	fmt.Fprintf(out, "  Scheduled (%s).\n", cron)

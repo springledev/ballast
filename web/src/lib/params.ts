@@ -16,3 +16,14 @@ export function checkParam(p: CatalogParameter, value: string | undefined): stri
   }
   return "";
 }
+
+/**
+ * Turns the warnings the server returns after saving a service (for
+ * example a folder that does not exist yet) into one sentence to show
+ * after "Saved", or "" when there are none.
+ */
+export function warningsNote(warnings: string[] | undefined): string {
+  const w = (warnings ?? []).filter((x) => x.trim());
+  if (!w.length) return "";
+  return `Saved, but note: ${w.join(" ")}`;
+}

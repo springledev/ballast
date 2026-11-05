@@ -1,6 +1,6 @@
 {
   "status": 400,
   "body": {
-    "error": "service svc: invalid input: restore requires a target directory (--to)"
+    "error": "restore requires a target directory (--to)"
   }
 }

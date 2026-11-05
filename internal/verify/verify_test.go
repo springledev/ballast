@@ -22,6 +22,7 @@ import (
 //	STUB_SOURCE_IMAGE    `inspect --format {{.Image}}` answers this
 //	STUB_FAIL_INSPECT    inspect exits 1
 //	STUB_FAIL_RUN        run exits 1
+//	STUB_RUN_SLEEP       run waits this many seconds first
 //	STUB_READY=no        readiness probes exit 1
 //	STUB_CAPTURE         restore client's stdin is written here
 //	STUB_RESTORE_STDERR  restore client writes this to stderr
@@ -44,6 +45,9 @@ case "$cmd" in
     exit 0
     ;;
   run)
+    if [ -n "$STUB_RUN_SLEEP" ]; then
+      exec sleep "$STUB_RUN_SLEEP"
+    fi
     if [ -n "$STUB_FAIL_RUN" ]; then
       echo "stub: run failed" >&2
       exit 1

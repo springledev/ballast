@@ -276,16 +276,38 @@ type LockOutcome struct {
 // and its process is gone. Every other lock is left alone and
 // explained (spec §19.7).
 func (c *Checker) HandleLocks(ctx context.Context, repo *restic.Repository, destination string) LockOutcome {
+	out, _ := c.handleLocks(ctx, repo, destination, c.lockTimeout())
+	return out
+}
+
+// ClearOwnLocks tidies up after a backup that was stopped on request:
+// stopping restic mid-upload can leave its lock behind. It is
+// HandleLocks without the minimum age: a lock is removed (plain
+// `restic unlock`, never --remove-all) only when it belongs to this
+// machine and its process is gone. A lock from another machine, or
+// from a process that is still running, is left alone and explained in
+// the Note. The error reports a lock that could not be looked at or
+// removed; callers log it and carry on, since the run's own outcome is
+// already decided.
+func (c *Checker) ClearOwnLocks(ctx context.Context, repo *restic.Repository, destination string) (LockOutcome, error) {
+	return c.handleLocks(ctx, repo, destination, 0)
+}
+
+// handleLocks is HandleLocks and ClearOwnLocks: minAge is how old a
+// lock must be before it can count as stale.
+func (c *Checker) handleLocks(ctx context.Context, repo *restic.Repository, destination string, minAge time.Duration) (LockOutcome, error) {
 	locks, err := repo.Locks(ctx)
 	if err != nil {
-		return LockOutcome{Note: c.redact(fmt.Sprintf("Could not look at the locks on %s: %v", destination, err))}
+		msg := c.redact(fmt.Sprintf("Could not look at the locks on %s: %v", destination, err))
+		return LockOutcome{Note: msg}, errors.New(msg)
 	}
 	host, herr := c.hostname()
 	var stale []restic.Lock
 	var notes []string
+	var unlockErr error
 	for _, l := range locks {
 		age := c.now().Sub(l.Time)
-		if age < c.lockTimeout() {
+		if age < minAge {
 			continue // a recent lock is normal: someone is working
 		}
 		switch {
@@ -303,6 +325,7 @@ func (c *Checker) HandleLocks(ctx context.Context, repo *restic.Repository, dest
 	if len(stale) > 0 {
 		if err := repo.Unlock(ctx); err != nil {
 			notes = append(notes, fmt.Sprintf("an old lock from this machine could not be removed: %v", err))
+			unlockErr = fmt.Errorf("destination %s: removing a lock left by this machine: %w", destination, err)
 		} else {
 			out.Removed = true
 		}
@@ -310,7 +333,10 @@ func (c *Checker) HandleLocks(ctx context.Context, repo *restic.Repository, dest
 	if len(notes) > 0 {
 		out.Note = c.redact(fmt.Sprintf("Repository %s: %s.", destination, strings.Join(notes, "; ")))
 	}
-	return out
+	if unlockErr != nil {
+		return out, errors.New(c.redact(unlockErr.Error()))
+	}
+	return out, nil
 }
 
 func (c *Checker) hostname() (string, error) {

@@ -30,6 +30,10 @@ import (
 // file node so ReadBack's LS+Dump sampling succeeds. Any subcommand
 // named by $RESTIC_STUB_FAIL_CMD exits 1 instead. `forget` answers
 // $RESTIC_STUB_FORGET when set (to simulate removed snapshots).
+// `backup` sleeps $RESTIC_STUB_BACKUP_SLEEP seconds when set; `list
+// locks` prints $RESTIC_STUB_LOCK_IDS, each a fresh lock held by
+// $RESTIC_STUB_LOCK_HOST; `unlock` records the repository in
+// $RESTIC_STUB_LOG.unlock and fails for $RESTIC_STUB_UNLOCK_FAIL_REPO.
 const resticStubScript = `#!/bin/sh
 printf '%s\n' "$*" >> "$RESTIC_STUB_LOG"
 cmd="$1"
@@ -39,6 +43,7 @@ if [ -n "$RESTIC_STUB_FAIL_CMD" ] && [ "$cmd" = "$RESTIC_STUB_FAIL_CMD" ]; then
 fi
 case "$cmd" in
   backup)
+    if [ -n "$RESTIC_STUB_BACKUP_SLEEP" ]; then exec sleep "$RESTIC_STUB_BACKUP_SLEEP"; fi
     printf '{"message_type":"summary","snapshot_id":"1111111111111111111111111111111111111111111111111111111111111111","files_new":1,"total_files_processed":1}\n'
     ;;
   snapshots)
@@ -50,12 +55,23 @@ case "$cmd" in
     printf '{"message_type":"node","name":"sample.txt","type":"file","path":"/stub/data/sample.txt","size":11}\n'
     ;;
   dump)
+    if [ -n "$RESTIC_STUB_DUMP_SLEEP" ]; then sleep "$RESTIC_STUB_DUMP_SLEEP"; fi
     printf 'sample-content'
     ;;
   forget)
     if [ -n "$RESTIC_STUB_FORGET" ]; then printf '%s' "$RESTIC_STUB_FORGET"; else printf '[]'; fi
     ;;
   prune)
+    ;;
+  list)
+    if [ -n "$RESTIC_STUB_LOCK_IDS" ]; then printf '%s\n' $RESTIC_STUB_LOCK_IDS; fi
+    ;;
+  cat)
+    printf '{"time":"%s","exclusive":false,"hostname":"%s","username":"root","pid":4242}\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$RESTIC_STUB_LOCK_HOST"
+    ;;
+  unlock)
+    printf '%s\n' "$RESTIC_REPOSITORY" >> "$RESTIC_STUB_LOG.unlock"
+    if [ "$RESTIC_REPOSITORY" = "$RESTIC_STUB_UNLOCK_FAIL_REPO" ]; then echo "stub: simulated unlock failure" >&2; exit 1; fi
     ;;
   *)
     echo "unknown stub restic command: $cmd" >&2
@@ -69,7 +85,8 @@ exit 0
 //
 // A fake docker CLI. Logs every invocation to $DOCKER_STUB_LOG,
 // sleeps $DOCKER_STUB_SLEEP seconds first when set (for cancellation
-// tests), and answers `docker exec ...` with $DOCKER_STUB_DUMP
+// tests; DOCKER_STUB_STOP_SLEEP delays only `docker stop`), and
+// answers `docker exec ...` with $DOCKER_STUB_DUMP
 // (defaulting to a small SQL statement) on stdout.
 const dockerStubScript = `#!/bin/sh
 printf '%s\n' "$*" >> "$DOCKER_STUB_LOG"
@@ -89,7 +106,13 @@ while [ $# -gt 0 ]; do
   esac
 done
 cmd="$1"
+if [ "$cmd" = stop ] && [ -n "$DOCKER_STUB_STOP_SLEEP" ]; then
+  exec sleep "$DOCKER_STUB_STOP_SLEEP"
+fi
 case "$cmd" in
+  inspect)
+    if [ "$3" = "{{.State.Running}}" ]; then echo true; fi
+    ;;
   exec)
     if [ -n "$DOCKER_STUB_DUMP" ]; then
       printf '%s' "$DOCKER_STUB_DUMP"

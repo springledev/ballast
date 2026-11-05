@@ -53,7 +53,7 @@ without backing anything up.`,
 						return err
 					}
 				}
-				if err := a.ops.PutService(cmd.Context(), s); err != nil {
+				if err := putServiceWarn(cmd.Context(), a, cmd.ErrOrStderr(), s); err != nil {
 					return err
 				}
 				cmd.Printf("%s: saved\n", args[0])

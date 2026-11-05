@@ -6,6 +6,7 @@
       "name": "",
       "parameters": [
         {
+          "kind": "path",
           "name": "path",
           "required": true
         }

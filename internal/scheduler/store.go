@@ -14,7 +14,10 @@ import (
 	"github.com/springledev/ballast/internal/store"
 )
 
-// SetSchedule upserts and enables the cron expression for service.
+// SetSchedule upserts the cron expression for service. A new schedule
+// is created enabled; changing the expression of an existing one keeps
+// it as it was, so saving never re-enables a paused schedule (use
+// SetEnabled to turn it on or off).
 // The expression must parse (spec: invalid schedules must be rejected
 // loudly, not silently skipped later by run-due).
 //
@@ -33,7 +36,7 @@ func SetSchedule(db *sql.DB, service, cronExpr string) error {
 	}
 	_, err := db.Exec(`
 		INSERT INTO schedules (service, cron_expr, enabled, updated_at) VALUES (?, ?, 1, ?)
-		ON CONFLICT(service) DO UPDATE SET cron_expr = excluded.cron_expr, enabled = 1, updated_at = excluded.updated_at`,
+		ON CONFLICT(service) DO UPDATE SET cron_expr = excluded.cron_expr, updated_at = excluded.updated_at`,
 		service, cronExpr, time.Now().UTC().Format(time.RFC3339Nano),
 	)
 	if err != nil {

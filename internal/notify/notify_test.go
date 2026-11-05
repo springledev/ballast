@@ -598,11 +598,59 @@ func TestDefaultMaxAge(t *testing.T) {
 	})
 }
 
-// BenchmarkMaxFiringGap measures the cost of the minute-by-minute scan
-// over cronGapWindow (400 days, ~576,000 Schedule.Matches calls per
-// call to maxFiringGap), to confirm widening the window (finding: a
-// 40-day window undercounted gaps for schedules like "0 3 31 * *")
-// stays cheap. Run with: go test ./internal/notify/ -bench MaxFiringGap -run ^$
+// maxFiringGapByMinute is the original minute-by-minute scan of the
+// cronGapReference window, kept as the reference maxFiringGap must
+// agree with.
+func maxFiringGapByMinute(sched scheduler.Schedule) (gap time.Duration, ok bool) {
+	var last time.Time
+	count := 0
+	end := cronGapReference.Add(cronGapWindow)
+	for t := cronGapReference; !t.After(end); t = t.Add(time.Minute) {
+		if !sched.Matches(t) {
+			continue
+		}
+		count++
+		if count > 1 {
+			if d := t.Sub(last); d > gap {
+				gap = d
+			}
+		}
+		last = t
+	}
+	return gap, count > 1
+}
+
+// TestMaxFiringGapMatchesMinuteScan pins that jumping from firing to
+// firing (spec §22.3, the fast status page) finds exactly the gap the
+// minute-by-minute scan found, so no service's max age changes.
+func TestMaxFiringGapMatchesMinuteScan(t *testing.T) {
+	if testing.Short() {
+		t.Skip("minute-by-minute reference scan skipped in -short mode")
+	}
+	for _, expr := range []string{
+		"* * * * *", "*/15 * * * *", "0 * * * *", "30 */6 * * *", "0 3 * * *",
+		"59 23 * * *", "0 0 * * *", "0 3 * * 1-5", "0 3 * * 1", "0 3 * * 0,6",
+		"0 3 1 * *", "0 3 31 * *", "0 3 29 2 *", "0 3 1 1 *", "0 3 15 * 1",
+		"0 3 */10 * *", "5,35 1-4 * 3-9 *", "0 12 1-7 * 0",
+	} {
+		t.Run(expr, func(t *testing.T) {
+			sched, err := scheduler.ParseCron(expr)
+			if err != nil {
+				t.Fatalf("ParseCron: %v", err)
+			}
+			gotGap, gotOK := maxFiringGap(sched)
+			wantGap, wantOK := maxFiringGapByMinute(sched)
+			if gotGap != wantGap || gotOK != wantOK {
+				t.Errorf("maxFiringGap(%q) = %v, %v; minute scan = %v, %v", expr, gotGap, gotOK, wantGap, wantOK)
+			}
+		})
+	}
+}
+
+// BenchmarkMaxFiringGap measures one maxFiringGap call over the 400-day
+// cronGapWindow. Status derives every service's max age with it, so it
+// must stay far below a millisecond (spec §22.3).
+// Run with: go test ./internal/notify/ -bench MaxFiringGap -run ^$
 func BenchmarkMaxFiringGap(b *testing.B) {
 	sched, err := scheduler.ParseCron("0 3 31 * *")
 	if err != nil {

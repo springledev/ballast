@@ -1,9 +1,12 @@
 <script setup lang="ts">
-import { computed, onMounted, reactive, ref } from "vue";
+import { computed, onMounted, reactive, ref, watch } from "vue";
 
 import { api } from "@/api/client";
 import { channelEvents } from "@/api/types";
 import type { ChannelType, ChannelView, NotificationSettings, Service } from "@/api/types";
+import ListTools from "@/components/ListTools.vue";
+import { COLLAPSE_SAFE_FROM, collapsesGroup, countLights, emptyQuery, filterEntries, groupEntries, initialGroup, needsTools, type ListEntry, type ListQuery } from "@/lib/listView";
+import { worstLight, type Light } from "@/lib/status";
 import { buildChannelInput, defaultNtfyUrl } from "@/lib/channels";
 import { askConfirm } from "@/lib/confirm";
 import { revealOnError } from "@/lib/revealError";
@@ -71,6 +74,26 @@ const error = ref("");
 revealOnError(error);
 const saving = ref<Set<string>>(new Set());
 const saved = ref<Set<string>>(new Set());
+
+// Search, grouping and folding for a long list, as on the Backups page.
+const query = ref<ListQuery>(emptyQuery());
+// Each backup's traffic light; a failed status read only hides the lights.
+const lights = ref<Record<string, Light>>({});
+const entry = (s: Service): ListEntry => ({ name: s.name, type: s.catalog_entry, destination: s.destination, light: lights.value[s.name] });
+const showTools = computed(() => needsTools(services.value.length));
+const hasLights = computed(() => Object.keys(lights.value).length > 0);
+const shown = computed(() => (showTools.value ? filterEntries(services.value, entry, query.value) : services.value));
+const groups = computed(() => groupEntries(shown.value, entry, showTools.value ? query.value.group : "none"));
+const counts = computed(() => countLights(services.value, entry));
+const safeOpen = ref(false);
+const folded = (g: { key: string; items: unknown[] }) => collapsesGroup(g, showTools.value ? query.value : emptyQuery(), safeOpen.value);
+let grouped = false;
+watch([services, lights], () => {
+  if (!grouped && services.value.length && hasLights.value) {
+    grouped = true;
+    query.value = { ...query.value, group: initialGroup(services.value.length, true) };
+  }
+});
 
 // Computed list of service names (for channel form service picker)
 const serviceNames = computed(() => services.value.map((s) => s.name));
@@ -225,6 +248,11 @@ async function load() {
   error.value = "";
   try {
     services.value = await api.listServices();
+    try {
+      lights.value = Object.fromEntries((await api.status()).map((st) => [st.service, worstLight(st)]));
+    } catch {
+      lights.value = {};
+    }
     await Promise.all(
       services.value.map(async (s) => {
         const st = await api.getNotificationSettings(s.name);
@@ -496,8 +524,27 @@ onMounted(() => {
       <router-link class="btn btn-primary" to="/wizard">Set up a backup</router-link>
     </div>
 
-    <ul v-else class="list">
-      <li v-for="s in services" :key="s.name">
+    <template v-else>
+      <ListTools
+        v-if="showTools"
+        v-model="query"
+        :counts="hasLights ? counts : undefined"
+        :groups="hasLights ? ['none', 'status', 'type', 'destination'] : ['none', 'type', 'destination']"
+        :shown="shown.length"
+        :total="services.length"
+        label="backups"
+      />
+      <p v-if="showTools && !shown.length" class="empty">
+        Nothing matches. <button class="btn btn-quiet" type="button" @click="query = emptyQuery()">Show everything</button>
+      </p>
+      <section v-for="g in groups" :key="g.key" class="group" :aria-label="g.label || undefined">
+        <h3 v-if="g.label" class="group-head">{{ g.label }} <span class="muted">{{ g.items.length }}</span></h3>
+        <p v-if="folded(g)" class="group-folded">
+          <button class="btn btn-quiet" type="button" @click="safeOpen = true">Show all {{ g.items.length }} safe backups</button>
+        </p>
+        <button v-else-if="g.key === 'green' && safeOpen && g.items.length > COLLAPSE_SAFE_FROM" class="btn btn-quiet btn-small group-fold" type="button" @click="safeOpen = false">Hide safe backups</button>
+    <ul v-if="g.items.length && !folded(g)" class="list">
+      <li v-for="s in g.items" :key="s.name">
         <form v-if="settings[s.name]" @submit.prevent="save(s.name)">
           <div class="item-title" style="margin-bottom: 0.6rem">{{ s.name }}</div>
           <label class="check">
@@ -533,5 +580,7 @@ onMounted(() => {
         </form>
       </li>
     </ul>
+      </section>
+    </template>
   </template>
 </template>

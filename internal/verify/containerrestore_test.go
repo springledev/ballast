@@ -3,11 +3,15 @@ package verify
 import (
 	"context"
 	"os"
+	"os/exec"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/springledev/ballast/internal/strategy"
+	"github.com/springledev/keel/dockerhost"
+	"github.com/springledev/keel/runner"
 )
 
 // runCheck is a small helper: build the checker through For (so the
@@ -61,7 +65,7 @@ func TestContainerRestorePass(t *testing.T) {
 		// temporary init server before the real one starts).
 		"exec " + name + " pg_isready -q -h 127.0.0.1 -U postgres",
 		"exec -i " + name + " psql -v ON_ERROR_STOP=0 -q -U postgres",
-		"rm --force " + name,
+		"rm --force --volumes " + name,
 	}
 	if len(log) != len(want) {
 		t.Fatalf("docker invocations = %v, want exactly %v", log, want)
@@ -115,7 +119,7 @@ func TestContainerRestoreMySQLDialect(t *testing.T) {
 		"exec " + name + " " + mysqlReadyProbe,
 		"exec " + name + " " + mysqlReadyProbe,
 		"exec -i " + name + " " + mysqlClientProbe,
-		"rm --force " + name,
+		"rm --force --volumes " + name,
 	}
 	for i := range want {
 		if log[i] != want[i] {
@@ -280,7 +284,7 @@ func TestContainerRestoreUnfilteredFailure(t *testing.T) {
 	// The container was still destroyed (spec §7.2 cleanup MUST).
 	log := readStubLog(t, logPath)
 	name := containerName(t, log)
-	if log[len(log)-1] != "rm --force "+name {
+	if log[len(log)-1] != "rm --force --volumes "+name {
 		t.Errorf("last docker invocation = %q, want the guaranteed destroy", log[len(log)-1])
 	}
 }
@@ -323,7 +327,7 @@ func TestContainerRestoreStartFailure(t *testing.T) {
 		t.Errorf("Check() detail = %q, want the start failure", res.Detail)
 	}
 	log := readStubLog(t, logPath)
-	if last := log[len(log)-1]; !strings.HasPrefix(last, "rm --force ") {
+	if last := log[len(log)-1]; !strings.HasPrefix(last, "rm --force --volumes ") {
 		t.Errorf("last docker invocation = %q, want the guaranteed destroy", last)
 	}
 }
@@ -360,7 +364,7 @@ func TestContainerRestoreReadyTimeout(t *testing.T) {
 		t.Errorf("Check() took %s, want it bounded by the readiness timeout", elapsed)
 	}
 	log := readStubLog(t, logPath)
-	if last := log[len(log)-1]; !strings.HasPrefix(last, "rm --force ") {
+	if last := log[len(log)-1]; !strings.HasPrefix(last, "rm --force --volumes ") {
 		t.Errorf("last docker invocation = %q, want the guaranteed destroy", last)
 	}
 }
@@ -435,6 +439,228 @@ func TestContainerRestoreCleanupFailure(t *testing.T) {
 	}
 	if !strings.Contains(res.Warning, "could not be removed") {
 		t.Errorf("Check() warning = %q, want the cleanup failure reported", res.Warning)
+	}
+	if !strings.Contains(res.Warning, "docker rm --force --volumes ballast-verify-") {
+		t.Errorf("Check() warning = %q, want the command that removes it by hand", res.Warning)
+	}
+	if strings.Contains(res.Detail, "destroyed") {
+		t.Errorf("Check() detail = %q, must not claim the container was destroyed", res.Detail)
+	}
+}
+
+// TestContainerRestoreCleanupFailureKeepsVerdict: a failed removal is
+// reported, but never changes why a failed check failed.
+func TestContainerRestoreCleanupFailureKeepsVerdict(t *testing.T) {
+	opts, _, withEnv := stubSetup(t)
+	withEnv("STUB_FAIL_RM=1", "STUB_RESTORE_STDERR=ERROR: boom", "STUB_RESTORE_EXIT=1")
+	artifact := sqlArtifact(t, "database", "SELECT 1;\n")
+
+	res := runCheck(t, opts, "postgres:16", nil, Request{
+		Artifacts: []strategy.Artifact{artifact},
+	})
+	if res.Passed {
+		t.Fatal("Check() passed when the restore failed, want failure")
+	}
+	if !strings.Contains(res.Detail, "ERROR: boom") {
+		t.Errorf("Check() detail = %q, want the restore failure", res.Detail)
+	}
+	if !strings.Contains(res.Warning, "could not be removed") {
+		t.Errorf("Check() warning = %q, want the cleanup failure reported", res.Warning)
+	}
+}
+
+// TestContainerRestoreRemovalIncludesVolumes is the regression test for
+// the leak of one anonymous volume per drill: every exit path that
+// reaches cleanup must ask docker to remove the volumes too.
+func TestContainerRestoreRemovalIncludesVolumes(t *testing.T) {
+	tests := []struct {
+		name string
+		env  []string
+	}{
+		{name: "passed"},
+		{name: "start failed", env: []string{"STUB_FAIL_RUN=1"}},
+		{name: "restore failed", env: []string{"STUB_RESTORE_STDERR=ERROR: boom", "STUB_RESTORE_EXIT=1"}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			opts, logPath, withEnv := stubSetup(t)
+			withEnv(tt.env...)
+			artifact := sqlArtifact(t, "database", "SELECT 1;\n")
+			runCheck(t, opts, "postgres:16", nil, Request{Artifacts: []strategy.Artifact{artifact}})
+
+			log := readStubLog(t, logPath)
+			if last := log[len(log)-1]; !strings.HasPrefix(last, "rm --force --volumes ballast-verify-") {
+				t.Errorf("last docker invocation = %q, want removal with --volumes", last)
+			}
+		})
+	}
+}
+
+// TestContainerRestoreCancelDuringStart: the daemon can finish creating
+// the container after the killed `docker run` and a first removal, so a
+// cancelled start removes the name again. An ordinary start failure has
+// nothing in flight and removes it once.
+func TestContainerRestoreCancelDuringStart(t *testing.T) {
+	opts, logPath, withEnv := stubSetup(t)
+	withEnv("STUB_RUN_SLEEP=30")
+	artifact := sqlArtifact(t, "database", "SELECT 1;\n")
+
+	entry := containerRestoreEntry("postgres:16")
+	checks, err := For(entry, opts)
+	if err != nil {
+		t.Fatalf("For: %v", err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	time.AfterFunc(200*time.Millisecond, cancel)
+	res := checks[0].Check(ctx, Request{Service: entry.Service, Artifacts: []strategy.Artifact{artifact}})
+	if res.Passed {
+		t.Fatal("Check() passed with a cancelled start, want failure")
+	}
+	removals := 0
+	for _, l := range readStubLog(t, logPath) {
+		if strings.HasPrefix(l, "rm --force --volumes ballast-verify-") {
+			removals++
+		}
+	}
+	if want := 1 + len(interruptedStartRemovals); removals != want {
+		t.Errorf("removals = %d, want %d after a cancelled start", removals, want)
+	}
+}
+
+// TestContainerRestoreLeavesNoVolumesRealDocker runs drills against the
+// real daemon and asserts that each one's own container and anonymous
+// volume are gone afterwards, on every exit path. It records the
+// volumes of exactly this drill instead of comparing `docker volume ls`
+// totals, which any other container on the machine would disturb.
+// Skipped without Docker or in -short mode.
+func TestContainerRestoreLeavesNoVolumesRealDocker(t *testing.T) {
+	if testing.Short() {
+		t.Skip("integration test skipped in -short mode")
+	}
+	dockerBin, err := exec.LookPath("docker")
+	if err != nil {
+		t.Skip("docker not installed; skipping integration test")
+	}
+	const image = "postgres:16"
+	if out, err := exec.Command(dockerBin, "pull", image).CombinedOutput(); err != nil {
+		t.Skipf("could not pull %s: %v: %s", image, err, out)
+	}
+
+	dir := t.TempDir()
+	namesLog, volumesLog := filepath.Join(dir, "names"), filepath.Join(dir, "volumes")
+	// The wrapper notes each container's name and volumes as they are
+	// created. MODE=entrypoint makes the start fail after the create;
+	// MODE=exec keeps the real CLI as the process a cancellation kills.
+	wrapper := filepath.Join(dir, "docker")
+	script := `#!/bin/sh
+real='` + dockerBin + `'
+[ "$1" = run ] || exec "$real" "$@"
+prev=; for a in "$@"; do [ "$prev" = --name ] && name=$a; prev=$a; done
+echo "$name" >> '` + namesLog + `'
+[ "$WRAP_MODE" = exec ] && exec "$real" "$@"
+shift
+if [ "$WRAP_MODE" = entrypoint ]; then
+  "$real" run --entrypoint /no/such/binary "$@"; rc=$?
+else
+  "$real" run "$@"; rc=$?
+fi
+"$real" inspect --format '{{range .Mounts}}{{if eq .Type "volume"}}{{println .Name}}{{end}}{{end}}' "$name" >> '` + volumesLog + `'
+exit $rc
+`
+	if err := os.WriteFile(wrapper, []byte(script), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	opts := Options{Runner: &runner.Runner{}, Docker: dockerhost.NewLocal(wrapper)}
+
+	// assertClean fails on anything this drill left behind, and removes
+	// exactly that, so a failure cannot litter the machine.
+	assertClean := func(t *testing.T, wantVolume bool) {
+		t.Helper()
+		names, _ := os.ReadFile(namesLog)
+		for _, name := range strings.Fields(string(names)) {
+			out, err := exec.Command(dockerBin, "ps", "-aq", "--filter", "name=^/"+name+"$").Output()
+			if err != nil {
+				t.Fatalf("docker ps: %v", err)
+			}
+			if len(strings.TrimSpace(string(out))) != 0 {
+				t.Errorf("container %s is still there after the drill", name)
+				_ = exec.Command(dockerBin, "rm", "--force", "--volumes", name).Run()
+			}
+		}
+		data, _ := os.ReadFile(volumesLog)
+		volumes := strings.Fields(string(data))
+		if wantVolume && len(volumes) == 0 {
+			t.Fatal("the drill's anonymous volume was not recorded, so this test proved nothing")
+		}
+		for _, v := range volumes {
+			if exec.Command(dockerBin, "volume", "inspect", v).Run() == nil {
+				t.Errorf("anonymous volume %s is still there after the drill", v)
+				_ = exec.Command(dockerBin, "volume", "rm", v).Run()
+			}
+		}
+		_ = os.Remove(namesLog)
+		_ = os.Remove(volumesLog)
+	}
+
+	entry := containerRestoreEntry(image)
+	check := func(t *testing.T, ctx context.Context, dump string, ready time.Duration, env ...string) Result {
+		t.Helper()
+		checks, err := For(entry, opts)
+		if err != nil {
+			t.Fatalf("For: %v", err)
+		}
+		cr := checks[0].(*ContainerRestore)
+		cr.ReadyTimeout = ready
+		return cr.Check(ctx, Request{Service: entry.Service, Env: env, Artifacts: []strategy.Artifact{sqlArtifact(t, "database", dump)}})
+	}
+	ctx := context.Background()
+
+	t.Run("passed", func(t *testing.T) {
+		if res := check(t, ctx, "SELECT 1;\n", time.Minute); !res.Passed {
+			t.Fatalf("Check() failed: %q", res.Detail)
+		} else if res.Warning != "" {
+			t.Errorf("Check() warning = %q, want none", res.Warning)
+		}
+		assertClean(t, true)
+	})
+	t.Run("restore failed", func(t *testing.T) {
+		if res := check(t, ctx, "THIS IS NOT SQL;\n", time.Minute); res.Passed {
+			t.Fatal("Check() passed on a broken dump, want failure")
+		}
+		assertClean(t, true)
+	})
+	t.Run("readiness failed", func(t *testing.T) {
+		if res := check(t, ctx, "SELECT 1;\n", time.Nanosecond); res.Passed {
+			t.Fatal("Check() passed with no time to start, want failure")
+		}
+		assertClean(t, true)
+	})
+	t.Run("start failed after the create", func(t *testing.T) {
+		if res := check(t, ctx, "SELECT 1;\n", time.Minute, "WRAP_MODE=entrypoint"); res.Passed {
+			t.Fatal("Check() passed with a broken entrypoint, want failure")
+		}
+		assertClean(t, true)
+	})
+	t.Run("cancelled during readiness", func(t *testing.T) {
+		cctx, cancel := context.WithTimeout(ctx, 1500*time.Millisecond)
+		defer cancel()
+		if res := check(t, cctx, "SELECT 1;\n", time.Minute); res.Passed {
+			t.Fatal("Check() passed after cancellation, want failure")
+		}
+		assertClean(t, true)
+	})
+	// These delays land inside the daemon's create on a typical machine.
+	for _, delay := range []time.Duration{50, 70, 90, 110} {
+		t.Run("cancelled during start "+(delay*time.Millisecond).String(), func(t *testing.T) {
+			cctx, cancel := context.WithTimeout(ctx, delay*time.Millisecond)
+			defer cancel()
+			if res := check(t, cctx, "SELECT 1;\n", time.Minute, "WRAP_MODE=exec"); res.Passed {
+				t.Fatal("Check() passed after cancellation, want failure")
+			}
+			time.Sleep(time.Second)
+			assertClean(t, false)
+		})
 	}
 }
 
@@ -572,7 +798,7 @@ func TestContainerRestoreCancelDuringReady(t *testing.T) {
 		t.Errorf("Check() detail = %q, want the readiness failure", res.Detail)
 	}
 	log := readStubLog(t, logPath)
-	if last := log[len(log)-1]; !strings.HasPrefix(last, "rm --force ") {
+	if last := log[len(log)-1]; !strings.HasPrefix(last, "rm --force --volumes ") {
 		t.Errorf("last docker invocation = %q, want cleanup even on cancellation", last)
 	}
 }
@@ -619,7 +845,7 @@ func TestContainerRestoreCancelDuringReadySettleDelay(t *testing.T) {
 		t.Errorf("Check() took %s to notice cancellation, want well under the %s settle delay", elapsed, readySettleDelay)
 	}
 	log := readStubLog(t, logPath)
-	if last := log[len(log)-1]; !strings.HasPrefix(last, "rm --force ") {
+	if last := log[len(log)-1]; !strings.HasPrefix(last, "rm --force --volumes ") {
 		t.Errorf("last docker invocation = %q, want cleanup even on cancellation", last)
 	}
 }

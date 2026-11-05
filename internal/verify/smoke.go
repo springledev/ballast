@@ -10,6 +10,7 @@ import (
 
 	"github.com/springledev/ballast/internal/catalog"
 	"github.com/springledev/ballast/internal/strategy"
+	"github.com/springledev/keel/runner"
 )
 
 // Restart-smoke defaults.
@@ -196,10 +197,26 @@ func (s *RestartSmoke) attempt(ctx context.Context, env []string) (ok, final boo
 	return true, false, "", ""
 }
 
-// probeArgs returns the `docker run` prefix for a helper container that
-// shares the service container's network namespace.
-func (s *RestartSmoke) probeArgs(cmd ...string) []string {
-	return append([]string{"run", "--rm", "--network", "container:" + s.container, s.helper}, cmd...)
+// probeArgs returns the `docker run` prefix for a helper container
+// named name that shares the service container's network namespace.
+func (s *RestartSmoke) probeArgs(name string, cmd ...string) []string {
+	return append([]string{"run", "--rm", "--name", name, "--network", "container:" + s.container, s.helper}, cmd...)
+}
+
+// runProbe runs one helper probe. When the run is stopped meanwhile,
+// killing the docker CLI does not stop the container it started, so
+// the helper is removed on a fresh, bounded context (best effort:
+// "no such container" after --rm already removed it is not a failure,
+// as docker rm -f exits 0).
+func (s *RestartSmoke) runProbe(ctx context.Context, env []string, cmd ...string) (runner.Result, error) {
+	name := "ballast-probe-" + randomSuffix()
+	res, err := s.opts.Runner.Run(ctx, nil, nil, s.opts.Docker.Command(env, s.probeArgs(name, cmd...)...))
+	if err != nil && ctx.Err() != nil {
+		cleanCtx, cancel := context.WithTimeout(context.Background(), cleanupTimeout)
+		defer cancel()
+		_, _ = s.opts.Runner.Run(cleanCtx, nil, nil, s.opts.Docker.Command(env, "rm", "-f", name))
+	}
+	return res, err
 }
 
 // httpStatusLine matches a status line in busybox wget -S output.
@@ -213,8 +230,7 @@ func (s *RestartSmoke) probeHTTP(ctx context.Context, env []string) (bool, bool,
 		path = "/"
 	}
 	url := "http://127.0.0.1:" + strconv.Itoa(s.http.Port) + path
-	res, err := s.opts.Runner.Run(ctx, nil, nil, s.opts.Docker.Command(env,
-		s.probeArgs("wget", "-q", "-S", "-O", "/dev/null", "-T", probeTimeoutSecs, url)...))
+	res, err := s.runProbe(ctx, env, "wget", "-q", "-S", "-O", "/dev/null", "-T", probeTimeoutSecs, url)
 	out := strings.TrimSpace(string(res.Stderr))
 	matches := httpStatusLine.FindAllStringSubmatch(out, -1)
 	if len(matches) == 0 {
@@ -237,8 +253,7 @@ func (s *RestartSmoke) probeHTTP(ctx context.Context, env []string) (bool, bool,
 
 // probeTCP opens a TCP connection to the container's localhost.
 func (s *RestartSmoke) probeTCP(ctx context.Context, env []string) (bool, bool, string, string) {
-	res, err := s.opts.Runner.Run(ctx, nil, nil, s.opts.Docker.Command(env,
-		s.probeArgs("nc", "-z", "-w", probeTimeoutSecs, "127.0.0.1", strconv.Itoa(s.tcp.Port))...))
+	res, err := s.runProbe(ctx, env, "nc", "-z", "-w", probeTimeoutSecs, "127.0.0.1", strconv.Itoa(s.tcp.Port))
 	out := strings.TrimSpace(string(res.Stderr))
 	if err != nil {
 		return false, false, fmt.Sprintf("nothing accepts connections on port %d", s.tcp.Port), out

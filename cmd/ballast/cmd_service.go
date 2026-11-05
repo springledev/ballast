@@ -1,7 +1,9 @@
 package main
 
 import (
+	"context"
 	"fmt"
+	"io"
 	"strings"
 
 	"github.com/springledev/ballast/internal/inventory"
@@ -130,7 +132,7 @@ var serviceAddCmd = &cobra.Command{
 			if len(s.Targets) > 0 {
 				s.Targets[0].Retention = s.Retention
 			}
-			if err := a.ops.PutService(cmd.Context(), s); err != nil {
+			if err := putServiceWarn(cmd.Context(), a, cmd.ErrOrStderr(), s); err != nil {
 				return err
 			}
 			cmd.Printf("%s: configured (catalog entry %s, destination %s)\n", args[0], serviceCatalogEntry, serviceDestination)
@@ -277,7 +279,7 @@ policy.`,
 				if len(s.Targets) > 0 {
 					s.Targets[0].Retention = s.Retention
 				}
-				if err := a.ops.PutService(cmd.Context(), s); err != nil {
+				if err := putServiceWarn(cmd.Context(), a, cmd.ErrOrStderr(), s); err != nil {
 					return err
 				}
 			}
@@ -329,4 +331,15 @@ func retentionWords(r inventory.Retention) string {
 		return fmt.Sprintf("the newest %d, %d daily, %d weekly and %d monthly backups", r.KeepLast, r.KeepDaily, r.KeepWeekly, r.KeepMonthly)
 	}
 	return fmt.Sprintf("%d daily, %d weekly and %d monthly backups", r.KeepDaily, r.KeepWeekly, r.KeepMonthly)
+}
+
+// putServiceWarn saves a service through the checked path and prints
+// each warning (such as a folder that does not exist yet) to w, which is
+// stderr, so stdout stays the same and the exit code stays 0.
+func putServiceWarn(ctx context.Context, a *app, w io.Writer, s inventory.Service) error {
+	_, warnings, err := a.ops.PutServiceChecked(ctx, s)
+	for _, msg := range warnings {
+		fmt.Fprintf(w, "warning: %s\n", msg)
+	}
+	return err
 }

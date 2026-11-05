@@ -1,0 +1,6 @@
+{
+  "status": 400,
+  "body": {
+    "error": "limit must be a whole number"
+  }
+}

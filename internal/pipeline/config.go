@@ -50,11 +50,8 @@ func (p *Pipeline) runConfigSnapshot(ctx context.Context, svc inventory.Service)
 	defer p.logNotifyErr(service, m)
 
 	fail := func(cause error) (engine.State, error) {
-		if ctx.Err() != nil {
-			if terr := m.Transition(engine.CANCELLED, "cancelled: Ballast is shutting down"); terr != nil {
-				p.logf("%s: recording cancellation: %v", service, terr)
-			}
-			return engine.CANCELLED, ensureServiceContext(service, ctx.Err())
+		if engine.Cancelled(ctx, cause) {
+			return p.cancelRun(ctx, m, service, cause, targets, "", "")
 		}
 		err := ensureServiceContext(service, cause)
 		detail := p.redact(err.Error())
@@ -65,7 +62,15 @@ func (p *Pipeline) runConfigSnapshot(ctx context.Context, svc inventory.Service)
 		return engine.FAILED, err
 	}
 
-	if err := m.Transition(engine.PREPARING, "preparing"); err != nil {
+	// step moves the run to its next phase, unless it was stopped
+	// meanwhile: no phase starts once a stop has been asked for.
+	step := func(to engine.State, detail string) error {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		return m.Transition(to, detail)
+	}
+	if err := step(engine.PREPARING, "preparing"); err != nil {
 		return fail(err)
 	}
 	if len(targets) == 0 {
@@ -95,7 +100,7 @@ func (p *Pipeline) runConfigSnapshot(ctx context.Context, svc inventory.Service)
 	}
 	defer os.RemoveAll(workDir) //nolint:errcheck // best-effort tidy-up of a private folder
 
-	if err := m.Transition(engine.DUMPING, "reading Proxmox settings"); err != nil {
+	if err := step(engine.DUMPING, "reading Proxmox settings"); err != nil {
 		return fail(err)
 	}
 	snap, err := cl.SnapshotConfig(ctx)
@@ -119,7 +124,7 @@ func (p *Pipeline) runConfigSnapshot(ctx context.Context, svc inventory.Service)
 		return fail(targetsError(targets))
 	}
 
-	if err := m.Transition(engine.UPLOADING, "uploading"); err != nil {
+	if err := step(engine.UPLOADING, "uploading"); err != nil {
 		return fail(err)
 	}
 	p.forEachTarget(targets, func(rt *runTarget) {
@@ -145,7 +150,7 @@ func (p *Pipeline) runConfigSnapshot(ctx context.Context, svc inventory.Service)
 		}
 	}
 
-	if err := m.Transition(engine.VERIFYING, "verifying"); err != nil {
+	if err := step(engine.VERIFYING, "verifying"); err != nil {
 		return fail(err)
 	}
 	// Guests are listed again now, so a guest the snapshot missed is

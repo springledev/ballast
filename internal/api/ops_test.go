@@ -24,6 +24,7 @@ import (
 	"github.com/springledev/ballast/internal/restic"
 	"github.com/springledev/ballast/internal/scheduler"
 	"github.com/springledev/ballast/internal/store"
+	"github.com/springledev/keel/dockerhost"
 	"github.com/springledev/keel/runner"
 	secretpkg "github.com/springledev/keel/secret"
 )
@@ -77,6 +78,7 @@ case "$cmd" in
     ;;
   ls)
     printf '{"message_type":"snapshot","time":"2024-01-01T00:00:00Z","id":"1111111111111111111111111111111111111111111111111111111111111111","short_id":"11111111","hostname":"test","paths":["/stub/data"]}\n'
+    printf '{"message_type":"node","name":"data","type":"dir","path":"/stub/data"}\n'
     printf '{"message_type":"node","name":"sample.txt","type":"file","path":"/stub/data/sample.txt","size":11}\n'
     # STUB_LS_OMIT_DB leaves ballast.db out, as a partial self-backup would.
     if [ -z "$STUB_LS_OMIT_DB" ]; then
@@ -147,6 +149,7 @@ service: folder
 version: 1
 parameters:
   - name: path
+    kind: path
     required: true
 backup:
   strategy: files
@@ -1042,10 +1045,10 @@ func TestOpsRestoreCrossServiceSnapshotRejected(t *testing.T) {
 
 func TestOpsSchedules(t *testing.T) {
 	h := newHarness(t)
-	if err := h.ops.SetSchedule(context.Background(), "svc", "not a cron"); !errors.Is(err, ErrValidation) {
+	if _, err := h.ops.SetSchedule(context.Background(), "svc", "not a cron", nil); !errors.Is(err, ErrValidation) {
 		t.Errorf("SetSchedule with a bad cron = %v, want ErrValidation", err)
 	}
-	if err := h.ops.SetSchedule(context.Background(), "svc", "0 3 * * *"); err != nil {
+	if _, err := h.ops.SetSchedule(context.Background(), "svc", "0 3 * * *", nil); err != nil {
 		t.Fatalf("SetSchedule: %v", err)
 	}
 	list, err := h.ops.ListSchedules(context.Background())
@@ -1856,6 +1859,7 @@ func fromStub(id string) string {
 printf '%%s\n' "$*" >> "$STUB_LOG"
 case "$1" in
   snapshots) printf '[{"time":"2024-01-01T00:00:00Z","id":"%[1]s","short_id":"%[2]s","hostname":"t","tags":["ballast","ballast-service:svc"],"paths":["/d"]}]\n' ;;
+  ls) printf '{"message_type":"snapshot","time":"2024-01-01T00:00:00Z","id":"%[1]s","short_id":"%[2]s","hostname":"t","paths":["/d"]}\n{"message_type":"node","name":"d","type":"dir","path":"/d"}\n' ;;
   restore) exit 0 ;;
   *) exit 0 ;;
 esac
@@ -2084,5 +2088,252 @@ func TestRunningServicesCountsAHeldLockAfterTheRunFinished(t *testing.T) {
 	got, err = h.ops.RunningServices(context.Background())
 	if err != nil || len(got) != 0 {
 		t.Fatalf("after the lock was released RunningServices = %v, %v; want none", got, err)
+	}
+}
+
+// TestPutService_FolderPath checks that the service layer trims a path
+// parameter, refuses an empty or relative one, and saves (with a
+// warning) an absolute folder that does not exist yet.
+func TestPutService_FolderPath(t *testing.T) {
+	existing := t.TempDir()
+	missing := filepath.Join(existing, "not-mounted-yet")
+	tests := []struct {
+		name         string
+		path         string
+		wantErr      bool
+		wantPath     string
+		wantWarnings int
+	}{
+		{name: "relative", path: "data", wantErr: true},
+		{name: "dot relative", path: "./x", wantErr: true},
+		{name: "empty after trim", path: "   ", wantErr: true},
+		{name: "trailing space trimmed", path: existing + " ", wantPath: existing},
+		{name: "missing absolute path warns", path: missing, wantPath: missing, wantWarnings: 1},
+		{name: "existing path no warning", path: existing, wantPath: existing},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			h := newHarness(t)
+			h.addDestination("local")
+			saved, warnings, err := h.ops.PutServiceChecked(context.Background(), inventory.Service{
+				Name: "docs", CatalogEntry: "folder", Destination: "local", Params: map[string]string{"path": tt.path},
+			})
+			if tt.wantErr {
+				if !errors.Is(err, ErrValidation) {
+					t.Fatalf("err = %v, want ErrValidation", err)
+				}
+				if _, gerr := inventory.GetService(h.ops.DB, "docs"); gerr == nil {
+					t.Error("service was saved despite the bad path")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("PutServiceChecked: %v", err)
+			}
+			if saved.Params["path"] != tt.wantPath {
+				t.Errorf("returned path = %q, want %q", saved.Params["path"], tt.wantPath)
+			}
+			got, err := inventory.GetService(h.ops.DB, "docs")
+			if err != nil || got.Params["path"] != tt.wantPath {
+				t.Errorf("stored path = %q (%v), want %q", got.Params["path"], err, tt.wantPath)
+			}
+			if len(warnings) != tt.wantWarnings {
+				t.Fatalf("warnings = %v, want %d", warnings, tt.wantWarnings)
+			}
+			if tt.wantWarnings == 1 && !strings.Contains(warnings[0], tt.wantPath) {
+				t.Errorf("warning %q should name %q", warnings[0], tt.wantPath)
+			}
+		})
+	}
+}
+
+// TestPutService_NonPathParamUntouched: a parameter without kind: path
+// keeps its value exactly (no trimming, no checks).
+func TestPutService_NonPathParamUntouched(t *testing.T) {
+	h := newHarness(t)
+	h.addDestination("local")
+	yaml := strings.Replace(folderEntryYAML, "    kind: path\n", "", 1)
+	fsys := fstest.MapFS{"folder.yaml": &fstest.MapFile{Data: []byte(yaml)}}
+	reg, err := catalog.LoadRegistry(fsys, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	h.ops.Catalog = reg
+	saved, warnings, err := h.ops.PutServiceChecked(context.Background(), inventory.Service{
+		Name: "docs", CatalogEntry: "folder", Destination: "local", Params: map[string]string{"path": "rel "},
+	})
+	if err != nil || len(warnings) != 0 || saved.Params["path"] != "rel " {
+		t.Fatalf("got %q, %v, %v; want untouched value, no warnings", saved.Params["path"], warnings, err)
+	}
+}
+
+// TestPutService_RemoteHostPathWarns: files paths are read on the
+// Ballast machine whatever the Docker host, so a missing folder warns
+// for a remote-host service too.
+func TestPutService_RemoteHostPathWarns(t *testing.T) {
+	h := newHarness(t)
+	h.addDestination("local")
+	if _, err := inventory.PutDockerHost(h.ops.DB, dockerhost.Host{Name: "nas", Kind: dockerhost.RemoteSSH, Address: "me@nas"}); err != nil {
+		t.Fatal(err)
+	}
+	h.ops.DockerHosts = sshHostResolver(t, writeDockerStub(t, versionDockerStub))
+	missing := filepath.Join(t.TempDir(), "nfs-not-mounted")
+	_, warnings, err := h.ops.PutServiceChecked(context.Background(), inventory.Service{
+		Name: "docs", CatalogEntry: "folder", Destination: "local", DockerHost: "nas", Params: map[string]string{"path": missing},
+	})
+	if err != nil || len(warnings) != 1 {
+		t.Fatalf("warnings = %v, err = %v; want 1 warning", warnings, err)
+	}
+}
+
+func TestOpsSetScheduleNextRun(t *testing.T) {
+	// Monday 2026-11-02 12:00 UTC; "0 3 * * *" next fires Tuesday 03:00.
+	now := time.Date(2026, 11, 2, 12, 0, 0, 0, time.UTC)
+	yes, no := true, false
+	tests := []struct {
+		name        string
+		pauseFirst  bool
+		enabled     *bool
+		wantEnabled bool
+		wantNext    bool
+	}{
+		{"new schedule is enabled with a next run", false, nil, true, true},
+		{"paused stays paused, no next run", true, nil, false, false},
+		{"explicit true turns a paused one on", true, &yes, true, true},
+		{"explicit false pauses an enabled one", false, &no, false, false},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			h := newHarness(t)
+			h.ops.Now = func() time.Time { return now }
+			ctx := context.Background()
+			if tc.pauseFirst {
+				if _, err := h.ops.SetSchedule(ctx, "svc", "0 4 * * *", nil); err != nil {
+					t.Fatalf("SetSchedule: %v", err)
+				}
+				if err := h.ops.SetScheduleEnabled(ctx, "svc", false); err != nil {
+					t.Fatalf("SetScheduleEnabled: %v", err)
+				}
+			}
+			got, err := h.ops.SetSchedule(ctx, "svc", "0 3 * * *", tc.enabled)
+			if err != nil {
+				t.Fatalf("SetSchedule: %v", err)
+			}
+			if got.Enabled != tc.wantEnabled || got.Cron != "0 3 * * *" || got.Service != "svc" {
+				t.Errorf("SetSchedule = %+v, want enabled=%v", got, tc.wantEnabled)
+			}
+			want := time.Date(2026, 11, 3, 3, 0, 0, 0, time.UTC)
+			switch {
+			case tc.wantNext && (got.NextRun == nil || !got.NextRun.Equal(want)):
+				t.Errorf("NextRun = %v, want %v", got.NextRun, want)
+			case !tc.wantNext && got.NextRun != nil:
+				t.Errorf("NextRun = %v, want nil while paused", got.NextRun)
+			}
+			g, err := h.ops.GetSchedule(ctx, "svc")
+			if err != nil || g.Enabled != tc.wantEnabled || (g.NextRun != nil) != tc.wantNext {
+				t.Errorf("GetSchedule = %+v, %v; want enabled=%v, next run present=%v", g, err, tc.wantEnabled, tc.wantNext)
+			}
+			l, err := h.ops.ListSchedules(ctx)
+			if err != nil || len(l) != 1 || (l[0].NextRun != nil) != tc.wantNext {
+				t.Errorf("ListSchedules = %+v, %v; want next run present=%v", l, err, tc.wantNext)
+			}
+		})
+	}
+}
+
+func TestOpsSetScheduleDueNow(t *testing.T) {
+	loc := time.UTC
+	tue12 := time.Date(2026, 11, 3, 12, 0, 0, 0, loc)
+	tue02 := time.Date(2026, 11, 3, 2, 0, 0, 0, loc)
+	tests := []struct {
+		name    string
+		now     time.Time
+		fired   time.Time
+		first   string
+		pause   bool
+		cron    string
+		enabled *bool
+		wantDue bool
+	}{
+		{"paused over a missed slot, then enabled", tue12, time.Date(2026, 10, 31, 3, 0, 0, 0, loc), "0 3 * * *", true, "0 3 * * *", ptrBool(true), true},
+		{"moved earlier over a slot already passed", tue02, time.Date(2026, 11, 2, 3, 0, 0, 0, loc), "0 3 * * *", false, "0 1 * * *", nil, true},
+		{"just fired, not due", tue12, time.Date(2026, 11, 3, 3, 0, 0, 0, loc), "0 3 * * *", false, "0 3 * * *", nil, false},
+		{"paused is never due", tue12, time.Date(2026, 10, 31, 3, 0, 0, 0, loc), "0 3 * * *", true, "0 3 * * *", nil, false},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			h := newHarness(t)
+			h.ops.Now = func() time.Time { return tc.now }
+			ctx := context.Background()
+			if _, err := h.ops.SetSchedule(ctx, "svc", tc.first, nil); err != nil {
+				t.Fatal(err)
+			}
+			if err := scheduler.MarkFired(h.ops.DB, "svc", tc.fired); err != nil {
+				t.Fatal(err)
+			}
+			if tc.pause {
+				if err := h.ops.SetScheduleEnabled(ctx, "svc", false); err != nil {
+					t.Fatal(err)
+				}
+			}
+			got, err := h.ops.SetSchedule(ctx, "svc", tc.cron, tc.enabled)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got.DueNow != tc.wantDue {
+				t.Errorf("DueNow = %v, want %v (%+v)", got.DueNow, tc.wantDue, got)
+			}
+			if !tc.wantDue && got.DueNow {
+				t.Errorf("unexpected DueNow")
+			}
+		})
+	}
+}
+
+func ptrBool(b bool) *bool { return &b }
+
+// TestRestoreIsRelativeToTheBackupRoot: a snapshot of a single folder is
+// restored from that folder (so files land directly under the target),
+// and an include path is rewritten to be relative to it.
+func TestRestoreIsRelativeToTheBackupRoot(t *testing.T) {
+	h := newHarness(t)
+	h.addDestination("local")
+	if err := inventory.PutService(h.ops.DB, inventory.Service{Name: "svc", CatalogEntry: "folder", Destination: "local"}); err != nil {
+		t.Fatalf("PutService: %v", err)
+	}
+	to := filepath.Join(t.TempDir(), "out")
+	req := RestoreRequest{Service: "svc", To: to, Paths: []string{"/stub/data/sample.txt"}}
+	if err := h.ops.Restore(context.Background(), req); err != nil {
+		t.Fatalf("Restore: %v", err)
+	}
+	var got string
+	for _, line := range h.resticInvocations(t) {
+		if strings.Contains(line, "restore") {
+			got = line
+		}
+	}
+	for _, want := range []string{":/stub/data", "--include /sample.txt"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("restore argv = %q, want it to contain %q", got, want)
+		}
+	}
+}
+
+// TestUserMessage: internal prefixes are dropped from text shown to a
+// person; messages without them are left alone.
+func TestUserMessage(t *testing.T) {
+	tests := []struct{ name, in, want string }{
+		{"service prefix", "service notes: invalid input: restore requires a target directory (--to)", "restore requires a target directory (--to)"},
+		{"project prefix", "project web: invalid input: could not restore: a, b", "could not restore: a, b"},
+		{"bare marker", "invalid input: a project name is required", "a project name is required"},
+		{"nested", "service x: invalid input: restore target \"rel\" must be an absolute path", "restore target \"rel\" must be an absolute path"},
+		{"no marker kept", "service notes: restic exploded", "service notes: restic exploded"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := UserMessage(tt.in); got != tt.want {
+				t.Errorf("UserMessage(%q) = %q, want %q", tt.in, got, tt.want)
+			}
+		})
 	}
 }

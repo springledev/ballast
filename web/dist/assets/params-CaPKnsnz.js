@@ -1,1 +1,0 @@
-function i(t,a){const r=a??"",e=t.prompt||t.name;return t.required&&!r.trim()?`Fill in "${e}".`:r&&/absolute path/i.test(t.prompt??"")&&!r.startsWith("/")?`Use a full path that starts with /, like /srv/data. "${r}" is relative.`:""}export{i as c};

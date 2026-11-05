@@ -5,6 +5,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -383,9 +384,9 @@ func TestRestartSmokeHTTPProbeArgs(t *testing.T) {
 
 	log := readStubLog(t, logPath)
 	wantInspect := "inspect --format {{.State.Status}}|{{if .State.Health}}{{.State.Health.Status}}{{end}} svc_app"
-	wantWget := "run --rm --network container:svc_app " + strategy.DefaultVolumeHelperImage +
-		" wget -q -S -O /dev/null -T 5 http://127.0.0.1:8080/health"
-	if len(log) != 2 || log[0] != wantInspect || log[1] != wantWget {
+	wantWget := regexp.MustCompile(`^run --rm --name ballast-probe-[0-9a-f]+ --network container:svc_app ` +
+		regexp.QuoteMeta(strategy.DefaultVolumeHelperImage) + ` wget -q -S -O /dev/null -T 5 http://127\.0\.0\.1:8080/health$`)
+	if len(log) != 2 || log[0] != wantInspect || !wantWget.MatchString(log[1]) {
 		t.Fatalf("docker invocations = %v, want exactly [%q, %q]", log, wantInspect, wantWget)
 	}
 }
@@ -406,10 +407,11 @@ func TestRestartSmokeTCPProbeArgs(t *testing.T) {
 	}
 
 	log := readStubLog(t, logPath)
-	wantNC := "run --rm --network container:svc_app " + strategy.DefaultVolumeHelperImage +
-		" nc -z -w 5 127.0.0.1 8080"
-	if len(log) != 2 || log[1] != wantNC {
-		t.Fatalf("docker invocations = %v, want the second one to be %q", log, wantNC)
+	// The helper is named so a stopped run can remove exactly it.
+	wantNC := regexp.MustCompile(`^run --rm --name ballast-probe-[0-9a-f]+ --network container:svc_app ` +
+		regexp.QuoteMeta(strategy.DefaultVolumeHelperImage) + ` nc -z -w 5 127\.0\.0\.1 8080$`)
+	if len(log) != 2 || !wantNC.MatchString(log[1]) {
+		t.Fatalf("docker invocations = %v, want the second one to match %q", log, wantNC)
 	}
 }
 
