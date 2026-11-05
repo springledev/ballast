@@ -11,12 +11,12 @@ import (
 	"testing"
 	"time"
 
+	"github.com/spf13/cobra"
 	"github.com/springledev/ballast/internal/api"
 	"github.com/springledev/ballast/internal/engine"
 	"github.com/springledev/ballast/internal/progress"
 	"github.com/springledev/ballast/internal/scheduler"
 	"github.com/springledev/ballast/internal/store"
-	"github.com/spf13/cobra"
 )
 
 func TestStatusCommandNoServices(t *testing.T) {

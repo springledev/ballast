@@ -4,8 +4,8 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/springledev/ballast/internal/config"
 	"github.com/spf13/cobra"
+	"github.com/springledev/ballast/internal/config"
 )
 
 var configCmd = &cobra.Command{Use: "config", Short: "Inspect Ballast's configuration"}

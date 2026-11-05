@@ -5,8 +5,8 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/springledev/ballast/internal/catalog"
 	"github.com/spf13/cobra"
+	"github.com/springledev/ballast/internal/catalog"
 )
 
 var catalogCmd = &cobra.Command{Use: "catalog", Short: "Browse the service catalog"}

@@ -22,12 +22,12 @@ import (
 	"testing"
 	"time"
 
+	"github.com/spf13/cobra"
 	"github.com/springledev/ballast/internal/engine"
 	"github.com/springledev/ballast/internal/heartbeat"
 	"github.com/springledev/ballast/internal/inventory"
 	"github.com/springledev/ballast/internal/scheduler"
 	"github.com/springledev/ballast/internal/store"
-	"github.com/spf13/cobra"
 )
 
 func TestVersionCmdPrintsVersion(t *testing.T) {

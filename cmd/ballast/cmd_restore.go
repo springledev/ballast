@@ -1,8 +1,8 @@
 package main
 
 import (
-	"github.com/springledev/ballast/internal/api"
 	"github.com/spf13/cobra"
+	"github.com/springledev/ballast/internal/api"
 )
 
 var (
