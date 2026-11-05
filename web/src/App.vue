@@ -3,6 +3,7 @@ import { onMounted, ref, watch } from "vue";
 import { useRoute } from "vue-router";
 
 import AppIcon from "@/components/AppIcon.vue";
+import BrandMark from "@/components/BrandMark.vue";
 import ConfirmDialog from "@/components/ConfirmDialog.vue";
 import ConnectGate from "@/components/ConnectGate.vue";
 import { api } from "@/api/client";
@@ -90,10 +91,7 @@ onMounted(checkSession);
     <a class="skip-link" href="#main" @click="skipToMain">Skip to content</a>
     <header class="topbar">
       <router-link to="/dashboard" class="brand" aria-label="Ballast overview">
-        <svg width="24" height="24" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-          <path d="M3 14h18l-2.5 5.5h-13L3 14Z" fill="currentColor" />
-          <path d="M12 3v11M12 3l5 7h-5" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round" />
-        </svg>
+        <BrandMark />
         Ballast
       </router-link>
       <router-link class="btn btn-primary btn-small" to="/wizard">
@@ -103,10 +101,7 @@ onMounted(checkSession);
 
     <nav class="sidebar" aria-label="Main">
       <router-link to="/dashboard" class="brand">
-        <svg width="24" height="24" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-          <path d="M3 14h18l-2.5 5.5h-13L3 14Z" fill="currentColor" />
-          <path d="M12 3v11M12 3l5 7h-5" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round" />
-        </svg>
+        <BrandMark />
         Ballast
       </router-link>
       <router-link class="nav-cta" to="/wizard"><AppIcon name="plus" :size="18" /> Set up a backup</router-link>

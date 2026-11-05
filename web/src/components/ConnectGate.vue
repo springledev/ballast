@@ -3,6 +3,7 @@ import { ref } from "vue";
 
 import { api, ApiError } from "@/api/client";
 import { freshKey } from "@/api/auth";
+import BrandMark from "@/components/BrandMark.vue";
 
 const emit = defineEmits<{ (e: "signed-in"): void }>();
 const input = ref(freshKey.value);
@@ -38,6 +39,7 @@ async function connect() {
 <template>
   <div class="center-screen">
     <form class="panel" style="max-width: 460px; width: 100%" @submit.prevent="connect">
+      <BrandMark :size="56" />
       <h2>Sign in to Ballast</h2>
       <div v-if="freshKey" class="notice notice--ok" role="status">
         <p style="margin-top: 0">Your new access key. Save it now — it won't be shown again.</p>

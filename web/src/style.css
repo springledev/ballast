@@ -221,6 +221,17 @@ h3 {
   flex-shrink: 0;
 }
 
+/* The logo's navy matches the light theme's bar, so a faint ring keeps its outline. */
+.brand .brand-mark {
+  border-radius: 22%;
+  box-shadow: 0 0 0 1px rgb(255 255 255 / 0.22);
+}
+
+.center-screen .brand-mark {
+  display: block;
+  margin-bottom: 0.75rem;
+}
+
 .topbar .btn-primary {
   background: #fff;
   border-color: #fff;
