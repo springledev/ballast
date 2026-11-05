@@ -23,6 +23,8 @@ The paths below are the ones `ballast install` uses (`/var/lib/ballast` for data
    ballast wait-idle --timeout 30m
    ```
 
+   If a backup is running and you would rather stop it than wait, run `ballast cancel <service>`: the run is recorded as cancelled and the last good backup is kept.
+
    This returns as soon as nothing is running. A backup counts as running until Ballast has finished with it completely, including the tidy-up of old snapshots that follows a finished backup (on a remote destination that can take a while). It exits with an error if something is still running after 30 minutes. To only look, without waiting, use `ballast status --running`: it prints what is running and exits with 1 if anything is, or prints "Nothing is running." and exits with 0.
 
 ## Upgrade
@@ -48,7 +50,7 @@ The paths below are the ones `ballast install` uses (`/var/lib/ballast` for data
    sudo install -m 0755 bin/ballast /usr/local/bin/ballast
    ```
 
-   To build the new program from source, run `make` in the Ballast folder: it writes `bin/ballast`. `make` stamps the version from `git describe --tags --always --dirty`, so a build from a tagged release says `v0.5.0`, and a build from any other commit says the commit it came from (with `-dirty` added if you changed files).
+   Get the new program by building it from source (there is no packaged download yet): update your copy of the Ballast code to the version you want (for example `git pull`, or `git checkout` a release tag), then run `make` in the Ballast folder: it writes `bin/ballast`. `make` stamps the version from `git describe --tags --always --dirty`, so a build from a tagged release says `v0.5.0`, and a build from any other commit says the commit it came from (with `-dirty` added if you changed files).
 
 4. Start it and check:
 
@@ -58,7 +60,9 @@ The paths below are the ones `ballast install` uses (`/var/lib/ballast` for data
    ballast doctor
    ```
 
-   `doctor` should now show the new Ballast version, a database version the same as or higher than before, and no new red lines. Look at the dashboard (or `ballast status`) the next morning to see that the scheduled backups ran and are green.
+   `doctor` should now show the new Ballast version, a database version the same as or higher than before, and no new red lines. Look at the dashboard (or `ballast status`) the next morning to see that the scheduled backups ran and are green. For a check you can script, `ballast status --check` exits with 0 when every service is green. `ballast runs <service>` (or the **History** button on the dashboard) lists the past backups of one service.
+
+   You do not need to sign in to the web UI again. Sign-ins are saved in the database, so restarting or upgrading Ballast no longer signs anyone out (they last up to 30 days). If you go back to an older version below, you may have to sign in again.
 
 ## If something is wrong: going back
 
@@ -78,7 +82,7 @@ Each database change says in its comment (in `internal/store/migrations`) whethe
 
 ## For maintainers: tagging a release
 
-A release is a git tag, and tagging is something the maintainer does by hand; nothing in the code does it:
+This section is only for the people who publish Ballast; you do not need it to upgrade. A release is a git tag, and tagging is something the maintainer does by hand; nothing in the code does it:
 
 ```bash
 git tag v0.5.0

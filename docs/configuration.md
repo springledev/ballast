@@ -141,15 +141,20 @@ and `ballast run-due` (for a systemd timer or plain cron) both read
 the same schedule table, so which one you use doesn't change when
 jobs run.
 
-- **A brand-new schedule backs the service up once at the very next
-  `run-due` sweep** (or the next tick of the built-in scheduler),
-  regardless of what the cron expression says, and only then settles
-  into following that expression. This is deliberate: it's the "prove
-  it works right now" moment, and it means a service is never left
-  waiting days for its first backup just because its schedule happens
-  to be a weekly one. Changing an *existing* schedule's cron
-  expression does **not** trigger this immediate run — it only changes
-  when future backups happen.
+- **A service that has never been backed up is backed up at the very
+  next `run-due` sweep** (or the next tick of the built-in scheduler)
+  once it has a schedule, regardless of what the cron expression says,
+  and only then settles into following that expression. This means a
+  new service is never left waiting days for its first backup just
+  because its schedule happens to be a weekly one. A service that was
+  backed up recently is not due straight away, and changing a
+  schedule's cron expression never starts a backup: it only changes
+  when future backups happen. `ballast schedule set` and `ballast
+  schedule list` show when each schedule runs next (`Next run: ...`,
+  or `Runs at the next check, then ...` if one is due now).
+- **`ballast schedule disable <service>` pauses a schedule.** It shows
+  as `paused` in `schedule list` and never runs until you run
+  `ballast schedule enable <service>`. The cron expression is kept.
 - Day-of-month and day-of-week follow classic (Vixie) cron behaviour:
   when *either* field is restricted to specific values, a date matches
   if **either** field matches (not both) — except that a field

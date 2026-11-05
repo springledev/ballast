@@ -66,7 +66,9 @@ Other useful commands:
 ```bash
 bin/ballast version        # print the version
 bin/ballast doctor         # check restic, Docker hosts, destinations, disk space
-bin/ballast status         # show backup status
+bin/ballast status         # show backup status (add --check for a script-friendly exit code)
+bin/ballast runs <service> # past backups of one service (the web UI calls this History)
+bin/ballast cancel <service> # stop a running backup; the last good backup is kept
 bin/ballast serve          # serve the web UI and REST API
 bin/ballast --help         # all commands
 ```
