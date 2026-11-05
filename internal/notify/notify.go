@@ -1,7 +1,10 @@
 // Package notify handles notifications for backup events: job failure,
 // verification failure, freshness breaches, and success heartbeats.
 //
-// Supported channels: ntfy (primary), generic HTTP webhook.
+// Supported channels: ntfy (primary), generic HTTP webhook, email. The
+// delivery itself is github.com/springledev/keel/notify; this package
+// adds tiers, routing, DB-backed channel config and the Ballast event
+// formatters.
 // Per-tier isolation (Phase 2) must preserve notification content
 // separation so a secondary-tier failure doesn't mask a primary-tier one
 // (spec §11, §14 step 10).
@@ -12,21 +15,16 @@
 package notify
 
 import (
-	"bytes"
 	"context"
-	"crypto/hmac"
-	"crypto/sha256"
-	"encoding/hex"
-	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"net/http"
-	"net/url"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
+
+	kn "github.com/springledev/keel/notify"
 
 	"github.com/springledev/ballast/internal/scheduler"
 )
@@ -40,8 +38,9 @@ const (
 	neverBackedUpAge = 999 * 24 * time.Hour
 )
 
-// EventType describes the kind of notification being sent.
-type EventType string
+// EventType describes the kind of notification being sent. It is
+// keel's notify.EventType; the Ballast event kinds are defined here.
+type EventType = kn.EventType
 
 const (
 	// EventJobFailure is sent immediately when a job reaches FAILED state.
@@ -54,13 +53,15 @@ const (
 	EventSuccessHeartbeat EventType = "success_heartbeat"
 	// EventTest is the "Ballast test notification" a channel's test-send
 	// button delivers through the very same Send path as real events.
-	EventTest EventType = "test"
+	EventTest EventType = kn.EventTest
 	// EventWeeklyDigest is the optional once-a-week summary of every
 	// service, sent only to channels that opted in.
 	EventWeeklyDigest EventType = "weekly_digest"
 )
 
-// Event describes a notification event.
+// Event describes a notification event: keel's notify.Event plus the
+// backup tier it is about. Notify turns it into the keel event the
+// delivery channels send.
 type Event struct {
 	// Service is the backup service name (e.g. "immich", "vaultwarden").
 	Service string
@@ -103,7 +104,35 @@ func (e Event) ForTier(tier string) Event {
 	return e
 }
 
-// Channel is the interface for a notification delivery mechanism.
+// Title is the notification title ntfy shows: "Ballast test
+// notification", "Ballast weekly digest", or "[service] [tier] type".
+func (e Event) Title() string {
+	switch e.Type {
+	case EventTest:
+		return "Ballast test notification"
+	case EventWeeklyDigest:
+		return "Ballast weekly digest"
+	}
+	return fmt.Sprintf("[%s] [%s] %s", e.Service, e.TierName(), e.Type)
+}
+
+// Notify returns e as the keel notify.Event the delivery channels
+// send, with Title set.
+func (e Event) Notify() kn.Event {
+	return kn.Event{
+		Service:   e.Service,
+		Type:      e.Type,
+		Message:   e.Message,
+		Detail:    e.Detail,
+		Severity:  e.Severity,
+		Timestamp: e.Timestamp,
+		Title:     e.Title(),
+	}
+}
+
+// Channel is the interface for a notification delivery mechanism. It
+// takes a Ballast Event (not keel's) so per-channel routing can filter
+// on the backup tier.
 type Channel interface {
 	// Send delivers the event, returning a non-nil error if delivery
 	// failed. ctx bounds how long delivery may block (e.g. so a
@@ -114,34 +143,12 @@ type Channel interface {
 	Type() string
 }
 
-// clientWithTimeout returns an http.Client with a reasonable timeout.
-func clientWithTimeout() *http.Client {
-	return &http.Client{
-		Timeout: 10 * time.Second,
-	}
-}
+// httpTimeout bounds one ntfy or webhook delivery.
+const httpTimeout = 10 * time.Second
 
-// stripURLSecret removes the request URL from an error returned by
-// http.NewRequestWithContext or (*http.Client).Do.
-//
-// Both wrap failures in a *url.Error carrying the full request URL —
-// for a Channel, that URL is the ntfy topic or webhook URL, a secret
-// read from a root-only credential file (spec rule 2) that must never
-// reach the DB, logs, or an API response. *url.Error.Error() embeds
-// the URL directly, so it can never be logged as-is; this unwraps to
-// url.Error.Err instead, which describes the failure ("connection
-// refused", "no such host", an invalid-URL parse complaint, ...)
-// without repeating the URL that was being requested.
-func stripURLSecret(err error) error {
-	var uerr *url.Error
-	if errors.As(err, &uerr) {
-		return uerr.Err
-	}
-	return err
-}
-
-// NtfyChannel sends notifications via ntfy.sh HTTP POST.
-// Secrets (topic URL) are passed from the caller and never logged.
+// NtfyChannel sends notifications via ntfy.sh HTTP POST, through
+// keel's NtfyChannel. Secrets (topic URL, access token) are passed
+// from the caller and never logged; keel strips the URL from errors.
 type NtfyChannel struct {
 	Topic string // ntfy topic URL from credential file
 	// Secret is the optional access credential for a protected ntfy
@@ -149,85 +156,35 @@ type NtfyChannel struct {
 	// Username is set — that user's password.
 	Secret   string
 	Username string
-	Client   *http.Client // injected for tests; nil defaults to clientWithTimeout()
+	Client   *http.Client // injected for tests; nil uses a 10-second timeout
 }
 
 // NewNtfyChannel creates a channel that sends to the given ntfy topic.
 // topic must be a full URL read from a root-only credential file.
 func NewNtfyChannel(topic string) *NtfyChannel {
-	return &NtfyChannel{
-		Topic:  topic,
-		Client: clientWithTimeout(),
-	}
+	return &NtfyChannel{Topic: topic, Client: &http.Client{Timeout: httpTimeout}}
 }
 
-// Send delivers the event to ntfy.
-//
-// Neither the returned error nor any log line built from it may
-// contain the ntfy topic URL: it is a secret read from a root-only
-// credential file (spec rule 2). See stripURLSecret.
+// Send delivers the event to ntfy, titled with Event.Title.
 func (n *NtfyChannel) Send(ctx context.Context, event Event) error {
-	if n.Topic == "" {
-		return fmt.Errorf("%s: ntfy topic not configured", event.Service)
-	}
-
-	client := n.Client
-	if client == nil {
-		client = clientWithTimeout()
-	}
-
-	// Message body includes all details
-	msgBody := event.Message
-	if event.Detail != "" {
-		msgBody = msgBody + "\n" + event.Detail
-	}
-
-	req, err := http.NewRequestWithContext(ctx, "POST", n.Topic, bytes.NewBufferString(msgBody))
-	if err != nil {
-		return fmt.Errorf("%s: creating ntfy request: %w", event.Service, stripURLSecret(err))
-	}
-
-	// Set headers per ntfy API
-	title := fmt.Sprintf("[%s] [%s] %s", event.Service, event.TierName(), event.Type)
-	switch event.Type {
-	case EventTest:
-		title = "Ballast test notification"
-	case EventWeeklyDigest:
-		title = "Ballast weekly digest"
-	}
-	req.Header.Set("Title", title)
-	switch {
-	case n.Secret != "" && n.Username != "":
-		req.SetBasicAuth(n.Username, n.Secret)
-	case n.Secret != "":
-		req.Header.Set("Authorization", "Bearer "+n.Secret)
-	}
-	req.Header.Set("Priority", priorityFromSeverity(event.Severity))
-
-	resp, err := client.Do(req)
-	if err != nil {
-		return fmt.Errorf("%s: sending to ntfy: %w", event.Service, stripURLSecret(err))
-	}
-	defer resp.Body.Close()
-	// Drain (without keeping) the body so the connection can be reused;
-	// its contents are never included in the error (finding: response
-	// bodies must not be echoed into logs).
-	io.Copy(io.Discard, io.LimitReader(resp.Body, 512)) //nolint:errcheck
-
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return fmt.Errorf("%s: ntfy returned status %d", event.Service, resp.StatusCode)
-	}
-	return nil
+	ch := &kn.NtfyChannel{Topic: n.Topic, Secret: n.Secret, Username: n.Username, Client: n.Client}
+	return ch.Send(ctx, event.Notify())
 }
 
 // Type returns "ntfy".
 func (n *NtfyChannel) Type() string { return "ntfy" }
 
-// WebhookChannel sends notifications via a generic HTTP webhook.
-// Secrets (webhook URL) are passed from the caller and never logged.
+// WebhookSignatureHeader carries "sha256=" and the hex HMAC-SHA256 of
+// the body when a webhook has a signing secret.
+const WebhookSignatureHeader = "X-Ballast-Signature"
+
+// WebhookChannel sends notifications via a generic HTTP webhook,
+// through keel's WebhookChannel. Secrets (webhook URL, signing secret)
+// are passed from the caller and never logged; keel strips the URL
+// from errors.
 type WebhookChannel struct {
 	URL    string       // webhook URL from credential file
-	Client *http.Client // injected for tests; nil defaults to clientWithTimeout()
+	Client *http.Client // injected for tests; nil uses a 10-second timeout
 	// Secret, when set, signs each body: the X-Ballast-Signature header
 	// carries "sha256=" and the hex HMAC-SHA256 of the body.
 	Secret string
@@ -238,96 +195,48 @@ type WebhookChannel struct {
 // NewWebhookChannel creates a channel that POSTs to the given URL.
 // url must be read from a root-only credential file.
 func NewWebhookChannel(url string) *WebhookChannel {
-	return &WebhookChannel{
-		URL:    url,
-		Client: clientWithTimeout(),
-	}
+	return &WebhookChannel{URL: url, Client: &http.Client{Timeout: httpTimeout}}
 }
 
-// webhookPayload is the JSON structure sent to webhooks.
-type webhookPayload struct {
-	Service   string    `json:"service"`
-	Tier      string    `json:"tier"`
-	Type      EventType `json:"type"`
-	Severity  string    `json:"severity"`
-	Message   string    `json:"message"`
-	Detail    string    `json:"detail"`
-	Timestamp time.Time `json:"timestamp"`
+// statusRecorder notes the HTTP status of the response it passes on,
+// so the test-send result can show it.
+type statusRecorder struct {
+	base   http.RoundTripper
+	status *int
+}
+
+// RoundTrip performs the request and records the response status.
+func (s statusRecorder) RoundTrip(r *http.Request) (*http.Response, error) {
+	resp, err := s.base.RoundTrip(r)
+	if err == nil {
+		*s.status = resp.StatusCode
+	}
+	return resp, err
 }
 
 // Send delivers the event as JSON to the webhook URL.
-//
-// Neither the returned error nor any log line built from it may
-// contain the webhook URL: it is a secret read from a root-only
-// credential file (spec rule 2). See stripURLSecret.
 func (w *WebhookChannel) Send(ctx context.Context, event Event) error {
-	if w.URL == "" {
-		return fmt.Errorf("%s: webhook URL not configured", event.Service)
+	hc := http.Client{Timeout: httpTimeout}
+	if w.Client != nil {
+		hc = *w.Client
 	}
-
-	client := w.Client
-	if client == nil {
-		client = clientWithTimeout()
+	base := hc.Transport
+	if base == nil {
+		base = http.DefaultTransport
 	}
-
-	payload := webhookPayload{
-		Service:   event.Service,
-		Tier:      event.TierName(),
-		Type:      event.Type,
-		Severity:  event.Severity,
-		Message:   event.Message,
-		Detail:    event.Detail,
-		Timestamp: event.Timestamp,
-	}
-
-	data, err := json.Marshal(payload)
-	if err != nil {
-		return fmt.Errorf("%s: marshaling webhook payload: %w", event.Service, err)
-	}
-
-	req, err := http.NewRequestWithContext(ctx, "POST", w.URL, bytes.NewReader(data))
-	if err != nil {
-		return fmt.Errorf("%s: creating webhook request: %w", event.Service, stripURLSecret(err))
-	}
-	req.Header.Set("Content-Type", "application/json")
-	if w.Secret != "" {
-		mac := hmac.New(sha256.New, []byte(w.Secret))
-		mac.Write(data)
-		req.Header.Set("X-Ballast-Signature", "sha256="+hex.EncodeToString(mac.Sum(nil)))
-	}
-
+	status := 0
+	hc.Transport = statusRecorder{base: base, status: &status}
+	ch := &kn.WebhookChannel{URL: w.URL, Client: &hc, Secret: w.Secret, SignatureHeader: WebhookSignatureHeader}
 	w.lastStatus = 0
-	resp, err := client.Do(req)
-	if err != nil {
-		return fmt.Errorf("%s: sending webhook: %w", event.Service, stripURLSecret(err))
+	err := ch.Send(ctx, event.Notify())
+	if err == nil || strings.Contains(err.Error(), "webhook returned status") {
+		w.lastStatus = status
 	}
-	defer resp.Body.Close()
-	w.lastStatus = resp.StatusCode
-	// Drain (without keeping) the body so the connection can be reused;
-	// its contents are never included in the error (finding: response
-	// bodies must not be echoed into logs).
-	io.Copy(io.Discard, io.LimitReader(resp.Body, 512)) //nolint:errcheck
-
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return fmt.Errorf("%s: webhook returned status %d", event.Service, resp.StatusCode)
-	}
-	return nil
+	return err
 }
 
 // Type returns "webhook".
 func (w *WebhookChannel) Type() string { return "webhook" }
-
-// priorityFromSeverity maps severity to ntfy priority values.
-func priorityFromSeverity(severity string) string {
-	switch severity {
-	case "error":
-		return "high"
-	case "warning":
-		return "default"
-	default:
-		return "low"
-	}
-}
 
 // formatDuration returns a human-readable duration (e.g. "3 days 2 hours").
 func formatDuration(d time.Duration) string {

@@ -101,7 +101,7 @@ func TestEmailChannelSend(t *testing.T) {
 				t.Fatalf("Send: %v", err)
 			}
 			seen := <-got
-			for _, want := range []string{"MAIL FROM:<ballast@example.com>", "RCPT TO:<me@example.com>", "Subject: [Ballast] immich backup failed", "disk full"} {
+			for _, want := range []string{"MAIL FROM:<ballast@example.com>", "RCPT TO:<me@example.com>", "Subject: [Ballast] immich backup failed", "\r\nService: immich\r\n", "\r\nBackup copy: restic\r\ndisk full\r\n"} {
 				if !strings.Contains(seen, want) {
 					t.Errorf("session missing %q:\n%s", want, seen)
 				}

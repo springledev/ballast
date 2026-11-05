@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -125,11 +126,101 @@ func TestNtfyChannel_PriorityMapping(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.severity, func(t *testing.T) {
-			got := priorityFromSeverity(tt.severity)
+			var got string
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { got = r.Header.Get("Priority") }))
+			defer srv.Close()
+			if err := NewNtfyChannel(srv.URL+"/t").Send(context.Background(), Event{Service: "s", Type: EventJobFailure, Severity: tt.severity}); err != nil {
+				t.Fatal(err)
+			}
 			if got != tt.wantPrio {
-				t.Errorf("priorityFromSeverity(%q) = %q, want %q", tt.severity, got, tt.wantPrio)
+				t.Errorf("Priority for %q = %q, want %q", tt.severity, got, tt.wantPrio)
 			}
 		})
+	}
+}
+
+// TestNtfyTitlesAndBody pins what ntfy users see: the title Ballast
+// has always sent (now via keel's Event.Title) and the body.
+func TestNtfyTitlesAndBody(t *testing.T) {
+	tests := []struct {
+		name      string
+		event     Event
+		wantTitle string
+		wantBody  string
+	}{
+		{"primary tier", Event{Service: "immich", Type: EventJobFailure, Message: "m", Detail: "d"}, "[immich] [restic] job_failure", "m\nd"},
+		{"secondary tier", Event{Service: "immich", Type: EventJobFailure, Message: "m"}.ForTier("rclone"), "[immich] [rclone] job_failure", "[rclone copy] m"},
+		{"test", Event{Service: "ballast", Type: EventTest, Message: "Ballast test notification"}, "Ballast test notification", "Ballast test notification"},
+		{"digest", Event{Service: "ballast", Type: EventWeeklyDigest, Message: "w"}, "Ballast weekly digest", "w"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var title, body string
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				title = r.Header.Get("Title")
+				b, _ := io.ReadAll(r.Body)
+				body = string(b)
+			}))
+			defer srv.Close()
+			if err := NewNtfyChannel(srv.URL+"/t").Send(context.Background(), tt.event); err != nil {
+				t.Fatal(err)
+			}
+			if title != tt.wantTitle || body != tt.wantBody {
+				t.Errorf("title, body = %q, %q; want %q, %q", title, body, tt.wantTitle, tt.wantBody)
+			}
+		})
+	}
+}
+
+// TestWebhookPayloadShape pins the JSON keys a webhook receives and
+// the signature header name.
+func TestWebhookPayloadShape(t *testing.T) {
+	var got map[string]any
+	var sigHeaders []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewDecoder(r.Body).Decode(&got)
+		for k := range r.Header {
+			if strings.Contains(strings.ToLower(k), "signature") {
+				sigHeaders = append(sigHeaders, k)
+			}
+		}
+	}))
+	defer srv.Close()
+	w := NewWebhookChannel(srv.URL)
+	w.Secret = "k"
+	ev := Event{Service: "immich", Type: EventJobFailure, Message: "m", Detail: "d", Severity: "error", Timestamp: time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)}
+	if err := w.Send(context.Background(), ev); err != nil {
+		t.Fatal(err)
+	}
+	want := map[string]any{"service": "immich", "type": "job_failure", "severity": "error", "message": "m", "detail": "d", "timestamp": "2026-01-01T00:00:00Z"}
+	if len(got) != len(want) {
+		t.Errorf("payload keys = %v, want %v", got, want)
+	}
+	for k, v := range want {
+		if got[k] != v {
+			t.Errorf("payload[%q] = %v, want %v", k, got[k], v)
+		}
+	}
+	if len(sigHeaders) != 1 || sigHeaders[0] != "X-Ballast-Signature" {
+		t.Errorf("signature headers = %v, want [X-Ballast-Signature]", sigHeaders)
+	}
+}
+
+func TestWebhookLastStatus(t *testing.T) {
+	for _, code := range []int{http.StatusOK, http.StatusInternalServerError} {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(code) }))
+		w := NewWebhookChannel(srv.URL)
+		w.Client = srv.Client()
+		_ = w.Send(context.Background(), Event{Service: "s"})
+		srv.Close()
+		if w.lastStatus != code {
+			t.Errorf("lastStatus = %d, want %d", w.lastStatus, code)
+		}
+		// A transport failure clears it.
+		_ = w.Send(context.Background(), Event{Service: "s"})
+		if w.lastStatus != 0 {
+			t.Errorf("after a failed connection lastStatus = %d, want 0", w.lastStatus)
+		}
 	}
 }
 

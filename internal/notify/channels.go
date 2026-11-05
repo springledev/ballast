@@ -13,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	kn "github.com/springledev/keel/notify"
 	"github.com/springledev/keel/runner"
 	"github.com/springledev/keel/secret"
 )
@@ -27,7 +28,7 @@ const DefaultNtfyURL = "https://ntfy.sh/"
 
 // ErrInvalidChannel marks a channel definition refused because of what
 // the caller asked for (not a database failure).
-var ErrInvalidChannel = errors.New("invalid notification channel")
+var ErrInvalidChannel = kn.ErrInvalidChannel
 
 // ErrChannelNotFound is returned when no channel has the given name.
 var ErrChannelNotFound = errors.New("notification channel not found")
