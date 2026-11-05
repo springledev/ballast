@@ -1137,7 +1137,7 @@ func TestHeartbeatStopsWhenEverySweepHangs(t *testing.T) {
 	old := sweepRun
 	sweepRun = func(ctx context.Context, _ *app, _ time.Time) error {
 		got := make(chan struct{})
-		go func() { shared.Lock(); shared.Unlock(); close(got) }()
+		go func() { shared.Lock(); close(got); shared.Unlock() }()
 		select {
 		case <-got:
 		case <-ctx.Done(): // shutdown, so the loop can stop
