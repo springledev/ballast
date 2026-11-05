@@ -64,7 +64,7 @@ func (o *Ops) SetupProxmoxConnection(ctx context.Context, req ProxmoxConnectionS
 	} else if existed && c.Credential == "" {
 		c.Credential = prev.Credential
 	}
-	if err := c.Normalize(); err != nil {
+	if err := proxmox.NormalizeConnection(&c); err != nil {
 		return res, fmt.Errorf("%w: %w", ErrValidation, err)
 	}
 	if c.Credential == "" {

@@ -6,6 +6,8 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+
+	kp "github.com/springledev/keel/proxmox"
 )
 
 func TestCheckStorageRoom(t *testing.T) {
@@ -45,7 +47,7 @@ func TestStorageStatusAndCheckAccess(t *testing.T) {
 		}
 	}))
 	defer srv.Close()
-	cl := &Client{Host: srv.URL, TokenID: "x@pve!y", TokenSecret: "z", HTTPClient: srv.Client()}
+	cl := &Client{Client: &kp.Client{Host: srv.URL, TokenID: "x@pve!y", TokenSecret: "z", HTTPClient: srv.Client()}}
 
 	st, err := cl.StorageStatus(context.Background(), "pve1", "ok")
 	if err != nil || st.Total != 100 || st.Used != 40 || st.Avail != 60 {

@@ -7,6 +7,8 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+
+	kp "github.com/springledev/keel/proxmox"
 )
 
 func TestCheckGuestConfig(t *testing.T) {
@@ -96,7 +98,7 @@ func TestVerifyGuestConfig(t *testing.T) {
 				}
 			}))
 			defer srv.Close()
-			cl := &Client{Host: srv.URL, TokenID: "u@pam!t", TokenSecret: "s", HTTPClient: srv.Client()}
+			cl := &Client{Client: &kp.Client{Host: srv.URL, TokenID: "u@pam!t", TokenSecret: "s", HTTPClient: srv.Client()}}
 			got := cl.VerifyGuestConfig(context.Background(), GuestBackupResult{Node: "pve", VMID: 100, Storage: "local", Volume: tt.vol})
 			if got.Passed != tt.want || !strings.Contains(got.Detail, tt.detail) {
 				t.Errorf("got %+v, want passed=%v detail containing %q", got, tt.want, tt.detail)

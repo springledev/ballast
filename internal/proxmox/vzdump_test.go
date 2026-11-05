@@ -11,6 +11,8 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	kp "github.com/springledev/keel/proxmox"
 )
 
 func TestGuestBackupOptionsValidate(t *testing.T) {
@@ -201,7 +203,7 @@ func TestClientBackupGuestHappyPath(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	cl := &Client{Host: srv.URL, TokenID: "x@pve!y", TokenSecret: "z", HTTPClient: srv.Client()}
+	cl := &Client{Client: &kp.Client{Host: srv.URL, TokenID: "x@pve!y", TokenSecret: "z", HTTPClient: srv.Client()}}
 
 	res, err := cl.BackupGuest(context.Background(), GuestBackupOptions{
 		Node:     node,
@@ -294,7 +296,7 @@ func TestClientBackupGuestTaskFails(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	cl := &Client{Host: srv.URL, TokenID: "x@pve!y", TokenSecret: "z", HTTPClient: srv.Client()}
+	cl := &Client{Client: &kp.Client{Host: srv.URL, TokenID: "x@pve!y", TokenSecret: "z", HTTPClient: srv.Client()}}
 
 	res, err := cl.BackupGuest(context.Background(), GuestBackupOptions{
 		Node:     node,
@@ -380,7 +382,7 @@ func TestClientBackupGuestPruneDeleteReturns500(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	cl := &Client{Host: srv.URL, TokenID: "x@pve!y", TokenSecret: "z", HTTPClient: srv.Client()}
+	cl := &Client{Client: &kp.Client{Host: srv.URL, TokenID: "x@pve!y", TokenSecret: "z", HTTPClient: srv.Client()}}
 
 	res, err := cl.BackupGuest(context.Background(), GuestBackupOptions{
 		Node:     node,
@@ -472,7 +474,7 @@ func TestClientBackupGuestKeepLastZero(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	cl := &Client{Host: srv.URL, TokenID: "x@pve!y", TokenSecret: "z", HTTPClient: srv.Client()}
+	cl := &Client{Client: &kp.Client{Host: srv.URL, TokenID: "x@pve!y", TokenSecret: "z", HTTPClient: srv.Client()}}
 
 	res, err := cl.BackupGuest(context.Background(), GuestBackupOptions{
 		Node:     node,
@@ -538,7 +540,7 @@ func TestClientBackupGuestNoNewVolumeAppears(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	cl := &Client{Host: srv.URL, TokenID: "x@pve!y", TokenSecret: "z", HTTPClient: srv.Client()}
+	cl := &Client{Client: &kp.Client{Host: srv.URL, TokenID: "x@pve!y", TokenSecret: "z", HTTPClient: srv.Client()}}
 
 	_, err := cl.BackupGuest(context.Background(), GuestBackupOptions{
 		Node:    node,
@@ -596,7 +598,7 @@ func TestClientBackupGuestContextCancellation(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	cl := &Client{Host: srv.URL, TokenID: "x@pve!y", TokenSecret: "z", HTTPClient: srv.Client()}
+	cl := &Client{Client: &kp.Client{Host: srv.URL, TokenID: "x@pve!y", TokenSecret: "z", HTTPClient: srv.Client()}}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
 	defer cancel()
@@ -634,7 +636,7 @@ func TestClientBackupGuestListDumpsError(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	cl := &Client{Host: srv.URL, TokenID: "x@pve!y", TokenSecret: "z", HTTPClient: srv.Client()}
+	cl := &Client{Client: &kp.Client{Host: srv.URL, TokenID: "x@pve!y", TokenSecret: "z", HTTPClient: srv.Client()}}
 
 	_, err := cl.BackupGuest(context.Background(), GuestBackupOptions{
 		Node:    node,
@@ -675,7 +677,7 @@ func TestClientBackupGuestStartVzdumpError(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	cl := &Client{Host: srv.URL, TokenID: "x@pve!y", TokenSecret: "z", HTTPClient: srv.Client()}
+	cl := &Client{Client: &kp.Client{Host: srv.URL, TokenID: "x@pve!y", TokenSecret: "z", HTTPClient: srv.Client()}}
 
 	_, err := cl.BackupGuest(context.Background(), GuestBackupOptions{
 		Node:    node,
@@ -697,7 +699,7 @@ func TestClientBackupGuestValidationError(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	cl := &Client{Host: srv.URL, TokenID: "x@pve!y", TokenSecret: "z", HTTPClient: srv.Client()}
+	cl := &Client{Client: &kp.Client{Host: srv.URL, TokenID: "x@pve!y", TokenSecret: "z", HTTPClient: srv.Client()}}
 
 	// Invalid options (missing storage)
 	_, err := cl.BackupGuest(context.Background(), GuestBackupOptions{
@@ -735,7 +737,7 @@ func TestTaskStatusAndWaitTask(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	cl := &Client{Host: srv.URL, TokenID: "x@pve!y", TokenSecret: "z", HTTPClient: srv.Client()}
+	cl := &Client{Client: &kp.Client{Host: srv.URL, TokenID: "x@pve!y", TokenSecret: "z", HTTPClient: srv.Client()}}
 
 	err := cl.WaitTask(context.Background(), node, upid, 1*time.Millisecond)
 
@@ -771,7 +773,7 @@ func TestListDumps(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	cl := &Client{Host: srv.URL, TokenID: "x@pve!y", TokenSecret: "z", HTTPClient: srv.Client()}
+	cl := &Client{Client: &kp.Client{Host: srv.URL, TokenID: "x@pve!y", TokenSecret: "z", HTTPClient: srv.Client()}}
 
 	dumps, err := cl.ListDumps(context.Background(), node, storage, vmid)
 
@@ -816,7 +818,7 @@ func TestDeleteDumpURLEscaping(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	cl := &Client{Host: srv.URL, TokenID: "x@pve!y", TokenSecret: "z", HTTPClient: srv.Client()}
+	cl := &Client{Client: &kp.Client{Host: srv.URL, TokenID: "x@pve!y", TokenSecret: "z", HTTPClient: srv.Client()}}
 
 	err := cl.DeleteDump(context.Background(), node, storage, volume, 1*time.Millisecond)
 
@@ -854,7 +856,7 @@ func TestPruneOwnedNeverTouchesForeignDumps(t *testing.T) {
 		_, _ = w.Write(b)
 	}))
 	defer srv.Close()
-	cl := &Client{Host: srv.URL, TokenID: "u@pve!t", TokenSecret: "x", HTTPClient: srv.Client()}
+	cl := &Client{Client: &kp.Client{Host: srv.URL, TokenID: "u@pve!t", TokenSecret: "x", HTTPClient: srv.Client()}}
 	owned := []string{"s:backup/vzdump-lxc-100-d.tar.zst", "s:backup/vzdump-lxc-100-b.tar.zst", "s:backup/vzdump-lxc-100-a.tar.zst", "s:backup/vzdump-lxc-100-vanished.tar.zst"}
 	pruned, gone, err := cl.PruneOwned(context.Background(), "pve", "s", 100, owned, 1, time.Millisecond)
 	if err != nil {
@@ -909,7 +911,7 @@ func TestCreateDump_CancelStopsTask(t *testing.T) {
 				}
 			}))
 			defer srv.Close()
-			cl := &Client{Host: srv.URL, TokenID: "x@pve!y", TokenSecret: "z", HTTPClient: srv.Client()}
+			cl := &Client{Client: &kp.Client{Host: srv.URL, TokenID: "x@pve!y", TokenSecret: "z", HTTPClient: srv.Client()}}
 			ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
 			defer cancel()
 			res, err := cl.CreateDump(ctx, GuestBackupOptions{Node: "pve1", VMID: 100, Storage: "local"}, time.Millisecond)

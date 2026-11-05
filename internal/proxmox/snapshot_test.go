@@ -7,6 +7,8 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+
+	kp "github.com/springledev/keel/proxmox"
 )
 
 func snapshotServer(t *testing.T, denyFirewall bool) *Client {
@@ -32,7 +34,7 @@ func snapshotServer(t *testing.T, denyFirewall bool) *Client {
 		}
 	}))
 	t.Cleanup(srv.Close)
-	return &Client{Host: srv.URL, TokenID: "a@pve!b", TokenSecret: "s", HTTPClient: srv.Client()}
+	return &Client{Client: &kp.Client{Host: srv.URL, TokenID: "a@pve!b", TokenSecret: "s", HTTPClient: srv.Client()}}
 }
 
 func TestSnapshotConfig(t *testing.T) {
