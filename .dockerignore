@@ -1,0 +1,15 @@
+.git
+.github
+.claude
+bin
+coverage.out
+web/node_modules
+go.work
+go.work.sum
+*.db
+*.sqlite
+*.sqlite3
+.env
+.env.*
+*.pem
+*.log
