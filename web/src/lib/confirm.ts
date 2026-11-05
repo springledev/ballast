@@ -10,6 +10,8 @@ export interface ConfirmRequest {
   /** The safe choice's label, focused first; "Cancel" unless the question needs another word. */
   cancelLabel: string;
   resolve: (ok: boolean) => void;
+  /** The element that had focus when the question was asked; focus returns to it afterwards. */
+  opener: HTMLElement | null;
 }
 
 /** The question currently on screen, if any. */
@@ -22,8 +24,10 @@ export const pending = ref<ConfirmRequest | null>(null);
  */
 export function askConfirm(message: string, confirmLabel = "Yes, continue", cancelLabel = "Cancel"): Promise<boolean> {
   pending.value?.resolve(false);
+  const active = typeof document !== "undefined" ? document.activeElement : null;
+  const opener = active instanceof HTMLElement && active !== document.body ? active : null;
   return new Promise((resolve) => {
-    pending.value = { message, confirmLabel, cancelLabel, resolve };
+    pending.value = { message, confirmLabel, cancelLabel, resolve, opener };
   });
 }
 

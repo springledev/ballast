@@ -156,6 +156,10 @@ watch(service, loadFirst);
         <dl class="kv">
           <dt>Run</dt>
           <dd>#{{ detail.id }}, {{ detail.state }}</dd>
+          <template v-if="detail.error">
+            <dt>Full error</dt>
+            <dd><code class="hist-raw">{{ detail.error }}</code></dd>
+          </template>
           <template v-if="detail.snapshot_id">
             <dt>Snapshot</dt>
             <dd><code>{{ detail.snapshot_id.slice(0, 8) }}</code></dd>

@@ -15,6 +15,16 @@ export const lightLabel: Record<Light, string> = {
   none: "No backup yet",
 };
 
+/**
+ * True when a run's recorded state or error says the person (or a
+ * shutdown) stopped it, rather than it breaking. The server records
+ * "CANCELLED" with a "cancelled: ..." reason; the reason is checked too
+ * so a stopped run is never worded as a failure.
+ */
+export function wasCancelled(state?: string, error?: string): boolean {
+  return (state ?? "").toUpperCase() === "CANCELLED" || /^\s*cancel(l)?ed\b/i.test(error ?? "");
+}
+
 /** One sentence describing a tier's state for a person, not a log. */
 export function describeTier(t: TierStatus): string {
   const when = formatRelative(t.last_finished_at);
@@ -28,10 +38,10 @@ export function describeTier(t: TierStatus): string {
     case "amber":
       return `Backed up ${when}, but the check didn't pass. Don't rely on this backup until it's checked again.`;
     case "red":
-      if (t.last_state === "CANCELLED") {
+      if (wasCancelled(t.last_state, t.last_error)) {
         return t.last_finished_at
-          ? `The last backup was stopped before it finished (${when}). The backup before it is kept.`
-          : "The last backup was stopped before it finished. The backup before it is kept.";
+          ? `Last backup was cancelled (${when}). The backup before it is kept.`
+          : "Last backup was cancelled. The backup before it is kept.";
       }
       return t.last_finished_at ? `The last backup failed (${when}).` : "The last backup failed.";
     case "running":

@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import type { RunSummary, VerificationRecord } from "@/api/types";
 import {
+  plainReason,
   checkOutcome,
   failureSentence,
   formatRunDuration,
@@ -31,6 +32,8 @@ describe("runStatusText", () => {
     [{ light: "red" as const, state: "FAILED" }, "Failed"],
     [{ light: "red" as const, state: "CANCELLED" }, "Cancelled"],
     [{ light: "running" as const, state: "UPLOADING" }, "Still running"],
+    [{ light: "red" as const, state: "FAILED", error: "cancelled: stopped on request" }, "Cancelled"],
+    [{ light: "red" as const, state: "cancelled" }, "Cancelled"],
   ])("%j reads %s", (over, want) => {
     expect(runStatusText(run(over))).toBe(want);
   });
@@ -106,7 +109,7 @@ describe("groupChecks", () => {
 describe("failureSentence", () => {
   it.each([
     [run(), ""],
-    [run({ light: "red", state: "FAILED", error: "disk full" }), "This backup failed: disk full"],
+    [run({ light: "red", state: "FAILED", error: "disk full" }), "This backup failed: disk full."],
     [run({ light: "red", state: "CANCELLED" }), "This backup was cancelled before it finished."],
     [
       run({ light: "red", state: "FAILED", targets: [{ destination: "b2", state: "FAILED", light: "red", detail: "no route" }] }),
@@ -119,7 +122,7 @@ describe("failureSentence", () => {
     [run({ light: "red", state: "FAILED" }), "This backup failed. No reason was recorded; the log below may help."],
     [
       run({ light: "amber", state: "SUCCESS_UNVERIFIED", error: "docker unreachable" }),
-      "The files were backed up, but Ballast could not check they can be restored: docker unreachable",
+      "The files were backed up, but Ballast could not check they can be restored: docker unreachable.",
     ],
     [
       run({ light: "amber", state: "SUCCESS_UNVERIFIED" }),
@@ -135,5 +138,26 @@ describe("mergeRuns", () => {
   it("appends older runs and drops repeats", () => {
     const merged = mergeRuns([run({ id: 5 }), run({ id: 4 })], [run({ id: 4 }), run({ id: 3 })]);
     expect(merged.map((r) => r.id)).toEqual([5, 4, 3]);
+  });
+});
+
+describe("plainReason", () => {
+  it.each([
+    ["disk full", "disk full"],
+    ["service svc14: service folder: backup path /srv/data/svc14 does not exist", "backup path …/svc14 does not exist"],
+    ["service immich: dumping database: pg_dump exited with code 1. See log.", "pg_dump exited with code 1"],
+    ["service a: destination b2: uploading: connection refused", "connection refused"],
+    ["  ", ""],
+  ])("%s", (raw, want) => {
+    expect(plainReason(raw)).toBe(want);
+  });
+
+  it("keeps a long reason to one short sentence", () => {
+    expect(plainReason("x".repeat(400)).length).toBeLessThanOrEqual(160);
+  });
+
+  it("leads the failure sentence with the plain reason, not the wrapped text", () => {
+    const r = run({ light: "red", state: "FAILED", error: "service svc14: service folder: backup path /srv/data/svc14 does not exist" });
+    expect(failureSentence(r)).toBe("This backup failed: backup path …/svc14 does not exist.");
   });
 });

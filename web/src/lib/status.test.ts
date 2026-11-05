@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import type { ServiceStatus, TierStatus } from "@/api/types";
-import { ageIsLate, cancelQuestion, describeCheck, describeTier, expectedIntervalSeconds, isCancelling, shortStatus, shortStatusParts, summarize, worstLight } from "./status";
+import { wasCancelled, ageIsLate, cancelQuestion, describeCheck, describeTier, expectedIntervalSeconds, isCancelling, shortStatus, shortStatusParts, summarize, worstLight } from "./status";
 
 function svc(...lights: TierStatus["light"][]): ServiceStatus {
   return {
@@ -137,7 +137,10 @@ describe("cancelling a backup", () => {
 
   it("words a stopped backup as stopped, keeping the red light", () => {
     const t: TierStatus = { tier: "restic", light: "red", last_state: "CANCELLED" };
-    expect(describeTier(t)).toBe("The last backup was stopped before it finished. The backup before it is kept.");
+    expect(describeTier(t)).toBe("Last backup was cancelled. The backup before it is kept.");
+    expect(describeTier({ tier: "restic", light: "red", last_state: "FAILED", last_error: "cancelled: stopped on request" })).toBe(
+      "Last backup was cancelled. The backup before it is kept.",
+    );
     expect(describeTier({ tier: "restic", light: "red", last_state: "FAILED" })).toBe("The last backup failed.");
   });
 
@@ -198,5 +201,19 @@ describe("shortStatusParts", () => {
     expect(parts.late).toBe(true);
     expect(parts.age).toBe("6 days ago");
     expect(worstLight(s)).toBe("green");
+  });
+});
+
+describe("wasCancelled", () => {
+  it.each([
+    ["CANCELLED", undefined, true],
+    ["cancelled", undefined, true],
+    ["FAILED", "cancelled: stopped on request", true],
+    ["FAILED", "canceled: Ballast is shutting down", true],
+    ["FAILED", "disk full", false],
+    ["FAILED", "restic was cancelled by the kernel", false],
+    [undefined, undefined, false],
+  ])("%s / %s", (state, error, want) => {
+    expect(wasCancelled(state, error)).toBe(want);
   });
 });
