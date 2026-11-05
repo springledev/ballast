@@ -2,7 +2,7 @@
 
 # Ballast
 
-Ballast is a self-hosted backup tool for homelabs, whether you run things on bare metal, in Docker or on Proxmox. It backs up the apps you run in Docker (Immich, Vaultwarden, Postgres, MySQL, CouchDB, Gitea), folders and settings on your machines, and whole Proxmox VMs and LXC containers. It encrypts and stores the backups with [restic](https://restic.net) on local disk or a cloud destination (Backblaze B2, S3, Cloudflare R2, SFTP), or uses Proxmox's own `vzdump` for whole guests, and then checks that each backup can really be restored before it calls the job done. Each service gets a simple green, amber or red status, and Ballast can tell you through ntfy or a webhook when something needs attention. It is one static Go binary with a built-in web UI. No telemetry, no tracking.
+Ballast is a self-hosted backup tool for servers, whether you run things on bare metal, in Docker or on Proxmox. It backs up the apps you run in Docker (Immich, Vaultwarden, Postgres, MySQL, CouchDB, Gitea), folders and settings on your machines, and whole Proxmox VMs and LXC containers. It encrypts and stores the backups with [restic](https://restic.net) on local disk or a cloud destination (Backblaze B2, S3, Cloudflare R2, SFTP), or uses Proxmox's own `vzdump` for whole guests, and then checks that each backup can really be restored before it calls the job done. Each service gets a simple green, amber or red status, and Ballast can tell you through ntfy or a webhook when something needs attention. It is one static Go binary with a built-in web UI. No telemetry, no tracking.
 
 ## Status: alpha
 

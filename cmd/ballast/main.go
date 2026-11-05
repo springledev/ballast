@@ -51,7 +51,7 @@ func buildVersion() string {
 
 var rootCmd = &cobra.Command{
 	Use:   "ballast",
-	Short: "Service-aware, verified-restorable backups for bare metal, Docker and Proxmox homelabs",
+	Short: "Service-aware, verified-restorable backups for bare metal, Docker and Proxmox servers",
 	Long: `Ballast backs up bare-metal machines, Docker-hosted services and
 Proxmox guests using per-service strategies from a YAML catalog, ships
 them via restic (whole Proxmox guests use vzdump), and verifies that

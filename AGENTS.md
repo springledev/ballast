@@ -2,9 +2,9 @@
 
 
 
- Ballast is a self-hosted, service-aware backup tool for homelab bare metal,
+ Ballast is a self-hosted, service-aware backup tool for bare-metal, Docker
 
- Docker and Proxmox. **`spec.md` in this repo root is the single source of truth.**
+ and Proxmox servers. **`spec.md` in this repo root is the single source of truth.**
 
  Read it before doing anything. If code and spec disagree, the spec wins —
 

@@ -1,6 +1,6 @@
 # Proxmox guide
 
-If your homelab runs on Proxmox, Ballast can back up whole guests (VMs and LXC containers) with Proxmox's own `vzdump`, and it can back up the services *inside* those guests too. Ballast checks each layer separately, so a good guest backup never hides a broken database backup, or the other way round.
+If you run Proxmox, Ballast can back up whole guests (VMs and LXC containers) with Proxmox's own `vzdump`, and it can back up the services *inside* those guests too. Ballast checks each layer separately, so a good guest backup never hides a broken database backup, or the other way round.
 
 Ballast talks to Proxmox through its web API, never over SSH.
 
