@@ -51,7 +51,7 @@ A backup file sitting in a folder does not prove you can get your data back. Bal
 The result is one of these colours:
 
 - **Green** (shown as **Safe** in the web UI): the backup was made and checked, so it can be restored.
-- **Amber**: the backup was made, but Ballast could not check it. Treat it as no backup until it turns green.
+- **Amber** (shown as **Not checked**): the backup was made, but Ballast could not check it. Treat it as no backup until it turns green.
 - **Red** (shown as **Failed**): the backup itself did not work.
 
 A service that has never been backed up shows as **No backup yet** in the web UI.
@@ -122,8 +122,6 @@ The full walkthrough is in [docs/quickstart.md](docs/quickstart.md).
 
 ## Screenshots
 
-Screenshots of the web UI, taken from a throwaway demo instance with sample folders.
-
 ![Overview page: two of four services need attention, one failed and one not backed up yet, and two are safe](docs/img/ui-status.png)
 
 *Overview: one service failed, one has no backup yet, and two are safe. The demo instance uses sample folders.*
@@ -148,4 +146,4 @@ Apache-2.0. See [LICENSE](LICENSE).
 
 ## Support the project
 
-Support the project: https://github.com/sponsors/springledev
+Ballast is free. If it is useful to you, you can [sponsor the work on GitHub](https://github.com/sponsors/springledev).
