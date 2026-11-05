@@ -313,7 +313,7 @@ keep happening even if you never run `ballast serve`. See
 
 ### Back up services on other machines
 
-To back up containers running on a different machine in your homelab, see
+To back up containers running on a different machine, see
 [Docker hosts](docker-hosts.md) for setting up SSH or TLS connections.
 
 ## Worked example: backing up Immich

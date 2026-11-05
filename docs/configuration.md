@@ -129,7 +129,7 @@ add <destination>`).
 
 For the ntfy and webhook files, Ballast checks the per-service file
 first and only falls back to the global one if that specific service
-has none — so most homelabs only need the two global files, and only
+has none — so most setups only need the two global files, and only
 services that should alert somewhere different need their own.
 
 ## Schedules

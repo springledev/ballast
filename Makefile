@@ -15,6 +15,10 @@ LDFLAGS := -s -w -X main.version=$(if $(VERSION),$(VERSION),dev)
 web: ## Build the Vue frontend into web/dist (spec §10: no Node needed at runtime, only to build)
 	cd web && npm ci && npm run build
 
+.PHONY: icons
+icons: ## Regenerate the PNG and ICO icons from their SVG sources (needs ImageMagick)
+	web/icons/generate.sh
+
 .PHONY: build
 build:
 	$(GO) build -trimpath -ldflags "$(LDFLAGS)" -o bin/$(BINARY) ./cmd/ballast

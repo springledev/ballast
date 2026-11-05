@@ -1,0 +1,15 @@
+{
+  "name": "Ballast",
+  "short_name": "Ballast",
+  "description": "Self-hosted server backups, checked to prove they restore.",
+  "start_url": ".",
+  "scope": ".",
+  "display": "standalone",
+  "theme_color": "#143448",
+  "background_color": "#143448",
+  "icons": [
+    { "src": "icon-192.png", "sizes": "192x192", "type": "image/png" },
+    { "src": "icon-512.png", "sizes": "512x512", "type": "image/png" },
+    { "src": "icon-maskable-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ]
+}

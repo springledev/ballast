@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="640" viewBox="0 0 1280 640">
+  <rect width="1280" height="640" fill="#143448"/>
+  <rect y="346" width="1280" height="294" fill="#1f5a80"/>
+  <g transform="translate(110 150) scale(5.3)">
+    <path d="M31 7v22H14Z" fill="#fff"/>
+    <path d="M35 12v17h12Z" fill="#fff" opacity=".75"/>
+    <path d="M7 32h50c-1 6-5 10-11 10H19C13 42 8 38 7 32Z" fill="#fff"/>
+    <path d="M29 41h6v9h-6Z" fill="#fff"/>
+    <rect x="21" y="47" width="22" height="9" rx="4.5" fill="#4cc38a"/>
+  </g>
+  <text x="510" y="320" font-family="Liberation Sans, Arial, Helvetica, sans-serif" font-weight="700" font-size="124" fill="#fff">Ballast</text>
+  <text x="514" y="430" font-family="Liberation Sans, Arial, Helvetica, sans-serif" font-size="42" fill="#fff">Self-hosted server backups</text>
+  <text x="514" y="486" font-family="Liberation Sans, Arial, Helvetica, sans-serif" font-size="42" fill="#fff">checked to prove they restore.</text>
+</svg>
