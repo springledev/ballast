@@ -132,7 +132,7 @@ func TestClientBackupGuestHappyPath(t *testing.T) {
 			deletedVolumes = append(deletedVolumes, r.URL.Path)
 			data, _ := json.Marshal(map[string]interface{}{"data": ""})
 			w.Header().Set("Content-Type", "application/json")
-			w.Write(data)
+			_, _ = w.Write(data)
 			return
 		}
 
@@ -155,7 +155,7 @@ func TestClientBackupGuestHappyPath(t *testing.T) {
 
 			data, _ := json.Marshal(map[string]interface{}{"data": dumps})
 			w.Header().Set("Content-Type", "application/json")
-			w.Write(data)
+			_, _ = w.Write(data)
 			return
 		}
 
@@ -180,7 +180,7 @@ func TestClientBackupGuestHappyPath(t *testing.T) {
 			taskUPID = "UPID:pve1:12345:1234567890"
 			data, _ := json.Marshal(map[string]interface{}{"data": taskUPID})
 			w.Header().Set("Content-Type", "application/json")
-			w.Write(data)
+			_, _ = w.Write(data)
 			return
 		}
 
@@ -194,12 +194,12 @@ func TestClientBackupGuestHappyPath(t *testing.T) {
 
 			data, _ := json.Marshal(map[string]interface{}{"data": status})
 			w.Header().Set("Content-Type", "application/json")
-			w.Write(data)
+			_, _ = w.Write(data)
 			return
 		}
 
 		w.WriteHeader(http.StatusNotFound)
-		w.Write([]byte("not found"))
+		_, _ = w.Write([]byte("not found"))
 	}))
 	defer srv.Close()
 
@@ -275,21 +275,21 @@ func TestClientBackupGuestTaskFails(t *testing.T) {
 		if r.Method == http.MethodGet && strings.Contains(r.URL.Path, "/storage/"+storage+"/content") {
 			data, _ := json.Marshal(map[string]interface{}{"data": initialDumps})
 			w.Header().Set("Content-Type", "application/json")
-			w.Write(data)
+			_, _ = w.Write(data)
 			return
 		}
 		if r.Method == http.MethodPost && strings.Contains(r.URL.Path, "/vzdump") {
 			taskUPID = "UPID:pve1:12345:1234567890"
 			data, _ := json.Marshal(map[string]interface{}{"data": taskUPID})
 			w.Header().Set("Content-Type", "application/json")
-			w.Write(data)
+			_, _ = w.Write(data)
 			return
 		}
 		if r.Method == http.MethodGet && strings.Contains(r.URL.Path, "/tasks/") {
 			status := TaskStatus{Status: "stopped", ExitStatus: "job errors"}
 			data, _ := json.Marshal(map[string]interface{}{"data": status})
 			w.Header().Set("Content-Type", "application/json")
-			w.Write(data)
+			_, _ = w.Write(data)
 			return
 		}
 		w.WriteHeader(http.StatusNotFound)
@@ -338,11 +338,11 @@ func TestClientBackupGuestPruneDeleteReturns500(t *testing.T) {
 				// First DELETE succeeds
 				data, _ := json.Marshal(map[string]interface{}{"data": ""})
 				w.Header().Set("Content-Type", "application/json")
-				w.Write(data)
+				_, _ = w.Write(data)
 			} else {
 				// Second DELETE returns 500
 				w.WriteHeader(http.StatusInternalServerError)
-				w.Write([]byte("internal server error"))
+				_, _ = w.Write([]byte("internal server error"))
 			}
 			return
 		}
@@ -358,7 +358,7 @@ func TestClientBackupGuestPruneDeleteReturns500(t *testing.T) {
 			}
 			data, _ := json.Marshal(map[string]interface{}{"data": dumps})
 			w.Header().Set("Content-Type", "application/json")
-			w.Write(data)
+			_, _ = w.Write(data)
 			return
 		}
 
@@ -366,7 +366,7 @@ func TestClientBackupGuestPruneDeleteReturns500(t *testing.T) {
 			taskUPID = "UPID:pve1:12345:1234567890"
 			data, _ := json.Marshal(map[string]interface{}{"data": taskUPID})
 			w.Header().Set("Content-Type", "application/json")
-			w.Write(data)
+			_, _ = w.Write(data)
 			return
 		}
 
@@ -374,7 +374,7 @@ func TestClientBackupGuestPruneDeleteReturns500(t *testing.T) {
 			status := TaskStatus{Status: "stopped", ExitStatus: "OK"}
 			data, _ := json.Marshal(map[string]interface{}{"data": status})
 			w.Header().Set("Content-Type", "application/json")
-			w.Write(data)
+			_, _ = w.Write(data)
 			return
 		}
 
@@ -450,7 +450,7 @@ func TestClientBackupGuestKeepLastZero(t *testing.T) {
 			}
 			data, _ := json.Marshal(map[string]interface{}{"data": dumps})
 			w.Header().Set("Content-Type", "application/json")
-			w.Write(data)
+			_, _ = w.Write(data)
 			return
 		}
 
@@ -458,7 +458,7 @@ func TestClientBackupGuestKeepLastZero(t *testing.T) {
 			taskUPID = "UPID:pve1:12345:1234567890"
 			data, _ := json.Marshal(map[string]interface{}{"data": taskUPID})
 			w.Header().Set("Content-Type", "application/json")
-			w.Write(data)
+			_, _ = w.Write(data)
 			return
 		}
 
@@ -466,7 +466,7 @@ func TestClientBackupGuestKeepLastZero(t *testing.T) {
 			status := TaskStatus{Status: "stopped", ExitStatus: "OK"}
 			data, _ := json.Marshal(map[string]interface{}{"data": status})
 			w.Header().Set("Content-Type", "application/json")
-			w.Write(data)
+			_, _ = w.Write(data)
 			return
 		}
 
@@ -516,7 +516,7 @@ func TestClientBackupGuestNoNewVolumeAppears(t *testing.T) {
 			// Return same dumps before and after (no new volume)
 			data, _ := json.Marshal(map[string]interface{}{"data": initialDumps})
 			w.Header().Set("Content-Type", "application/json")
-			w.Write(data)
+			_, _ = w.Write(data)
 			return
 		}
 
@@ -524,7 +524,7 @@ func TestClientBackupGuestNoNewVolumeAppears(t *testing.T) {
 			taskUPID = "UPID:pve1:12345:1234567890"
 			data, _ := json.Marshal(map[string]interface{}{"data": taskUPID})
 			w.Header().Set("Content-Type", "application/json")
-			w.Write(data)
+			_, _ = w.Write(data)
 			return
 		}
 
@@ -532,7 +532,7 @@ func TestClientBackupGuestNoNewVolumeAppears(t *testing.T) {
 			status := TaskStatus{Status: "stopped", ExitStatus: "OK"}
 			data, _ := json.Marshal(map[string]interface{}{"data": status})
 			w.Header().Set("Content-Type", "application/json")
-			w.Write(data)
+			_, _ = w.Write(data)
 			return
 		}
 
@@ -572,7 +572,7 @@ func TestClientBackupGuestContextCancellation(t *testing.T) {
 		if r.Method == http.MethodGet && strings.Contains(r.URL.Path, "/storage/"+storage+"/content") {
 			data, _ := json.Marshal(map[string]interface{}{"data": initialDumps})
 			w.Header().Set("Content-Type", "application/json")
-			w.Write(data)
+			_, _ = w.Write(data)
 			return
 		}
 
@@ -580,7 +580,7 @@ func TestClientBackupGuestContextCancellation(t *testing.T) {
 			taskUPID = "UPID:pve1:12345:1234567890"
 			data, _ := json.Marshal(map[string]interface{}{"data": taskUPID})
 			w.Header().Set("Content-Type", "application/json")
-			w.Write(data)
+			_, _ = w.Write(data)
 			return
 		}
 
@@ -590,7 +590,7 @@ func TestClientBackupGuestContextCancellation(t *testing.T) {
 			status := TaskStatus{Status: "running"}
 			data, _ := json.Marshal(map[string]interface{}{"data": status})
 			w.Header().Set("Content-Type", "application/json")
-			w.Write(data)
+			_, _ = w.Write(data)
 			return
 		}
 
@@ -629,7 +629,7 @@ func TestClientBackupGuestListDumpsError(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == http.MethodGet && strings.Contains(r.URL.Path, "/storage/"+storage+"/content") {
 			w.WriteHeader(http.StatusInternalServerError)
-			w.Write([]byte("error listing dumps"))
+			_, _ = w.Write([]byte("error listing dumps"))
 			return
 		}
 		w.WriteHeader(http.StatusNotFound)
@@ -665,12 +665,12 @@ func TestClientBackupGuestStartVzdumpError(t *testing.T) {
 		if r.Method == http.MethodGet && strings.Contains(r.URL.Path, "/storage/"+storage+"/content") {
 			data, _ := json.Marshal(map[string]interface{}{"data": initialDumps})
 			w.Header().Set("Content-Type", "application/json")
-			w.Write(data)
+			_, _ = w.Write(data)
 			return
 		}
 		if r.Method == http.MethodPost && strings.Contains(r.URL.Path, "/vzdump") {
 			w.WriteHeader(http.StatusInternalServerError)
-			w.Write([]byte("error starting backup"))
+			_, _ = w.Write([]byte("error starting backup"))
 			return
 		}
 		w.WriteHeader(http.StatusNotFound)
@@ -730,7 +730,7 @@ func TestTaskStatusAndWaitTask(t *testing.T) {
 			}
 			data, _ := json.Marshal(map[string]interface{}{"data": status})
 			w.Header().Set("Content-Type", "application/json")
-			w.Write(data)
+			_, _ = w.Write(data)
 			return
 		}
 		w.WriteHeader(http.StatusNotFound)
@@ -766,7 +766,7 @@ func TestListDumps(t *testing.T) {
 		if r.Method == http.MethodGet && strings.Contains(r.URL.Path, "/storage/"+storage+"/content") {
 			data, _ := json.Marshal(map[string]interface{}{"data": allDumps})
 			w.Header().Set("Content-Type", "application/json")
-			w.Write(data)
+			_, _ = w.Write(data)
 			return
 		}
 		w.WriteHeader(http.StatusNotFound)
@@ -811,7 +811,7 @@ func TestDeleteDumpURLEscaping(t *testing.T) {
 			w.WriteHeader(http.StatusOK)
 			data, _ := json.Marshal(map[string]interface{}{"data": ""})
 			w.Header().Set("Content-Type", "application/json")
-			w.Write(data)
+			_, _ = w.Write(data)
 			return
 		}
 		w.WriteHeader(http.StatusNotFound)
@@ -897,15 +897,15 @@ func TestCreateDump_CancelStopsTask(t *testing.T) {
 				w.Header().Set("Content-Type", "application/json")
 				switch {
 				case r.Method == http.MethodGet && strings.Contains(r.URL.Path, "/content"):
-					w.Write([]byte(`{"data":[]}`))
+					_, _ = w.Write([]byte(`{"data":[]}`))
 				case r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/vzdump"):
-					w.Write([]byte(`{"data":"` + upid + `"}`))
+					_, _ = w.Write([]byte(`{"data":"` + upid + `"}`))
 				case r.Method == http.MethodGet && strings.HasSuffix(r.URL.Path, "/status"):
-					w.Write([]byte(`{"data":{"status":"running"}}`))
+					_, _ = w.Write([]byte(`{"data":{"status":"running"}}`))
 				case r.Method == http.MethodDelete && strings.HasSuffix(r.URL.Path, "/tasks/"+upid):
 					deleted.Add(1)
 					w.WriteHeader(tc.deleteCode)
-					w.Write([]byte(`{"data":null}`))
+					_, _ = w.Write([]byte(`{"data":null}`))
 				default:
 					w.WriteHeader(http.StatusNotFound)
 				}

@@ -73,7 +73,9 @@ func TestLookupAndKeys(t *testing.T) {
 			t.Errorf("Lookup(%s,%s) err = %v, want %q naming the file", tc.path, tc.key, err, tc.want)
 		}
 	}
-	os.WriteFile(p, []byte("E=\nA=1\n"), 0o600)
+	if err := os.WriteFile(p, []byte("E=\nA=1\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
 	if _, err := Lookup(p, "E"); err == nil || !strings.Contains(err.Error(), "empty") {
 		t.Errorf("empty value err = %v", err)
 	}

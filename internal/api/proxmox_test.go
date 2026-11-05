@@ -27,9 +27,9 @@ func fakeProxmoxServer(t *testing.T, wantAuth string) *httptest.Server {
 		}
 		switch r.URL.Path {
 		case "/api2/json/version":
-			w.Write([]byte(`{"data":{"version":"8.2.1"}}`))
+			_, _ = w.Write([]byte(`{"data":{"version":"8.2.1"}}`))
 		case "/api2/json/cluster/resources":
-			w.Write([]byte(`{"data":[
+			_, _ = w.Write([]byte(`{"data":[
 				{"node":"pve1","vmid":100,"name":"immich","status":"running","type":"lxc"},
 				{"node":"pve1","vmid":101,"name":"win","status":"stopped","type":"qemu"}
 			]}`))
@@ -283,28 +283,28 @@ func TestBackupProxmoxGuest(t *testing.T) {
 	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
 		case r.URL.Path == "/api2/json/version":
-			w.Write([]byte(`{"data":{"version":"8.2.1"}}`))
+			_, _ = w.Write([]byte(`{"data":{"version":"8.2.1"}}`))
 		case r.Method == http.MethodPost && r.URL.Path == "/api2/json/nodes/pve1/vzdump":
 			_ = r.ParseForm()
 			if r.PostForm.Get("vmid") != "100" || r.PostForm.Get("storage") != "local" || r.PostForm.Get("mode") != "snapshot" {
 				t.Errorf("vzdump form = %v", r.PostForm)
 			}
 			dumps++
-			w.Write([]byte(`{"data":"` + upid + `"}`))
+			_, _ = w.Write([]byte(`{"data":"` + upid + `"}`))
 		case strings.HasSuffix(r.URL.Path, "/status"):
-			w.Write([]byte(`{"data":{"status":"stopped","exitstatus":"OK"}}`))
+			_, _ = w.Write([]byte(`{"data":{"status":"stopped","exitstatus":"OK"}}`))
 		case strings.HasSuffix(r.URL.Path, "/vzdump/extractconfig"):
-			w.Write([]byte(`{"data":"arch: amd64\nrootfs: local:100/x.raw,size=8G\n"}`))
+			_, _ = w.Write([]byte(`{"data":"arch: amd64\nrootfs: local:100/x.raw,size=8G\n"}`))
 		case strings.HasSuffix(r.URL.Path, "/storage/local/content"):
 			if dumps == 0 {
-				w.Write([]byte(`{"data":[]}`))
+				_, _ = w.Write([]byte(`{"data":[]}`))
 				return
 			}
 			list := `{"volid":"local:backup/vzdump-lxc-100-new.tar.zst","ctime":10,"size":2048,"vmid":100}`
 			if dumps > 1 {
 				list = `{"volid":"local:backup/vzdump-lxc-100-newer.tar.zst","ctime":20,"size":2048,"vmid":100},` + list
 			}
-			w.Write([]byte(`{"data":[` + list + `]}`))
+			_, _ = w.Write([]byte(`{"data":[` + list + `]}`))
 		default:
 			w.WriteHeader(http.StatusNotFound)
 		}

@@ -103,7 +103,7 @@ func newStatusPerfFixture(tb testing.TB) *Ops {
 	if err != nil {
 		tb.Fatal(err)
 	}
-	defer tx.Rollback()
+	defer func() { _ = tx.Rollback() }()
 	jobs := map[string]int64{}
 	for i, n := range names {
 		if perfKindFor(i) == perfNever {

@@ -375,7 +375,7 @@ func TestChannelSend_ResponseBodyNotEchoed(t *testing.T) {
 		t.Run(chName, func(t *testing.T) {
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				w.WriteHeader(http.StatusInternalServerError)
-				w.Write([]byte(bodyMarker))
+				_, _ = w.Write([]byte(bodyMarker))
 			}))
 			defer server.Close()
 

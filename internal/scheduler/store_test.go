@@ -353,7 +353,9 @@ func TestScheduleBaselineCountsManualRuns(t *testing.T) {
 	}
 	ins := func(state string, fin time.Time) {
 		t.Helper()
-		db.Exec(`INSERT OR IGNORE INTO jobs (service, created_at) VALUES ('immich', ?)`, fin.Format(time.RFC3339Nano))
+		if _, err := db.Exec(`INSERT OR IGNORE INTO jobs (service, created_at) VALUES ('immich', ?)`, fin.Format(time.RFC3339Nano)); err != nil {
+			t.Fatal(err)
+		}
 		if _, err := db.Exec(`INSERT INTO runs (job_id, state, started_at, finished_at)
 			SELECT id, ?, ?, ? FROM jobs WHERE service = 'immich'`, state, fin.Format(time.RFC3339Nano), fin.Format(time.RFC3339Nano)); err != nil {
 			t.Fatal(err)
@@ -381,7 +383,9 @@ func TestScheduleBaselineRespectsHistoryFloor(t *testing.T) {
 	db := openTestDB(t).DB()
 	now := time.Date(2026, 3, 5, 12, 0, 0, 0, time.UTC)
 	fin := now.Add(-time.Hour).Format(time.RFC3339Nano)
-	db.Exec(`INSERT INTO jobs (service, created_at) VALUES ('immich', ?)`, fin)
+	if _, err := db.Exec(`INSERT INTO jobs (service, created_at) VALUES ('immich', ?)`, fin); err != nil {
+		t.Fatal(err)
+	}
 	if _, err := db.Exec(`INSERT INTO runs (job_id, state, started_at, finished_at) SELECT id, 'SUCCESS', ?, ? FROM jobs WHERE service = 'immich'`, fin, fin); err != nil {
 		t.Fatal(err)
 	}
