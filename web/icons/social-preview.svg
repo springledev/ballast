@@ -9,6 +9,6 @@
     <rect x="21" y="47" width="22" height="9" rx="4.5" fill="#4cc38a"/>
   </g>
   <text x="510" y="320" font-family="Liberation Sans, Arial, Helvetica, sans-serif" font-weight="700" font-size="124" fill="#fff">Ballast</text>
-  <text x="514" y="430" font-family="Liberation Sans, Arial, Helvetica, sans-serif" font-size="42" fill="#fff">Self-hosted Docker backups</text>
+  <text x="514" y="430" font-family="Liberation Sans, Arial, Helvetica, sans-serif" font-size="42" fill="#fff">Self-hosted server backups</text>
   <text x="514" y="486" font-family="Liberation Sans, Arial, Helvetica, sans-serif" font-size="42" fill="#fff">checked to prove they restore.</text>
 </svg>

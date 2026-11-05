@@ -1,7 +1,7 @@
 {
   "name": "Ballast",
   "short_name": "Ballast",
-  "description": "Backups for your Docker services, checked to prove they restore.",
+  "description": "Self-hosted server backups, checked to prove they restore.",
   "start_url": ".",
   "scope": ".",
   "display": "standalone",
