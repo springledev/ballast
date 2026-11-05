@@ -11,6 +11,21 @@ Ballast is **alpha** software. It is in daily use by its author on a personal ho
 - Not included: only the restic tier exists. A second tier using rclone is planned but not built.
 - Only the latest release is supported.
 
+## Install
+
+**Build from source (the working way today).** You need `git`, `make`, Go 1.25 or newer, and restic 0.17.0 or newer on your `PATH`. The web UI is already built into the repository, so Node is not needed.
+
+```bash
+git clone https://github.com/springledev/ballast.git
+cd ballast
+make build
+sudo install bin/ballast /usr/local/bin/ballast
+```
+
+**Release downloads and the Docker image are not published yet.** [RELEASING.md](RELEASING.md) describes how linux amd64 and arm64 archives are built, and the [Dockerfile](Dockerfile) builds an image from source. Neither is published yet, so build from source for now.
+
+For your first backup after installing, follow the [quickstart](docs/quickstart.md).
+
 ## Why it is different
 
 Most backup tools tell you a job "succeeded" when the files were copied. That says nothing about whether you can get your data back. Ballast does not mark a backup done until it has been verified:
@@ -24,6 +39,24 @@ If Ballast cannot prove a backup restores, it shows **amber**, not green.
 - Green: backed up and verified to restore.
 - Amber: backed up, but Ballast could not prove it restores.
 - Red: something failed.
+
+## How verification works
+
+A backup file sitting in a folder does not prove you can get your data back. Ballast reads the backup back and checks it before it calls the job done. Which checks run depends on the service, but at least one of these always runs:
+
+- **Read files back.** Ballast asks restic to pull a sample of the stored files out of the backup. This also shows the backup is really in the destination.
+- **Archive check.** Ballast checks that each archive file is complete and can be read from start to end.
+- **Test restore of a database.** For a database dump, Ballast starts a fresh, throwaway container running the same database software, restores the dump into it, and checks that it starts with no real errors. Then it deletes the container.
+
+The result is one of these colours:
+
+- **Green** (shown as **Safe** in the web UI): the backup was made and checked, so it can be restored.
+- **Amber**: the backup was made, but Ballast could not check it. Treat it as no backup until it turns green.
+- **Red** (shown as **Failed**): the backup itself did not work.
+
+A service that has never been backed up shows as **No backup yet** in the web UI.
+
+Each destination is reported on its own, so a problem with one copy never hides the result for another. The History page for a service lists each run, each check that was done, and the reason for any amber or red result.
 
 ## Supported services
 
@@ -89,12 +122,30 @@ The full walkthrough is in [docs/quickstart.md](docs/quickstart.md).
 
 ## Screenshots
 
-Screenshots are coming soon.
+Screenshots of the web UI, taken from a throwaway demo instance with sample folders.
+
+![Overview page: two of four services need attention, one failed and one not backed up yet, and two are safe](docs/img/ui-status.png)
+
+*Overview: one service failed, one has no backup yet, and two are safe. The demo instance uses sample folders.*
+
+![Backup history for the photos service: a run with two restore checks, both passed, and a Safe result for the local destination](docs/img/ui-history.png)
+
+*Backup history: the restore checks for one run of the photos service. The demo instance uses sample folders.*
+
+![Overview page at phone width, showing the summary and the first service cards](docs/img/ui-status-mobile.png)
+
+*The overview at phone width. The demo instance uses sample folders.*
 
 ## Contributing and security
 
 See [CONTRIBUTING.md](CONTRIBUTING.md). To report a vulnerability, see [SECURITY.md](SECURITY.md).
 
+Ballast's shared libraries live in keel: https://github.com/springledev/keel
+
 ## Licence
 
 Apache-2.0. See [LICENSE](LICENSE).
+
+## Support the project
+
+Support the project: https://github.com/sponsors/springledev
