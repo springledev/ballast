@@ -540,7 +540,7 @@
 
 
 
- Each step lands with tests green and `ballast --help` working. Do not start a step until the previous one is complete. `PLAN.md` tracks progress against this list.
+ Each step lands with tests green and `ballast --help` working. Do not start a step until the previous one is complete. Progress is tracked by the checkboxes and step notes in this section.
 
 
 
@@ -583,7 +583,7 @@
  13. Docs: quickstart (15-min wizard → verified backup) and catalog contribution guide, shipped together with the bundled Immich, Vaultwarden, and CouchDB catalog entries (§15) as its worked examples.
 
 
- **v0.1 is complete as of step 13. Steps 14+ below are the v0.2 extension (§17: multi-host Docker, Proxmox, remote destinations) — design rationale and full detail in `PLAN-v0.2.md`; this list is the normative, session-by-session order `/implement` follows.**
+ **v0.1 is complete as of step 13. Steps 14+ below are the v0.2 extension (§17: multi-host Docker, Proxmox, remote destinations) — this list is the normative, session-by-session order `/implement` follows.**
 
 
  14. v0.1 parity — CLI commands: `ballast verify <service>|--all`, `ballast catalog validate|install <file>` (thin wrappers over existing engine/catalog logic, §9), plus a catalog data fix so the MySQL entry's `imagePattern` also matches `mariadb` images.
@@ -636,7 +636,7 @@
 
 
 
- **v0.3 extension (steps 30–40, §18: friction removal + compose robustness) — design rationale in `PLAN-v0.3.md`; this list is the normative order.**
+ **v0.3 extension (steps 30–40, §18: friction removal + compose robustness) — this list is the normative order.**
 
 
  30. Notification channels (v0.3, §18.1): reusable `NotificationChannel` model (ntfy, full base URL — `https://ntfy.sh/` only the default, self-hosted first-class — with optional username/token from the credential store), test-send button on every channel through the same code path as job notifications, Settings UI page, `ballast notify channel …` CLI parity; existing per-service notification settings and the ntfy credential-file path migrate onto channels, not dropped.
@@ -676,7 +676,7 @@
 
 
 
- **v0.4 extension (steps 41–51, §19: replace the scripts) — design rationale and the line-by-line audit of the two reference scripts in `PLAN-v0.4.md`; this list is the normative order.**
+ **v0.4 extension (steps 41–51, §19: replace the scripts) — this list is the normative order.**
 
 
  41. Install + runtime (§19.1): `ballast install` (root) installs the shipped unit, creates `/etc/ballast` and `/var/lib/ballast`, moves an existing XDG install (invoking user's or root's) into them without loss, enables and starts the service, prints the UI URL and access key; idempotent, refuses to overwrite a different existing install. Root without `$HOME` falls back to those directories instead of failing. UI banner and `doctor` check when `serve` runs from a terminal rather than as a service. restic 0.18 output supported alongside 0.17.3 (golden fixtures for both); the version warning fires only outside the tested range.
@@ -712,7 +712,7 @@
  51. Preview + migration (§19.9): per-service preview (UI and `ballast backup --preview`) — parts, where each goes, estimated size, which containers stop and for how long, excludes applied, what reaches the second copy; nothing runs. "Replace a script" guide and dashboard checklist (parallel run, 7 green days, one UI test restore per service, then retire the script) with a script-idiom map in the docs; final v0.4 acceptance sweep (§19.11) reproducing both reference scripts.
 
 
- **v0.5 extension (steps 52–65, §20: findings from the first real migration) — design rationale and the evidence for each finding in `PLAN-v0.5.md`; this list is the normative order.**
+ **v0.5 extension (steps 52–65, §20: findings from the first real migration) — this list is the normative order.**
 
  52. Repository locking that cannot starve verification (H1, §20.1): a pending prune must never block new read-backs on the same repository (retention after the batch of verifications, skipped-and-retried when the repo is busy, or restic's own lock as the only lock); "waiting for repository lock (held by <service>)" in the log and run status. Failing test first: held shared lock + pending retention + new read-back that must still complete.
 
@@ -742,7 +742,7 @@
 
  65. CouchDB behind a login (H16, §20.1): the built-in entry accepts 200 or 401 (or a catalog parameter for the expected status) and the failure message says a 401 probably means a password-protected server.
 
- **v0.6 extension (steps 66–78, §21: findings from running v0.5 in production) — design rationale and the evidence for each finding in `PLAN-v0.6.md`; this list is the normative order.**
+ **v0.6 extension (steps 66–78, §21: findings from running v0.5 in production) — this list is the normative order.**
 
  66. Alert decision log (J6, §21.1): one log line for every alert decision — sent (`sent verification_failure for utility-tracker to ballast`), held back (`alerted 23h ago, cool-down 24h`) or failed (with the reason) — and the last few decisions per service kept in the status DB (time, type, outcome, reason; never a topic, URL or token) and shown in the service detail view and `ballast status --json`. First, so step 67 can be seen working. Test: a held, a sent and a failed delivery each log and store one decision, and no secret reaches either.
 
@@ -770,7 +770,7 @@
 
  78. Support bundle (J16, §21.7): `ballast support-bundle [--output file]` writes one archive for bug reports and for asking someone else for help — version, `doctor --json`, status, recent alert decisions, schema version, restic/docker versions and catalog entry names — with every secret absent (the existing redaction harness in `cmd/ballast/redaction_test.go` is extended with seeded secrets across the new files). Nothing is sent anywhere.
 
- **v0.7 extension (steps 79–87, §22: findings from a QA and UX review of v0.6) — design rationale and the evidence for each finding in `PLAN-v0.7.md`; this list is the normative order. Its step A (commit the fixes from a seeded-instance QA pass, listed in §22.1) is already done in commit 833984b and has no number here.**
+ **v0.7 extension (steps 79–87, §22: findings from a QA and UX review of v0.6) — this list is the normative order. Its step A (commit the fixes from a seeded-instance QA pass, listed in §22.1) is already done in commit 833984b and has no number here.**
 
  79. Server-side folder path validation (K3, §22.2): the service layer, not only the web UI, trims the path, requires it to be absolute and refuses a relative one; a path that does not exist is saved with a warning, not refused, because the folder may be on a mount that is not up yet. The CLI and API get the same behaviour. Test: a relative path and a path with a trailing space (trimmed) through the API and the CLI, and a missing absolute path saved with a warning.
 
@@ -788,7 +788,7 @@
 
  86. Accessibility and tall pages (K10, §22.8): a skip-to-content link; touch targets of about 44 px for the status legend buttons and checkboxes; the wizard's raw restic version warning moves behind "Details"; "Stop backing up" is renamed "Remove" and says what is kept; Notifications and Schedules get the same search, grouping and folding as Backups. Web only; must not touch `internal/`.
 
- 87. Sessions across restarts (K8, §22.9): sessions live in memory, so every server restart signs the browser out. First decide whether that is by design; this needs the maintainer's decision. If it is not by design, persist session hashes (never raw tokens) in SQLite. Do not implement before the decision is recorded in PLAN.md.
+ 87. Sessions across restarts (K8, §22.9): sessions live in memory, so every server restart signs the browser out. First decide whether that is by design; this needs the maintainer's decision. If it is not by design, persist session hashes (never raw tokens) in SQLite. Do not implement before the decision is recorded in the pull request or spec change that implements it.
 
 
 
@@ -852,7 +852,7 @@
 
 
 
- **Terminology note:** §12 above calls the mobile/phone work "Phase 2." This v0.2 extension (multi-host Docker + Proxmox) is a *separate*, earlier release that ships before mobile; it does not change §12's scope or timeline, and mobile remains phone-code-free until its own phase regardless of what v0.2 number it ends up carrying. Full design rationale, suggested-additions list, and launch sequencing live in `PLAN-v0.2.md`; this section is the normative subset `/implement` and future spec changes must agree with.
+ **Terminology note:** §12 above calls the mobile/phone work "Phase 2." This v0.2 extension (multi-host Docker + Proxmox) is a *separate*, earlier release that ships before mobile; it does not change §12's scope or timeline, and mobile remains phone-code-free until its own phase regardless of what v0.2 number it ends up carrying. This section is the normative subset `/implement` and future spec changes must agree with.
 
 
 
@@ -969,7 +969,7 @@
 
 
 
- **Goal:** close three usability gaps found in real use (notifications only via CLI, credentials pasted by hand, Ballast only reachable from localhost) and make compose discovery miss nothing. Builds on v0.2; rationale, reconciliation with existing code and added usability features in `PLAN-v0.3.md`. No mobile code (rule 6); the `exec` strategy and `ballast trigger --token` interfaces are untouched.
+ **Goal:** close three usability gaps found in real use (notifications only via CLI, credentials pasted by hand, Ballast only reachable from localhost) and make compose discovery miss nothing. Builds on v0.2. No mobile code (rule 6); the `exec` strategy and `ballast trigger --token` interfaces are untouched.
 
 
 
@@ -1053,7 +1053,7 @@
 
 
 
- **Goal:** every step of a real homelab's two backup scripts — an app-level script on the Docker VM and a host-level script on the Proxmox node — is reproducible in Ballast, set up from the web UI, and safe to run in parallel with those scripts until they are retired. Each requirement below is a gap hit while attempting that migration; the line-by-line audit and the decisions behind them are in `PLAN-v0.4.md`. No mobile code (rule 6); the `exec` strategy and `ballast trigger --token` interfaces are untouched.
+ **Goal:** every step of a real homelab's two backup scripts — an app-level script on the Docker VM and a host-level script on the Proxmox node — is reproducible in Ballast, set up from the web UI, and safe to run in parallel with those scripts until they are retired. Each requirement below is a gap hit while attempting that migration. No mobile code (rule 6); the `exec` strategy and `ballast trigger --token` interfaces are untouched.
 
 
 
@@ -1182,7 +1182,7 @@
 
 
 
- **Goal:** fix what the first real replacement of a homelab's scripts by the v0.4 build turned up (2026-10-07): verification that stalls behind an unrelated upload, a green light that can hide a missing copy, jobs that cannot be edited, missing disk and permission safety nets, and no live view of a running backup. Each requirement below was hit in practice or traced to code; the evidence, confidence tags (observed / inferred / expected) and wording of each finding (H1–H16, R1–R2) are in `PLAN-v0.5.md`. No mobile *backup* code (rule 6); the `exec` strategy and `ballast trigger --token` interfaces are untouched.
+ **Goal:** fix what the first real replacement of a homelab's scripts by the v0.4 build turned up (2026-10-07): verification that stalls behind an unrelated upload, a green light that can hide a missing copy, jobs that cannot be edited, missing disk and permission safety nets, and no live view of a running backup. Each requirement below was hit in practice or traced to code; the findings are tagged H1–H16 and R1–R2. No mobile *backup* code (rule 6); the `exec` strategy and `ballast trigger --token` interfaces are untouched.
 
 
 
@@ -1284,7 +1284,7 @@
 
 
 
- **Goal:** fix what the first week of v0.5 on the reference homelab (deployed 2026-10-10) turned up: alerts that may not repeat and cannot be audited, CLI output that cannot be scripted, repository health and off-site restores the CLI cannot reach, a self-backup that must be run by hand and leaves out its scripts, and an unwritten upgrade procedure. Each requirement was hit in practice or traced to code; the evidence, confidence tags (observed / inferred / expected) and wording of each finding (J1–J16) are in `PLAN-v0.6.md`. No mobile *backup* code (rule 6); the `exec` strategy and `ballast trigger --token` interfaces are untouched.
+ **Goal:** fix what the first week of v0.5 on a production homelab (deployed 2026-10-10) turned up: alerts that may not repeat and cannot be audited, CLI output that cannot be scripted, repository health and off-site restores the CLI cannot reach, a self-backup that must be run by hand and leaves out its scripts, and an unwritten upgrade procedure. Each requirement was hit in practice or traced to code; the findings are tagged J1–J16. No mobile *backup* code (rule 6); the `exec` strategy and `ballast trigger --token` interfaces are untouched.
 
 
 
@@ -1364,7 +1364,7 @@
 
  - [ ] A scheduled self-backup reaches verified on every destination, old self-backups are pruned, and its scripts come back from a restore
 
- - [ ] A source build reports a real version in the CLI, `doctor`, API and UI; `ballast wait-idle` blocks during a run and `docs/upgrading.md` has been followed once on the reference homelab
+ - [ ] A source build reports a real version in the CLI, `doctor`, API and UI; `ballast wait-idle` blocks during a run and `docs/upgrading.md` has been followed once on a production homelab
 
  - [ ] The CLI works as root without environment variables after `ballast install`
 
@@ -1377,7 +1377,7 @@
 
 
 
- **Goal:** fix what a browser QA and UX pass of v0.6 on a seeded instance (60 "Any folder" services, two destinations, about 3,200 runs over 90 days) turned up: no run history and no way to cancel, a server that accepts bad paths, a slow status route, a schedule save that undoes a pause, and a set of accessibility and wording problems. The evidence, confidence tags (observed / inferred / expected) and wording of each finding (K1–K10) are in `PLAN-v0.7.md`. No mobile *backup* code (rule 6); the `exec` strategy and `ballast trigger --token` interfaces are untouched.
+ **Goal:** fix what a browser QA and UX pass of v0.6 on a seeded instance (60 "Any folder" services, two destinations, about 3,200 runs over 90 days) turned up: no run history and no way to cancel, a server that accepts bad paths, a slow status route, a schedule save that undoes a pause, and a set of accessibility and wording problems. The findings are tagged K1–K10. No mobile *backup* code (rule 6); the `exec` strategy and `ballast trigger --token` interfaces are untouched.
 
 
 
@@ -1466,6 +1466,6 @@
 
  - [ ] Skip link, 44 px touch targets, "Remove" wording and folded Notifications and Schedules pages are in place
 
- - [ ] The maintainer has decided whether sessions survive a restart, and the decision is recorded in PLAN.md
+ - [ ] The maintainer has decided whether sessions survive a restart, and the decision is recorded in the pull request or spec change that implements it
 
  - [ ] Secrets never in DB, logs or API responses; re-asserted for run logs and sessions
