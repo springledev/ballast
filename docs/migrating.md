@@ -1,5 +1,7 @@
 # Upgrading from Ballast v0.1
 
+This page is only for people who already run v0.1. If this is a fresh install, start with the [quickstart](quickstart.md) instead.
+
 Upgrading is meant to be uneventful: replace the binary and run any command. Ballast upgrades its own database the first time it starts, and your existing services, schedules, destinations and snapshots keep working.
 
 ## Before you upgrade

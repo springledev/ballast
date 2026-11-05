@@ -17,7 +17,7 @@ and adds the checking on top.
   container (Immich, Vaultwarden, Postgres, MySQL, CouchDB, ...). Backing up
   a plain folder works without Docker.
 - **restic 0.17.0 or newer** installed and on your `PATH` (`sudo apt install
-  restic`, or see <https://restic.readthedocs.io/en/stable/020_installation.html>).
+  restic` on a recent Debian; some older releases, such as older Ubuntu LTS versions, ship a restic that is too old, so check the version below. See <https://restic.readthedocs.io/en/stable/020_installation.html>).
   Ballast is tested against restic 0.17.3 specifically; a newer version
   usually still works, but Ballast will print a warning if it hasn't been
   tested against it, and it refuses to start at all on anything older than
@@ -31,14 +31,32 @@ restic version
 
 ## 1. Install the binary
 
-Build it from source (there isn't a packaged release yet):
+Pick one of these three ways.
+
+**A. A release download.** No release has been published yet, so this does not
+work today. Once one is, you will find `ballast_<version>_linux_amd64.tar.gz`
+(or `..._linux_arm64.tar.gz` for ARM machines) and a `checksums.txt` on the
+project's GitHub Releases page. Unpack it and copy `ballast` to
+`/usr/local/bin/`.
+
+**B. The Docker image.** No image is published yet either. You can build one
+yourself with `docker build -t ballast .` from a copy of the source. It runs
+as root and needs the Docker socket and two data folders mounted in; see
+[Systemd setup](systemd.md) for what Ballast needs, and use the plain binary
+(C) if you are unsure. This guide was not tested with the image.
+
+**C. Build from source.** You need `git`, `make` and Go 1.25 or newer (the web
+UI is already built into the source, so you do not need Node):
 
 ```bash
+git clone https://github.com/springledev/ballast.git
+cd ballast
 make build
+sudo install bin/ballast /usr/local/bin/ballast
 ```
 
-This produces a single static binary at `bin/ballast`. Copy it wherever you
-like, e.g. `/usr/local/bin/ballast`.
+This produces a single static binary at `bin/ballast`. Check it works with
+`ballast version`.
 
 ## 2. Run the wizard
 
@@ -51,6 +69,17 @@ sudo ballast wizard
 
 It checks that restic is usable, then asks a short series of questions.
 Every question shows a default in `[brackets]` — press Enter to accept it.
+If Docker is not installed, the wizard says so and carries on: plain folders
+still work, but database services (Immich, Postgres and so on) cannot be
+backed up until Docker is available.
+
+A note on file locations: Ballast keeps its files in the home folder of the
+user it runs as. Because you run the wizard with `sudo`, that is root's home,
+so `~` in this guide means `/root`. Your settings are in
+`/root/.config/ballast/`, and the default local backup folder is
+`/root/.local/state/ballast/backups/<name>`. If you later run `sudo ballast
+install` (see [Systemd setup](systemd.md)), it moves this setup to
+`/etc/ballast` and `/var/lib/ballast`.
 
 ### Step 1 of 4: What do you want to back up?
 
@@ -82,8 +111,10 @@ password**. You are never asked to invent or type a password yourself —
 Ballast generates one and saves it to a file such as:
 
 ```
-~/.config/ballast/credentials/ballast-restic-password.<destination-name>
+/root/.config/ballast/credentials/ballast-restic-password.<destination-name>
 ```
+
+(The wizard prints the exact path when it creates the file.)
 
 **This file is important. Copy it somewhere off this machine** (a password
 manager, a USB stick, printed and locked in a drawer — anywhere that isn't
@@ -155,7 +186,7 @@ then exits with 0, or exits with 1 if the timeout passes first (the default is
 ### Open the web UI
 
 ```bash
-ballast serve
+sudo ballast serve
 ```
 
 By default this listens on `http://0.0.0.0:8080` and serves both the API
@@ -172,9 +203,21 @@ banner will remind you to use a reverse proxy with HTTPS or a tailnet.)
 To use your own access key instead, create it before starting:
 
 ```bash
-openssl rand -hex 32 > ~/.config/ballast/credentials/ballast-api-token
-chmod 600 ~/.config/ballast/credentials/ballast-api-token
+sudo mkdir -p /root/.config/ballast/credentials
+sudo sh -c 'openssl rand -hex 32 > /root/.config/ballast/credentials/ballast-api-token'
+sudo chmod 600 /root/.config/ballast/credentials/ballast-api-token
 ```
+
+To check from a terminal that it is up, ask the API for the status. It needs
+your access key, so without one you get `401`:
+
+```bash
+curl -H "Authorization: Bearer $(sudo cat /root/.config/ballast/credentials/ballast-api-token)" \
+  http://localhost:8080/api/v1/status
+```
+
+While `ballast serve` is running, commands such as `ballast backup` hand the
+work to it; otherwise they run on their own and say so.
 
 The dashboard shows a short **Getting started** checklist (add a
 destination, add a service, set up notifications, run your first verified
