@@ -324,7 +324,15 @@ const resultLight = computed(() => {
         on the server, then reload this page.
       </p>
     </div>
-    <p v-else-if="preflight?.restic_warning" class="notice notice--warn">{{ preflight.restic_warning }}</p>
+    <div v-else-if="preflight?.restic_warning" class="notice notice--warn">
+      <p style="margin: 0">
+        The backup tool (restic) on this server is not the version Ballast was tested with. Backups will probably still work.
+      </p>
+      <details class="advanced">
+        <summary>Details</summary>
+        <div class="advanced-body">{{ preflight.restic_warning }}</div>
+      </details>
+    </div>
 
     <ol v-if="stepIndex >= 0" class="steps" aria-label="Progress">
       <li

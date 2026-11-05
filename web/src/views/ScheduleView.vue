@@ -1,10 +1,10 @@
 <script setup lang="ts">
-import { computed, onMounted, reactive, ref } from "vue";
+import { computed, onMounted, reactive, ref, watch } from "vue";
 
 import { api } from "@/api/client";
 import type { ServiceStatus } from "@/api/types";
 import ListTools from "@/components/ListTools.vue";
-import { countLights, emptyQuery, filterEntries, groupEntries, needsTools, type ListEntry, type ListQuery } from "@/lib/listView";
+import { COLLAPSE_SAFE_FROM, collapsesGroup, countLights, emptyQuery, filterEntries, groupEntries, initialGroup, needsTools, unfoldedItems, type ListEntry, type ListQuery } from "@/lib/listView";
 import { describeSchedule, enabledToSend, nextRunSentence, presetFor, savedMessage, schedulePresets } from "@/lib/schedule";
 import { worstLight } from "@/lib/status";
 import { revealOnError } from "@/lib/revealError";
@@ -103,6 +103,19 @@ const showTools = computed(() => needsTools(services.value.length));
 const shown = computed(() => (showTools.value ? filterEntries(services.value, entry, query.value) : services.value));
 const groups = computed(() => groupEntries(shown.value, entry, showTools.value ? query.value.group : "none"));
 const counts = computed(() => countLights(services.value, entry));
+// A long healthy group stays folded until asked for, as on the Backups page.
+const safeOpen = ref(false);
+const folded = (g: { key: string; items: unknown[] }) => collapsesGroup(g, showTools.value ? query.value : emptyQuery(), safeOpen.value);
+// A long page opens grouped by status so problems lead; the person can change it.
+let grouped = false;
+watch(services, (list) => {
+  if (!grouped && list.length) {
+    grouped = true;
+    query.value = { ...query.value, group: initialGroup(list.length, true) };
+  }
+});
+// "Select all shown" and the bulk change only ever touch rows that are on screen.
+const visible = computed(() => unfoldedItems(groups.value, folded));
 
 const selected = ref<Set<string>>(new Set());
 const bulkChoice = ref(schedulePresets[0]?.id ?? "none");
@@ -179,7 +192,7 @@ onMounted(load);
         </button>
         <button class="btn btn-quiet" type="button" @click="selected = new Set()">Clear</button>
       </template>
-      <button v-else class="btn btn-quiet" type="button" :disabled="!shown.length" @click="selected = new Set(shown.map((s) => s.service))">
+      <button v-else class="btn btn-quiet" type="button" :disabled="!visible.length" @click="selected = new Set(visible.map((s) => s.service))">
         Select all shown
       </button>
     </div>
@@ -189,7 +202,11 @@ onMounted(load);
 
     <section v-for="g in groups" :key="g.key" class="group" :aria-label="g.label || undefined">
     <h3 v-if="g.label" class="group-head">{{ g.label }} <span class="muted">{{ g.items.length }}</span></h3>
-    <ul v-if="g.items.length" class="list">
+    <p v-if="folded(g)" class="group-folded">
+      <button class="btn btn-quiet" type="button" @click="safeOpen = true">Show all {{ g.items.length }} safe backups</button>
+    </p>
+    <button v-else-if="g.key === 'green' && safeOpen && g.items.length > COLLAPSE_SAFE_FROM" class="btn btn-quiet btn-small group-fold" type="button" @click="safeOpen = false">Hide safe backups</button>
+    <ul v-if="g.items.length && !folded(g)" class="list">
       <li v-for="s in g.items" :key="s.service">
         <form @submit.prevent="save(s)">
           <div class="item-head">

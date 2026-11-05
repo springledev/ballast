@@ -162,3 +162,17 @@ export function lightShares<T>(items: T[], entry: (t: T) => ListEntry): { light:
     .filter((l) => c[l] > 0)
     .map((l) => ({ light: l, count: c[l], percent: (c[l] / total) * 100 }));
 }
+
+/**
+ * How a long page opens: grouped by status once the list is long enough
+ * to fold (so problems lead and the healthy group folds), as long as the
+ * lights are known. Short lists stay ungrouped.
+ */
+export function initialGroup(count: number, lightsKnown: boolean): GroupBy {
+  return lightsKnown && count > COLLAPSE_SAFE_FROM ? "status" : "none";
+}
+
+/** The entries in groups that are not folded away: what a person can actually see. */
+export function unfoldedItems<T>(groups: Group<T>[], folded: (g: Group<T>) => boolean): T[] {
+  return groups.filter((g) => !folded(g)).flatMap((g) => g.items);
+}

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { removeWaitText } from "@/lib/removal";
+import { removedText, removeQuestion, removeWaitText } from "@/lib/removal";
 import { computed, onMounted, reactive, ref, watch } from "vue";
 import { useRoute } from "vue-router";
 
@@ -540,7 +540,7 @@ async function makeMain(name: string, destination: string) {
 const removing = ref("");
 
 async function remove(name: string) {
-  if (!(await askConfirm(`Stop backing up "${name}"? Backups already made are kept; Ballast just stops making new ones.`, "Stop backing up"))) {
+  if (!(await askConfirm(removeQuestion(name), "Remove"))) {
     return;
   }
   error.value = "";
@@ -548,7 +548,7 @@ async function remove(name: string) {
   removing.value = name;
   try {
     await api.deleteService(name);
-    saved.value = `Stopped backing up ${name}.`;
+    saved.value = removedText(name);
     await load();
   } catch (e) {
     error.value = (e as Error).message;
@@ -616,7 +616,7 @@ onMounted(load);
               {{ stateFor(s.name).open ? "Hide backups" : "Backups" }}
             </button>
             <button class="btn" type="button" @click="startEdit(s)">Edit</button>
-            <button class="btn btn-quiet btn-danger" type="button" @click="remove(s.name)">Stop backing up</button>
+            <button class="btn btn-quiet btn-danger" type="button" @click="remove(s.name)">Remove</button>
           </div>
         </div>
 

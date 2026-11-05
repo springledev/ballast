@@ -1783,3 +1783,56 @@ dialog.confirm::backdrop {
   color: var(--amber);
   font-weight: 600;
 }
+
+/* ---- skip link ------------------------------------------------------- */
+
+.skip-link {
+  position: absolute;
+  top: 0;
+  left: 0.5rem;
+  z-index: 100;
+  padding: 0.6rem 1rem;
+  background: var(--hull);
+  color: var(--hull-ink, #fff);
+  border-radius: 0 0 8px 8px;
+  font-weight: 600;
+  text-decoration: none;
+  transform: translateY(-120%);
+}
+
+.skip-link:focus,
+.skip-link:focus-visible {
+  transform: translateY(0);
+}
+
+.main:focus {
+  outline: none;
+}
+
+/* ---- touch targets ----------------------------------------------------
+   On a finger-driven screen the small controls grow to about 44 px
+   without changing how a mouse layout looks. */
+@media (pointer: coarse) {
+  .waterline--interactive {
+    height: var(--touch);
+  }
+
+  .check,
+  .choice {
+    min-height: var(--touch);
+    align-items: center;
+    margin-bottom: 0;
+  }
+
+  .check input,
+  .choice input {
+    margin-top: 0;
+    width: 1.4rem;
+    height: 1.4rem;
+  }
+
+  .row-check input {
+    width: 1.4rem;
+    height: 1.4rem;
+  }
+}
