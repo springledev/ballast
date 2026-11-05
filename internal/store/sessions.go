@@ -18,7 +18,7 @@ func (s *Store) CreateSession(tokenHash string, created, expires time.Time) erro
 	if err != nil {
 		return fmt.Errorf("saving session: %w", err)
 	}
-	defer tx.Rollback()
+	defer func() { _ = tx.Rollback() }() // after Commit this returns sql.ErrTxDone by design
 	if _, err := tx.Exec(`DELETE FROM sessions WHERE expires_at <= ?`, created.UTC().Format(sessionTime)); err != nil {
 		return fmt.Errorf("pruning old sessions: %w", err)
 	}
