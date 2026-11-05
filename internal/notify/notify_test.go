@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -172,37 +173,60 @@ func TestNtfyTitlesAndBody(t *testing.T) {
 	}
 }
 
-// TestWebhookPayloadShape pins the JSON keys a webhook receives and
+// preB2WebhookPayload is the webhook body Ballast sent before
+// delivery moved to keel (internal/notify/notify.go at b41ee01).
+type preB2WebhookPayload struct {
+	Service   string    `json:"service"`
+	Tier      string    `json:"tier"`
+	Type      EventType `json:"type"`
+	Severity  string    `json:"severity"`
+	Message   string    `json:"message"`
+	Detail    string    `json:"detail"`
+	Timestamp time.Time `json:"timestamp"`
+}
+
+// TestWebhookPayloadShape pins the webhook body to the pre-keel
+// payload (same keys and values, tier included for every tier) and
 // the signature header name.
 func TestWebhookPayloadShape(t *testing.T) {
-	var got map[string]any
-	var sigHeaders []string
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		_ = json.NewDecoder(r.Body).Decode(&got)
-		for k := range r.Header {
-			if strings.Contains(strings.ToLower(k), "signature") {
-				sigHeaders = append(sigHeaders, k)
+	ts := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	base := Event{Service: "immich", Type: EventJobFailure, Message: "m", Detail: "d", Severity: "error", Timestamp: ts}
+	for _, ev := range []Event{base, base.ForTier("rclone")} {
+		t.Run(ev.TierName(), func(t *testing.T) {
+			var body []byte
+			var sigHeaders []string
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				body, _ = io.ReadAll(r.Body)
+				for k := range r.Header {
+					if strings.Contains(strings.ToLower(k), "signature") {
+						sigHeaders = append(sigHeaders, k)
+					}
+				}
+			}))
+			defer srv.Close()
+			w := NewWebhookChannel(srv.URL)
+			w.Secret = "k"
+			if err := w.Send(context.Background(), ev); err != nil {
+				t.Fatal(err)
 			}
-		}
-	}))
-	defer srv.Close()
-	w := NewWebhookChannel(srv.URL)
-	w.Secret = "k"
-	ev := Event{Service: "immich", Type: EventJobFailure, Message: "m", Detail: "d", Severity: "error", Timestamp: time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)}
-	if err := w.Send(context.Background(), ev); err != nil {
-		t.Fatal(err)
-	}
-	want := map[string]any{"service": "immich", "type": "job_failure", "severity": "error", "message": "m", "detail": "d", "timestamp": "2026-01-01T00:00:00Z"}
-	if len(got) != len(want) {
-		t.Errorf("payload keys = %v, want %v", got, want)
-	}
-	for k, v := range want {
-		if got[k] != v {
-			t.Errorf("payload[%q] = %v, want %v", k, got[k], v)
-		}
-	}
-	if len(sigHeaders) != 1 || sigHeaders[0] != "X-Ballast-Signature" {
-		t.Errorf("signature headers = %v, want [X-Ballast-Signature]", sigHeaders)
+			old, err := json.Marshal(preB2WebhookPayload{Service: ev.Service, Tier: ev.TierName(), Type: ev.Type, Severity: ev.Severity, Message: ev.Message, Detail: ev.Detail, Timestamp: ev.Timestamp})
+			if err != nil {
+				t.Fatal(err)
+			}
+			var got, want map[string]any
+			if err := json.Unmarshal(body, &got); err != nil {
+				t.Fatalf("body %s: %v", body, err)
+			}
+			if err := json.Unmarshal(old, &want); err != nil {
+				t.Fatal(err)
+			}
+			if !reflect.DeepEqual(got, want) {
+				t.Errorf("payload = %s\nwant (pre-keel) %s", body, old)
+			}
+			if len(sigHeaders) != 1 || sigHeaders[0] != "X-Ballast-Signature" {
+				t.Errorf("signature headers = %v, want [X-Ballast-Signature]", sigHeaders)
+			}
+		})
 	}
 }
 

@@ -117,7 +117,8 @@ func (e Event) Title() string {
 }
 
 // Notify returns e as the keel notify.Event the delivery channels
-// send, with Title set.
+// send: Title for ntfy, a "tier" webhook field and a "Backup copy"
+// email line.
 func (e Event) Notify() kn.Event {
 	return kn.Event{
 		Service:   e.Service,
@@ -127,6 +128,10 @@ func (e Event) Notify() kn.Event {
 		Severity:  e.Severity,
 		Timestamp: e.Timestamp,
 		Title:     e.Title(),
+		// The webhook body and the email name the tier on every
+		// event, primary included (spec rule 3).
+		Extra:  map[string]any{"tier": e.TierName()},
+		Fields: []kn.Field{{Name: "Backup copy", Value: e.TierName()}},
 	}
 }
 

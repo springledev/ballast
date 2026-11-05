@@ -53,13 +53,6 @@ func (e *EmailChannel) Address() string { return e.Host }
 // event is about, so a problem with one copy is never read as being
 // about another (spec rule 3).
 func (e *EmailChannel) Send(ctx context.Context, event Event) error {
-	k := event.Notify()
-	tier := "Backup copy: " + event.TierName()
-	if k.Detail != "" {
-		k.Detail = tier + "\n" + k.Detail
-	} else {
-		k.Detail = tier
-	}
 	ch := &kn.EmailChannel{
 		EmailSettings: e.EmailSettings,
 		Username:      e.Username,
@@ -67,5 +60,5 @@ func (e *EmailChannel) Send(ctx context.Context, event Event) error {
 		Product:       emailProduct,
 		TLSConfig:     e.TLSConfig,
 	}
-	return ch.Send(ctx, k)
+	return ch.Send(ctx, event.Notify())
 }
