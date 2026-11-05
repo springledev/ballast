@@ -1,65 +1,98 @@
 # Ballast
 
-Ballast is a self-hosted backup tool for Docker-based homelabs. It backs up your favorite services (Immich, Vaultwarden, Postgres, MySQL, CouchDB, and any folder), encrypts and stores them using restic—a well-known open-source backup program—on local disk or cloud destinations (Backblaze B2, S3, Cloudflare R2, and SFTP), and proves every single backup can actually be restored before marking it done. Think of it as automated backup sanity checking for the apps that matter to you. No telemetry, no tracking.
+Ballast is a self-hosted backup tool for Docker-based homelabs. It backs up the services you run in Docker (Immich, Vaultwarden, Postgres, MySQL, CouchDB, Gitea, or any folder), encrypts and stores the backups with [restic](https://restic.net) on local disk or a cloud destination (Backblaze B2, S3, Cloudflare R2, SFTP), and then checks that each backup can really be restored before it calls the job done. Each service gets a simple green, amber or red status, and Ballast can tell you through ntfy or a webhook when something needs attention. It is one static Go binary with a built-in web UI. No telemetry, no tracking.
 
-**Status meanings:** Green = verified and restores; Amber = backed up, but Ballast could not prove it restores; Red = something failed.
+## Status: alpha
+
+Ballast is **alpha** software. It is in daily use by its author on a personal homelab, but it has not had wide testing. Expect rough edges, and do not make it your only backup yet.
+
+- Verified today: the restic tier (local, B2, S3, SFTP destinations), the per-service strategies in the catalog, and the restore checks described below.
+- Not included: no mobile app and no phone backup. A mobile-friendly web UI is included.
+- Not included: only the restic tier exists. A second tier using rclone is planned but not built.
+- Only the latest release is supported.
+
+## Why it is different
+
+Most backup tools tell you a job "succeeded" when the files were copied. That says nothing about whether you can get your data back. Ballast does not mark a backup done until it has been verified:
+
+- Database dumps are restored into a throwaway container and checked.
+- Archives are read back and tested for integrity.
+- restic reads back a sample of what it stored.
+
+If Ballast cannot prove a backup restores, it shows **amber**, not green.
+
+- Green: backed up and verified to restore.
+- Amber: backed up, but Ballast could not prove it restores.
+- Red: something failed.
+
+## Supported services
+
+These come from the built-in catalog in [`catalog/`](catalog/). Catalog entries are plain YAML, so adding a service does not need Go code (see [docs/catalog-contributing.md](docs/catalog-contributing.md)).
+
+- **Immich**: photos and videos (Postgres database and photo library)
+- **Vaultwarden**: password manager (briefly stopped while its data folder is copied)
+- **CouchDB**: CouchDB database (briefly stopped while its data folder is copied)
+- **Gitea**: git server (repositories, database and settings in one verified zip)
+- **PostgreSQL (generic)**: any PostgreSQL server running in a Docker container
+- **MySQL / MariaDB (generic)**: any MySQL or MariaDB server running in a Docker container
+- **MySQL / MariaDB (one database, as an app user)**: a single database dumped with the app's own user and password
+- **Docker volume (stopped while copied)**: a Docker volume, with its container briefly stopped so the copy is consistent
+- **Docker volume (live, no downtime)**: a Docker volume while it stays in use; best for files that rarely change
+- **Docker Compose config**: a Compose project's docker-compose.yml, .env and container labels
+- **Any folder**: any folder on this machine, no database involved
+- **Files from another machine**: chosen config files from another machine over SSH, read-only
+- **This machine's settings**: systemd units, scripts in /usr/local/bin and a few system files, to help rebuild the machine
 
 ## Quickstart
 
-**Requirements:** Linux, restic 0.17.0 or newer installed (`sudo apt install restic` or equivalent), and Docker if backing up Docker services.
+You need Linux, [restic](https://restic.readthedocs.io/en/stable/020_installation.html) 0.17.0 or newer (for example `sudo apt install restic`), and Docker if you back up Docker services. To build from source you also need Go 1.25. The web UI is already built and committed in `web/dist`, so Node is only needed if you change the web sources.
 
-1. Build Ballast:
-   ```bash
-   make build
-   ```
-   The binary appears at `bin/ballast`.
+```bash
+git clone https://github.com/springledev/ballast.git
+cd ballast
+make build              # writes bin/ballast
+sudo bin/ballast wizard # guided setup and your first verified backup
+```
 
-2. Run the interactive setup wizard:
-   ```bash
-   sudo bin/ballast wizard
-   ```
-   This will detect your Docker services, let you pick one to back up, and run your first verified backup — usually well within 15 minutes.
+To rebuild the web UI (needs Node and npm):
 
-3. For the full walkthrough, see [docs/quickstart.md](docs/quickstart.md).
+```bash
+make web
+make build
+```
+
+Other useful commands:
+
+```bash
+bin/ballast version        # print the version
+bin/ballast doctor         # check restic, Docker hosts, destinations, disk space
+bin/ballast status         # show backup status
+bin/ballast serve          # serve the web UI and REST API
+bin/ballast --help         # all commands
+```
+
+The full walkthrough is in [docs/quickstart.md](docs/quickstart.md).
 
 ## Documentation
 
-- [Quickstart](docs/quickstart.md) — Get your first backup running
-- [Configuration](docs/configuration.md) — Configure services and destinations
-- [Systemd setup](docs/systemd.md) — Run backups automatically
-- [Contributing services](docs/catalog-contributing.md) — Add your own services to the catalog
-- [Docker hosts](docs/docker-hosts.md) — Back up containers on other machines
-- [Proxmox](docs/proxmox.md) — Back up guests and the services inside them
-- [Replacing a backup script](docs/replace-a-script.md) — Move over from a shell script without a gap
-- [Upgrading](docs/migrating.md) — Moving from v0.1
-- [Upgrading](docs/upgrading.md) — Replace the program safely and go back if needed
+- [Quickstart](docs/quickstart.md): your first backup
+- [Configuration](docs/configuration.md): services and destinations
+- [Systemd setup](docs/systemd.md): run backups automatically
+- [Docker hosts](docs/docker-hosts.md): back up containers on other machines
+- [Proxmox](docs/proxmox.md): guests and the services inside them
+- [Replacing a backup script](docs/replace-a-script.md): move over from a shell script without a gap
+- [Adding services to the catalog](docs/catalog-contributing.md)
+- [Upgrading](docs/upgrading.md): replace the program safely and go back if needed
+- [Migrating from v0.1](docs/migrating.md)
 
-## Supported Services
+## Screenshots
 
-Ballast comes with built-in support for:
+Screenshots are coming soon.
 
-- Immich (photos & videos)
-- Vaultwarden (password manager)
-- CouchDB (database)
-- MySQL / MariaDB (databases)
-- PostgreSQL (databases)
-- Any folder
+## Contributing and security
 
-## Commands
+See [CONTRIBUTING.md](CONTRIBUTING.md). To report a vulnerability, see [SECURITY.md](SECURITY.md).
 
-- `backup` — Run a verified backup for one configured service now
-- `catalog` — Browse the service catalog
-- `destination` — Manage backup destinations
-- `doctor` — Check restic, Docker hosts, destinations, and disk space for common configuration problems
-- `notify` — Choose when Ballast alerts you about each service
-- `restore` — Restore a service's backup into a new directory
-- `run-due` — Run every backup job whose schedule is due (for systemd timers)
-- `schedule` — Manage backup schedules
-- `self-backup` — Back up Ballast's own state database and configuration to a destination
-- `serve` — Serve the Web UI and REST API
-- `service` — Manage configured backup services
-- `snapshots` — List restic snapshots for one service
-- `status` — Show backup status for one or all services
-- `token` — Manage external trigger tokens
-- `trigger` — Run one backup using a trigger token (for automation scripts)
-- `wizard` — Set up your first backup, step by step, and prove it can be restored
+## Licence
+
+Apache-2.0. See [LICENSE](LICENSE).
