@@ -129,7 +129,7 @@ var serveCmd = &cobra.Command{
 			}
 			a.secrets.Add(tok)
 			return nil
-		}, listen)
+		}, listen).WithStore(a.store)
 		a.ops.ListenAddr = listen
 		a.ops.InTerminal = startedFromTerminal(os.Getenv, os.Stdin)
 		mux := http.NewServeMux()
