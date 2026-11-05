@@ -83,7 +83,7 @@ func (p *Pipeline) runGuest(ctx context.Context, svc inventory.Service) (engine.
 	}
 	conn, err := inventory.GetProxmoxConnection(p.DB)
 	if err != nil {
-		return fail(fmt.Errorf("Proxmox connection: %w", err))
+		return fail(fmt.Errorf("the Proxmox connection: %w", err))
 	}
 	cl, err := p.Proxmox.Client(conn)
 	if err != nil {

@@ -236,7 +236,7 @@ func defaultDirs(getenv func(string) string, homeDir func() (string, error)) (Co
 	if getenv("BALLAST_CONFIG_DIR") == "" && getenv("BALLAST_DATA_DIR") == "" {
 		if fi, err := os.Stat(systemConfigDir); err == nil && fi.IsDir() {
 			if !isRoot() {
-				return Config{}, fmt.Errorf("Ballast is installed as a system service on this machine (%s), and its settings and backups can only be read by root; run this command with sudo, e.g. `sudo ballast ...`. To work with a separate per-user setup instead, set BALLAST_CONFIG_DIR and BALLAST_DATA_DIR", systemConfigDir)
+				return Config{}, fmt.Errorf("this machine runs Ballast as a system service (%s), and its settings and backups can only be read by root; run this command with sudo, e.g. `sudo ballast ...`. To work with a separate per-user setup instead, set BALLAST_CONFIG_DIR and BALLAST_DATA_DIR", systemConfigDir)
 			}
 			return Config{DataDir: systemDataDir, ConfigDir: systemConfigDir}, nil
 		}

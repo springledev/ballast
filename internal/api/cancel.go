@@ -15,7 +15,7 @@ var ErrNothingRunning = errors.New("no backup of this service is running right n
 
 // ErrNotCancellable reports a run that cannot be stopped from Ballast
 // (409): Ballast's own backup, which is short and finishes on its own.
-var ErrNotCancellable = errors.New("Ballast's own backup cannot be stopped; it is short and finishes on its own")
+var ErrNotCancellable = errors.New("this is Ballast's own backup, which cannot be stopped; it is short and finishes on its own")
 
 // ErrAlreadyFinished reports that the run asked to stop had already
 // finished (409). A run that has finished may still be tidying up old

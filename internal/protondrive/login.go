@@ -117,7 +117,7 @@ func (c *Client) StartLogin(folder string) (*Login, error) {
 		case err != nil && ctx.Err() != nil:
 			l.finish(fmt.Errorf("the sign-in was not finished in time or was cancelled"))
 		case err != nil:
-			l.finish(fmt.Errorf("Proton Drive sign-in did not complete: %w", err))
+			l.finish(fmt.Errorf("the Proton Drive sign-in did not complete: %w", err))
 		default:
 			l.finish(c.TestConnection(context.Background(), folder))
 		}

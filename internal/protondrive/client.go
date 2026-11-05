@@ -33,7 +33,7 @@ const TestedVersions = "0.8"
 
 // ErrSignedOut means Proton Drive refused the saved login (never signed
 // in, expired or revoked). The fix is always "sign in again".
-var ErrSignedOut = errors.New("Proton Drive is signed out: sign in to Proton Drive again")
+var ErrSignedOut = errors.New("signed out of Proton Drive: sign in to Proton Drive again")
 
 // ErrNotInstalled means the Proton Drive command-line tool was not found.
 var ErrNotInstalled = errors.New("the Proton Drive command-line tool is not installed")

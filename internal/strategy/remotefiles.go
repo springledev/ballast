@@ -117,7 +117,7 @@ func planRemoteFiles(service string, rf *catalog.RemoteFilesSpec) (*remotePlan, 
 	seen := map[string]bool{}
 	for _, p := range raw {
 		if !path.IsAbs(p) || strings.Contains(p, "..") {
-			return nil, fmt.Errorf("service %s: remote path %q must be absolute and must not contain ..", service, p)
+			return nil, fmt.Errorf("service %s: remote path %q must be absolute and must not contain \"..\"", service, p)
 		}
 		if strings.ContainsAny(p, "\x00\r\n*?[") {
 			return nil, fmt.Errorf("service %s: remote path %q must name a file or folder, without wildcards or line breaks", service, p)
@@ -201,7 +201,7 @@ func (o Options) sshTarget() (*sshTarget, error) {
 	}
 	u, err := url.Parse(addr)
 	if err != nil || u.Hostname() == "" {
-		return nil, fmt.Errorf("Docker host %s has an unusable SSH address", o.Docker.Name())
+		return nil, fmt.Errorf("the Docker host %s has an unusable SSH address", o.Docker.Name())
 	}
 	t := &sshTarget{bin: "ssh", name: o.Docker.Name()}
 	for _, e := range cmd.Env {
