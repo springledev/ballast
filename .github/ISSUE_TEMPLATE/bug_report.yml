@@ -1,0 +1,35 @@
+name: Bug report
+description: Something is not working as expected
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting. **Do not paste passwords, keys, tokens or other secrets.**
+        If you are unsure, run `ballast support-bundle`: it writes one file with every secret left out. Attach that file instead of pasting logs.
+        For security problems, do not use this form. See SECURITY.md.
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened?
+      description: What did you do, what did you expect, and what happened instead?
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Output of `ballast version`
+    validations:
+      required: true
+  - type: textarea
+    id: doctor
+    attributes:
+      label: Output of `ballast doctor`
+      render: shell
+    validations:
+      required: true
+  - type: textarea
+    id: bundle
+    attributes:
+      label: Support bundle or extra details
+      description: Attach the file from `ballast support-bundle`, and say which service you were backing up (for example Immich or Postgres).

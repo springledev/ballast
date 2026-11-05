@@ -1,0 +1,30 @@
+name: Feature request
+description: Suggest an idea or a new service for the catalog
+labels: [enhancement]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for the idea. **Do not paste passwords, keys, tokens or other secrets.**
+        If you include output from your setup, use `ballast support-bundle`, which leaves secrets out.
+  - type: textarea
+    id: problem
+    attributes:
+      label: What are you trying to do?
+    validations:
+      required: true
+  - type: textarea
+    id: idea
+    attributes:
+      label: What would you like Ballast to do?
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Output of `ballast version`
+  - type: textarea
+    id: doctor
+    attributes:
+      label: Output of `ballast doctor` (optional)
+      render: shell
