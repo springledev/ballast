@@ -6,7 +6,7 @@ Ballast is a self-hosted backup tool for Docker-based homelabs. It backs up the 
 
 Ballast is **alpha** software. It is in daily use by its author on a personal homelab, but it has not had wide testing. Expect rough edges, and do not make it your only backup yet.
 
-- Verified today: the restic tier (local, B2, S3, SFTP destinations), the per-service strategies in the catalog, and the restore checks described below.
+- What exists: the restic tier (local, B2, S3 and SFTP destinations), the per-service strategies in the catalog, and the restore checks described below. How much each destination type has been used in real life varies, and local and B2 have seen the most use, so test a restore before you rely on any of them.
 - Not included: no mobile app and no phone backup. A mobile-friendly web UI is included.
 - Not included: only the restic tier exists. A second tier using rclone is planned but not built.
 - Only the latest release is supported.
