@@ -63,7 +63,7 @@ const (
 	ballastUserInAddr = "don't put a user in the address; Ballast connects with an API token"
 	keelTokenRequired = "the API token ID is required, e.g. user@pve!tokenname"
 	ballastTokenReq   = "the API token ID is required, e.g. ballast@pve!backup"
-	keelRejectedFmt   = "Proxmox rejected the API token (HTTP %d) — check the token ID and secret, and that the token has the privileges this operation needs"
+	keelRejectedFmt   = "the Proxmox API rejected the token (HTTP %d) — check the token ID and secret, and that the token has the privileges this operation needs"
 	ballastRejected   = "Proxmox rejected the API token (HTTP %d) — check the token ID and secret, and that the token has the VM.Backup permission on /vms"
 )
 
