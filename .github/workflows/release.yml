@@ -37,6 +37,9 @@ jobs:
         with:
           go-version-file: go.mod
 
+      - name: Show the Go version the release is built with
+        run: go version
+
       - name: Build and publish
         uses: goreleaser/goreleaser-action@v7
         with:
