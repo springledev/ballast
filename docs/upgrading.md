@@ -43,14 +43,26 @@ The paths below are the ones `ballast install` uses (`/var/lib/ballast` for data
 
    If `ballast.db-wal` or `ballast.db-shm` files sit next to it, copy them too. (They are normally empty once Ballast has stopped cleanly.)
 
-3. Keep the old program, then put the new one in place:
+3. Get the new program. To download the latest release into the current folder:
+
+   ```bash
+   ARCH=$(uname -m | sed 's/x86_64/amd64/; s/aarch64/arm64/')
+   curl -fsSLO "https://github.com/springledev/ballast/releases/latest/download/ballast_linux_$ARCH.tar.gz"
+   curl -fsSLO https://github.com/springledev/ballast/releases/latest/download/checksums.txt
+   sha256sum --check --ignore-missing checksums.txt
+   tar xzf "ballast_linux_$ARCH.tar.gz"
+   ```
+
+   For a particular version, replace `latest/download` with `download/v0.8.0`, using the version you want.
+
+   If you build from source instead: update your copy of the Ballast code (for example `git pull`, or `git checkout` a release tag), then run `make` in the Ballast folder and use `bin/ballast` in the next step. `make` stamps the version from `git describe --tags --always --dirty`, so a build from a tagged release says `v0.8.0`, and a build from any other commit says the commit it came from (with `-dirty` added if you changed files).
+
+   Keep the old program, then put the new one in place:
 
    ```bash
    sudo cp -a /usr/local/bin/ballast /usr/local/bin/ballast.old
-   sudo install -m 0755 bin/ballast /usr/local/bin/ballast
+   sudo install -m 0755 ballast /usr/local/bin/ballast
    ```
-
-   Get the new program by building it from source (there is no packaged download yet): update your copy of the Ballast code to the version you want (for example `git pull`, or `git checkout` a release tag), then run `make` in the Ballast folder: it writes `bin/ballast`. `make` stamps the version from `git describe --tags --always --dirty`, so a build from a tagged release says `v0.5.0`, and a build from any other commit says the commit it came from (with `-dirty` added if you changed files).
 
 4. Start it and check:
 

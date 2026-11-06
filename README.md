@@ -15,7 +15,18 @@ Ballast is **alpha** software. It is in daily use by its author on a personal ho
 
 ## Install
 
-**Build from source (the working way today).** You need `git`, `make`, Go 1.25 or newer, and restic 0.17.0 or newer on your `PATH`. The web UI is already built into the repository, so Node is not needed.
+**Download a release (recommended).** You need Linux on amd64 or arm64, and restic 0.17.0 or newer on your `PATH`. You do not need Go or Node, because the web UI is built into the program.
+
+```bash
+ARCH=$(uname -m | sed 's/x86_64/amd64/; s/aarch64/arm64/')
+curl -fsSLO "https://github.com/springledev/ballast/releases/latest/download/ballast_linux_$ARCH.tar.gz"
+curl -fsSLO https://github.com/springledev/ballast/releases/latest/download/checksums.txt
+sha256sum --check --ignore-missing checksums.txt
+tar xzf "ballast_linux_$ARCH.tar.gz"
+sudo install -m 0755 ballast /usr/local/bin/ballast
+```
+
+**Build from source.** You also need `git`, `make` and Go 1.25 or newer. The web UI is already built into the repository, so Node is not needed.
 
 ```bash
 git clone https://github.com/springledev/ballast.git
@@ -24,7 +35,9 @@ make build
 sudo install bin/ballast /usr/local/bin/ballast
 ```
 
-**Release downloads and the Docker image are not published yet.** [RELEASING.md](RELEASING.md) describes how linux amd64 and arm64 archives are built, and the [Dockerfile](Dockerfile) builds an image from source. Neither is published yet, so build from source for now.
+To rebuild the web UI from source, which needs Node and npm, run `make web` and then `make build`.
+
+**The Docker image is not published yet.** The [Dockerfile](Dockerfile) builds one from source, but it has not had the same testing, so use the program directly if you are unsure.
 
 For your first backup after installing, follow the [quickstart](docs/quickstart.md).
 
@@ -80,32 +93,22 @@ These come from the built-in catalog in [`catalog/`](catalog/). Catalog entries 
 
 ## Quickstart
 
-You need Linux, [restic](https://restic.readthedocs.io/en/stable/020_installation.html) 0.17.0 or newer (for example `sudo apt install restic`), and Docker if you back up Docker services. To build from source you also need Go 1.25. The web UI is already built and committed in `web/dist`, so Node is only needed if you change the web sources.
+You need Linux, [restic](https://restic.readthedocs.io/en/stable/020_installation.html) 0.17.0 or newer (for example `sudo apt install restic`), and Docker if you back up Docker services. After [installing Ballast](#install), run the guided setup, which ends with your first verified backup:
 
 ```bash
-git clone https://github.com/springledev/ballast.git
-cd ballast
-make build              # writes bin/ballast
-sudo bin/ballast wizard # guided setup and your first verified backup
-```
-
-To rebuild the web UI (needs Node and npm):
-
-```bash
-make web
-make build
+sudo ballast wizard
 ```
 
 Other useful commands:
 
 ```bash
-bin/ballast version        # print the version
-bin/ballast doctor         # check restic, Docker hosts, destinations, disk space
-bin/ballast status         # show backup status (add --check for a script-friendly exit code)
-bin/ballast runs <service> # past backups of one service (the web UI calls this History)
-bin/ballast cancel <service> # stop a running backup; the last good backup is kept
-bin/ballast serve          # serve the web UI and REST API
-bin/ballast --help         # all commands
+ballast version        # print the version
+ballast doctor         # check restic, Docker hosts, destinations, disk space
+ballast status         # show backup status (add --check for a script-friendly exit code)
+ballast runs <service> # past backups of one service (the web UI calls this History)
+ballast cancel <service> # stop a running backup; the last good backup is kept
+ballast serve          # serve the web UI and REST API
+ballast --help         # all commands
 ```
 
 The full walkthrough is in [docs/quickstart.md](docs/quickstart.md).
