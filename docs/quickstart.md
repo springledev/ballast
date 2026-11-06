@@ -51,7 +51,7 @@ as root and needs the Docker socket and two data folders mounted in; see
 [Systemd setup](systemd.md) for what Ballast needs, and use the plain binary
 (C) if you are unsure. This guide was not tested with the image.
 
-**C. Build from source.** You need `git`, `make` and Go 1.25 or newer (the web
+**C. Build from source.** You need `git`, `make` and Go 1.27 or newer (the web
 UI is already built into the source, so you do not need Node):
 
 ```bash

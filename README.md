@@ -26,7 +26,7 @@ tar xzf "ballast_linux_$ARCH.tar.gz"
 sudo install -m 0755 ballast /usr/local/bin/ballast
 ```
 
-**Build from source.** You also need `git`, `make` and Go 1.25 or newer. The web UI is already built into the repository, so Node is not needed.
+**Build from source.** You also need `git`, `make` and Go 1.27 or newer. The web UI is already built into the repository, so Node is not needed.
 
 ```bash
 git clone https://github.com/springledev/ballast.git
