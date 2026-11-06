@@ -64,7 +64,18 @@ jobs:
         run: go vet ./...
 
       - name: Test
-        run: go test ./... -race
+        # SQLite here is C translated to Go, and race-instrumenting that
+        # generated code makes every database test several times slower.
+        # Only the generated code is excluded: Ballast and the driver's Go
+        # code in modernc.org/sqlite stay instrumented. Do not widen this
+        # to modernc.org/... as that also hides races on data passed to
+        # the driver.
+        run: >-
+          go test ./... -race
+          -gcflags=modernc.org/sqlite/lib=-race=false
+          -gcflags=modernc.org/libc=-race=false
+          -gcflags=modernc.org/libc/...=-race=false
+          -gcflags=modernc.org/memory=-race=false
 
       - name: Lint
         # golangci-lint v2 needs action v7+; settings live in .golangci.yml.
