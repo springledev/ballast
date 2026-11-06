@@ -1,4 +1,5 @@
-# GoReleaser v2 config. Run by the maintainer: see RELEASING.md.
+# GoReleaser v2 config. .github/workflows/release.yml runs it when a version
+# tag is pushed: see RELEASING.md.
 # web/dist is committed and embedded with go:embed, so no web build step
 # is needed here.
 version: 2
@@ -19,13 +20,15 @@ builds:
     flags:
       - -trimpath
     ldflags:
-      - -s -w -X main.version={{.Version}}
+      - -s -w -X main.version=v{{.Version}}
 
 archives:
   - id: default
     formats:
       - tar.gz
-    name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+    # No version in the name, so .../releases/latest/download/<name> in the
+    # install instructions always works.
+    name_template: "{{ .ProjectName }}_{{ .Os }}_{{ .Arch }}"
     files:
       - LICENSE
       - README.md
