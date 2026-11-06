@@ -472,6 +472,10 @@ func resolveTriggerToken(service, flagToken, tokenFile, credDir string, stderr i
 	return "", fmt.Errorf("no trigger token given: pass --token-file <path>, or put the token in %s (under systemd: LoadCredential=%s:<path>)", path, name)
 }
 
+// runDueNow is the time `ballast run-due` sweeps at; a variable so tests
+// can say which minute each sweep falls in instead of racing the clock.
+var runDueNow = time.Now
+
 var runDueCmd = &cobra.Command{
 	Use:   "run-due",
 	Args:  noArgs,
@@ -485,7 +489,7 @@ var runDueCmd = &cobra.Command{
 			a.warnReservedName()
 			sweepDone := a.startDrillSweep(cmd.Context())
 			defer func() { <-sweepDone }()
-			return sweepDue(cmd.Context(), a, time.Now())
+			return sweepDue(cmd.Context(), a, runDueNow())
 		})
 	},
 }
