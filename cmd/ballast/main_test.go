@@ -181,9 +181,20 @@ func TestRunDueCommand(t *testing.T) {
 		}
 	})
 
-	if out, err := execCLI(t, "run-due"); err != nil {
-		t.Fatalf("run-due: %v (output %q)", err, out)
+	// Pin each sweep's minute: on the real clock, two sweeps either side
+	// of a minute boundary are rightly two firings of this schedule.
+	firstSweep := time.Date(2026, 3, 10, 12, 0, 10, 0, time.UTC)
+	sweepAt := func(at time.Time) {
+		t.Helper()
+		old := runDueNow
+		runDueNow = func() time.Time { return at }
+		defer func() { runDueNow = old }()
+		if out, err := execCLI(t, "run-due"); err != nil {
+			t.Fatalf("run-due at %s: %v (output %q)", at.Format(time.TimeOnly), err, out)
+		}
 	}
+
+	sweepAt(firstSweep)
 	if len(r.ran) != 1 || r.ran[0] != "immich" {
 		t.Errorf("ran = %v, want [immich]", r.ran)
 	}
@@ -192,11 +203,15 @@ func TestRunDueCommand(t *testing.T) {
 	}
 
 	// A second sweep in the same minute runs nothing more.
-	if _, err := execCLI(t, "run-due"); err != nil {
-		t.Fatalf("second run-due: %v", err)
-	}
+	sweepAt(firstSweep.Add(30 * time.Second))
 	if len(r.ran) != 1 {
 		t.Errorf("ran = %v, want no repeat within the same firing", r.ran)
+	}
+
+	// The next minute is the schedule's next firing.
+	sweepAt(firstSweep.Add(time.Minute))
+	if len(r.ran) != 2 {
+		t.Errorf("ran = %v, want a second run at the next firing", r.ran)
 	}
 }
 
