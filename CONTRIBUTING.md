@@ -10,7 +10,7 @@ Thanks for helping. Ballast is alpha software and small, focused changes are the
 
 ## Build and test
 
-You need Go 1.25. Before opening a pull request, all of these must pass:
+You need Go 1.27. Before opening a pull request, all of these must pass:
 
 ```bash
 go build ./...

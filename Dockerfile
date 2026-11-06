@@ -5,7 +5,7 @@
 #
 # The web UI (web/dist) is committed, so no Node stage is needed.
 
-FROM golang:1.25-alpine AS build
+FROM golang:1.27-alpine AS build
 ARG VERSION=dev
 RUN apk add --no-cache git
 WORKDIR /src

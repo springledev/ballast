@@ -33,11 +33,17 @@ restic version
 
 Pick one of these three ways.
 
-**A. A release download.** No release has been published yet, so this does not
-work today. Once one is, you will find `ballast_<version>_linux_amd64.tar.gz`
-(or `..._linux_arm64.tar.gz` for ARM machines) and a `checksums.txt` on the
-project's GitHub Releases page. Unpack it and copy `ballast` to
-`/usr/local/bin/`.
+**A. A release download (recommended).** You do not need Go or Node. This works
+on amd64 and arm64 machines, and checks the download before unpacking it:
+
+```bash
+ARCH=$(uname -m | sed 's/x86_64/amd64/; s/aarch64/arm64/')
+curl -fsSLO "https://github.com/springledev/ballast/releases/latest/download/ballast_linux_$ARCH.tar.gz"
+curl -fsSLO https://github.com/springledev/ballast/releases/latest/download/checksums.txt
+sha256sum --check --ignore-missing checksums.txt
+tar xzf "ballast_linux_$ARCH.tar.gz"
+sudo install -m 0755 ballast /usr/local/bin/ballast
+```
 
 **B. The Docker image.** No image is published yet either. You can build one
 yourself with `docker build -t ballast .` from a copy of the source. It runs
@@ -45,7 +51,7 @@ as root and needs the Docker socket and two data folders mounted in; see
 [Systemd setup](systemd.md) for what Ballast needs, and use the plain binary
 (C) if you are unsure. This guide was not tested with the image.
 
-**C. Build from source.** You need `git`, `make` and Go 1.25 or newer (the web
+**C. Build from source.** You need `git`, `make` and Go 1.27 or newer (the web
 UI is already built into the source, so you do not need Node):
 
 ```bash
@@ -55,7 +61,7 @@ make build
 sudo install bin/ballast /usr/local/bin/ballast
 ```
 
-This produces a single static binary at `bin/ballast`. Check it works with
+Whichever way you used, you now have a single program. Check it works with
 `ballast version`.
 
 ## 2. Run the wizard

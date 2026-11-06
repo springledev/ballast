@@ -8,7 +8,7 @@
 
  - **Status:** Ready for implementation
 
- - **Engine:** Go 1.25 (single static binary, Vue UI embedded via `go:embed`)
+ - **Engine:** Go 1.27 (single static binary, Vue UI embedded via `go:embed`)
 
  - **Name:** **Ballast** — binary `ballast`, Go module `github.com/<org>/ballast`
 

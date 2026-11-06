@@ -42,7 +42,7 @@
 
 
 
- - Go 1.25, single static binary, no cgo (`CGO_ENABLED=0`)
+ - Go 1.27, single static binary, no cgo (`CGO_ENABLED=0`)
 
  - SQLite via `modernc.org/sqlite` (pure Go)
 

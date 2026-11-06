@@ -4,6 +4,7 @@ on:
   push:
     branches: [main]
   pull_request:
+  workflow_call: # the release workflow runs this first
 
 permissions:
   contents: read
@@ -16,7 +17,7 @@ jobs:
 
       - uses: actions/setup-go@v5
         with:
-          # Single source of truth for the Go version (spec: Go 1.25).
+          # Single source of truth for the Go version (spec: Go 1.27).
           go-version-file: go.mod
 
       - name: Install restic

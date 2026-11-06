@@ -132,13 +132,16 @@ func TestCancelRacesCompletion(t *testing.T) {
 				t.Fatal(err)
 			}
 		}
+		// Read the ID now: a Machine is not safe for concurrent use, and
+		// the API asks for a stop by run ID, without sharing the Machine.
+		runID := m.Run().ID
 		var (
 			wg        sync.WaitGroup
 			cancelErr error
 			finishErr error
 		)
 		wg.Add(2)
-		go func() { defer wg.Done(); _, cancelErr = RequestCancel(s.DB(), m.Run().ID) }()
+		go func() { defer wg.Done(); _, cancelErr = RequestCancel(s.DB(), runID) }()
 		go func() {
 			defer wg.Done()
 			finishErr = m.Transition(SUCCESS, "backup verified")
